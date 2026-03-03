@@ -1,0 +1,92 @@
+name: Build Luci App
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Target name, Default: rockchip"
+        required: false
+        default: "rockchip"
+      subtarget:
+        description: "Subtarget name, Default: armv8"
+        required: false
+        default: "armv8"
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout plugin repo
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt install -y build-essential clang flex bison g++ gawk \
+          gcc-multilib g++-multilib gettext git libncurses-dev \
+          libssl-dev python3 python3-setuptools python3-pip \
+          python3-pyelftools \
+          rsync swig unzip zlib1g-dev file wget curl
+
+      - name: Clone OpenWrt source
+        run: |
+          git clone https://github.com/openwrt/openwrt.git
+          cd openwrt
+          git checkout master
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Inject package
+        run: |
+          mkdir -p openwrt/package/luci-app-jxnu-srun
+          rsync -a --delete \
+            --exclude ".git" \
+            --exclude ".github" \
+            --exclude "__pycache__" \
+            ./ openwrt/package/luci-app-jxnu-srun/
+
+      - name: Update feeds
+        working-directory: openwrt
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Prepare .config
+        working-directory: openwrt
+        run: |
+          TARGET="${{ github.event.inputs.target }}"
+          SUBTARGET="${{ github.event.inputs.subtarget }}"
+          if [ -z "$TARGET" ]; then TARGET="rockchip"; fi
+          if [ -z "$SUBTARGET" ]; then SUBTARGET="armv8"; fi
+
+          cat > .config <<EOF
+          CONFIG_TARGET_${TARGET}=y
+          CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
+          CONFIG_PACKAGE_luci-app-jxnu-srun=y
+          EOF
+
+          make defconfig
+
+      - name: Compile package
+        working-directory: openwrt
+        run: |
+          make package/luci-app-jxnu-srun/compile V=s -j"$(nproc)"
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p artifacts
+          find openwrt/bin/packages -type f -name "luci-app-jxnu-srun*.ipk" -exec cp -v {} artifacts/ \;
+          if [ -z "$(ls -A artifacts)" ]; then
+            echo "Failed."
+            exit 1
+          fi
+
+      - name: Upload ipk
+        uses: actions/upload-artifact@v4
+        with:
+          name: luci-app-jxnu-srun-ipk
+          path: artifacts/*.ipk
