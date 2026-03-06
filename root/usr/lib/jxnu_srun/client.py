@@ -35,6 +35,10 @@ LOG_FILE = "/var/log/jxnu_srun.log"
 LOG_MAX_BYTES = 512 * 1024
 SWITCH_DELAY_SECONDS = 2
 SSID_READY_TIMEOUT_SECONDS = 12
+SSID_EXPECTED_RETRY_SECONDS = 30
+ONLINE_CHECK_MULTIPLIER = 3
+ONLINE_CHECK_MIN_SECONDS = 180
+DISCONNECT_RETRY_DELAY_SECONDS = 3
 
 DEFAULTS = {
     "enabled": "0",
@@ -589,6 +593,44 @@ def switch_to_campus(cfg):
     return switch_ssid_by_stage(hotspot, campus, SWITCH_DELAY_SECONDS)
 
 
+def ensure_expected_ssid(cfg, expect_hotspot, last_switch_ts=0):
+    if not failover_enabled(cfg):
+        return True, "", last_switch_ts
+
+    expected_ssid = str(cfg.get("hotspot_ssid" if expect_hotspot else "campus_ssid", "")).strip()
+    expected_label = "\u70ed\u70b9SSID" if expect_hotspot else "\u6821\u56ed\u7f51SSID"
+    if not expected_ssid:
+        return False, "%s\u672a\u914d\u7f6e\uff0c\u65e0\u6cd5\u81ea\u52a8\u5207\u6362\u3002" % expected_label, last_switch_ts
+
+    _, ip_now = wait_for_ssid_ipv4(expected_ssid, timeout_seconds=1, interval_seconds=1)
+    if ip_now:
+        return True, "", last_switch_ts
+
+    now = time.time()
+    if last_switch_ts and (now - last_switch_ts) < SSID_EXPECTED_RETRY_SECONDS:
+        return False, "%s\u672a\u5c31\u7eea\uff0c\u7b49\u5f85\u540e\u91cd\u8bd5\u5207\u6362\u3002" % expected_label, last_switch_ts
+
+    switched, sw_msg = (switch_to_hotspot(cfg) if expect_hotspot else switch_to_campus(cfg))
+    switched_at = now
+    if not switched:
+        detail = sw_msg or "\u5207\u6362\u547d\u4ee4\u6267\u884c\u5931\u8d25"
+        return False, "%s\u672a\u5c31\u7eea\uff0c\u81ea\u52a8\u5207\u6362\u5931\u8d25: %s" % (expected_label, detail), switched_at
+
+    _, ip_after = wait_for_ssid_ipv4(
+        expected_ssid,
+        timeout_seconds=SSID_READY_TIMEOUT_SECONDS,
+        interval_seconds=1,
+    )
+    if ip_after:
+        note = "%s\u672a\u5c31\u7eea\uff0c\u5df2\u81ea\u52a8\u5207\u6362\u5230\u671f\u671bSSID\u3002" % expected_label
+        if sw_msg:
+            note = note + " " + sw_msg
+        return True, note, switched_at
+
+    detail = sw_msg or "\u5207\u6362\u540e\u4ecd\u672a\u83b7\u53d6IPv4\u5730\u5740"
+    return False, "%s\u672a\u5c31\u7eea\uff0c\u81ea\u52a8\u5207\u6362\u540e\u4ecd\u4e0d\u53ef\u7528: %s" % (expected_label, detail), switched_at
+
+
 def get_md5(password, token):
     return hmac.new(token.encode(), password.encode(), hashlib.md5).hexdigest()
 
@@ -958,10 +1000,13 @@ def run_daemon():
     current_mode = "campus"
     quiet_switched = False
     has_logged_in = False
+    was_online = False
+    last_expected_ssid_switch_at = 0
 
     while True:
         cfg = load_config()
         interval = max(int(cfg["interval"]), 5)
+        online_interval = max(interval * ONLINE_CHECK_MULTIPLIER, ONLINE_CHECK_MIN_SECONDS)
 
         if cfg["enabled"] != "1":
             was_in_quiet = False
@@ -969,6 +1014,8 @@ def run_daemon():
             current_mode = "campus"
             quiet_switched = False
             has_logged_in = False
+            was_online = False
+            last_expected_ssid_switch_at = 0
             time.sleep(interval)
             continue
 
@@ -976,12 +1023,29 @@ def run_daemon():
         mode_msg = ""
 
         if in_quiet:
-            if failover_enabled(cfg) and not quiet_switched:
-                switched, sw_msg = switch_to_hotspot(cfg)
-                current_mode = "hotspot"
-                quiet_switched = switched
-                if sw_msg:
-                    mode_msg = sw_msg
+            if failover_enabled(cfg):
+                ssid_ok, ssid_msg, last_expected_ssid_switch_at = ensure_expected_ssid(
+                    cfg,
+                    expect_hotspot=True,
+                    last_switch_ts=last_expected_ssid_switch_at,
+                )
+                if ssid_ok:
+                    current_mode = "hotspot"
+                    quiet_switched = True
+                if ssid_msg:
+                    mode_msg = (mode_msg + "\uff1b" if mode_msg else "") + ssid_msg
+                if not ssid_ok:
+                    message = "\u591c\u95f4\u505c\u7528\uff08\u672a\u8fde\u63a5\uff09"
+                    if mode_msg:
+                        message = message + "\uff1b" + mode_msg
+                    log_line = ("[JXNU-SRun] " + message).strip()
+                    if message != last_message:
+                        append_log(log_line)
+                    last_message = message
+                    was_in_quiet = True
+                    was_online = False
+                    time.sleep(min(interval, 60))
+                    continue
 
             try:
                 if not was_in_quiet:
@@ -1009,6 +1073,7 @@ def run_daemon():
                 append_log(log_line)
             last_message = message
             was_in_quiet = True
+            was_online = False
             time.sleep(min(interval, 60))
             continue
 
@@ -1017,6 +1082,7 @@ def run_daemon():
             was_in_quiet = False
             quiet_switched = False
             has_logged_in = False
+            was_online = False
             if failover_enabled(cfg):
                 switched, sw_msg = switch_to_campus(cfg)
                 current_mode = "campus"
@@ -1032,7 +1098,28 @@ def run_daemon():
                     recover_msg = recover_msg + " " + sw_msg
                 mode_msg = (mode_msg + "；" if mode_msg else "") + recover_msg
 
+        if failover_enabled(cfg) and current_mode == "campus":
+            campus_ok, campus_msg, last_expected_ssid_switch_at = ensure_expected_ssid(
+                cfg,
+                expect_hotspot=False,
+                last_switch_ts=last_expected_ssid_switch_at,
+            )
+            if campus_msg:
+                mode_msg = (mode_msg + "\uff1b" if mode_msg else "") + campus_msg
+            if not campus_ok:
+                was_online = False
+                message = "\u6821\u56ed\u7f51SSID\u672a\u5c31\u7eea\uff0c\u7a0d\u540e\u91cd\u8bd5"
+                if mode_msg:
+                    message = message + "\uff1b" + mode_msg
+                log_line = ("[JXNU-SRun] " + message).strip()
+                if message != last_message:
+                    append_log(log_line)
+                last_message = message
+                time.sleep(interval)
+                continue
+
         if current_mode == "hotspot":
+            was_online = False
             message = "已切换到热点SSID，校园网SSID恢复后将自动切回"
             if mode_msg:
                 message = message + "；" + mode_msg
@@ -1043,22 +1130,55 @@ def run_daemon():
             time.sleep(interval)
             continue
 
+        next_sleep = interval
+
         try:
-            ok, message = run_once(cfg)
-            if ok:
+            urls = build_urls(cfg["base_url"])
+            online_now = False
+            if cfg["username"]:
+                online_now, _ = query_online_status(urls["rad_user_info_api"], cfg["username"])
+
+            if online_now:
+                ok = True
                 has_logged_in = True
-            if not ok:
-                time.sleep(3)
-                retry_ok, retry_message = run_once(cfg)
-                if retry_ok:
-                    ok, message = True, "首次失败，重试成功"
+                message = "在线，降低检测频率（%d秒）" % online_interval
+                if not was_online:
+                    message = "检测到在线，降低检测频率（%d秒）" % online_interval
+                was_online = True
+                next_sleep = online_interval
+            else:
+                if was_online:
+                    append_log("[JXNU-SRun] 检测到刚断线，立即重连。")
+                was_online = False
+
+                ok, message = run_once(cfg)
+                if ok:
+                    has_logged_in = True
+                    was_online = True
                 else:
-                    ok, message = False, retry_message
+                    time.sleep(DISCONNECT_RETRY_DELAY_SECONDS)
+                    retry_ok, retry_message = run_once(cfg)
+                    if retry_ok:
+                        ok, message = True, "首次失败，重试成功"
+                        has_logged_in = True
+                        was_online = True
+                    else:
+                        ok, message = False, retry_message
+
         except HTTP_EXCEPTIONS as exc:
+            if was_online:
+                append_log("[JXNU-SRun] 检测到刚断线，立即重连。")
+            was_online = False
             ok, message = False, "网络错误: " + localize_error(exc)
         except ValueError as exc:
+            if was_online:
+                append_log("[JXNU-SRun] 检测到刚断线，立即重连。")
+            was_online = False
             ok, message = False, "响应解析错误: " + localize_error(exc)
         except Exception as exc:
+            if was_online:
+                append_log("[JXNU-SRun] 检测到刚断线，立即重连。")
+            was_online = False
             ok, message = False, "错误: " + localize_error(exc)
 
         if failover_enabled(cfg) and has_logged_in and current_mode == "campus":
@@ -1066,6 +1186,8 @@ def run_daemon():
                 switched, sw_msg = switch_to_hotspot(cfg)
                 if switched:
                     current_mode = "hotspot"
+                    was_online = False
+                    next_sleep = interval
                     fail_msg = "检测到断网，已切换到热点SSID。"
                 else:
                     fail_msg = "检测到断网，但切换热点SSID失败。"
@@ -1080,7 +1202,7 @@ def run_daemon():
         if (not ok) or (message != last_message):
             append_log(log_line)
         last_message = message
-        time.sleep(interval)
+        time.sleep(next_sleep)
 
 
 def main():
