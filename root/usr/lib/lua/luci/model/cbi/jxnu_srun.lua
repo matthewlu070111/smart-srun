@@ -1,6 +1,12 @@
 local sys = require "luci.sys"
 local util = require "luci.util"
 
+local function has_cmd(name)
+    return util.trim(sys.exec("command -v " .. name .. " 2>/dev/null") or "") ~= ""
+end
+
+local HAS_TIMEOUT = has_cmd("timeout")
+
 local function find_python()
     local py = util.trim(sys.exec("command -v python3 2>/dev/null") or "")
     if py ~= "" then
@@ -20,12 +26,28 @@ local function run_client(args, stderr_to_stdout)
     end
 
     local cmd = py .. " -B /usr/lib/jxnu_srun/client.py " .. (args or "")
+    if HAS_TIMEOUT then
+        cmd = "timeout 12 " .. cmd
+    end
+
     if stderr_to_stdout then
         cmd = cmd .. " 2>&1"
     else
         cmd = cmd .. " 2>/dev/null"
     end
+
     return util.trim(sys.exec(cmd) or ""), nil
+end
+
+local function last_nonempty_line(text)
+    local last = ""
+    for line in tostring(text or ""):gmatch("[^\n]+") do
+        local v = util.trim(line)
+        if v ~= "" then
+            last = v
+        end
+    end
+    return last
 end
 
 local function validate_hhmm(v)
@@ -47,34 +69,21 @@ local function validate_hhmm(v)
     return string.format("%02d:%02d", hour, minute)
 end
 
-local function strip_quotes(v)
-    local value = util.trim(v or "")
-    if #value >= 2 then
-        local first = value:sub(1, 1)
-        local last = value:sub(-1)
-        if (first == "'" and last == "'") or (first == '"' and last == '"') then
-            value = value:sub(2, -2)
-        end
-    end
-    return value
-end
-
 local function list_sta_ssids()
-    local out = sys.exec("uci show wireless 2>/dev/null") or ""
-    local sections = {}
+    local out = sys.exec("uci -q show wireless 2>/dev/null") or ""
+    local iface_sections = {}
 
     for line in out:gmatch("[^\n]+") do
-        local sec, opt, val = line:match("^wireless%.([^.]+)%.([^.=]+)=(.+)$")
-        if sec and opt and val then
-            sections[sec] = sections[sec] or {}
-            sections[sec][opt] = strip_quotes(val)
+        local sec, typ = line:match("^wireless%.([^.=]+)=(.+)$")
+        if sec and typ == "wifi-iface" then
+            iface_sections[#iface_sections + 1] = sec
         end
     end
 
     local set = {}
-    for _, item in pairs(sections) do
-        local ssid = util.trim(item.ssid or "")
-        local mode = util.trim((item.mode or "")):lower()
+    for _, sec in ipairs(iface_sections) do
+        local ssid = util.trim(sys.exec("uci -q get wireless." .. sec .. ".ssid 2>/dev/null") or "")
+        local mode = util.trim(sys.exec("uci -q get wireless." .. sec .. ".mode 2>/dev/null") or ""):lower()
         if ssid ~= "" and (mode == "" or mode == "sta") then
             set[ssid] = true
         end
@@ -86,6 +95,27 @@ local function list_sta_ssids()
     end
     table.sort(ret)
     return ret
+end
+
+local function list_has_value(list, value)
+    for _, v in ipairs(list or {}) do
+        if v == value then
+            return true
+        end
+    end
+    return false
+end
+
+local function html_escape(text)
+    local value = tostring(text or "")
+    if util.pcdata then
+        return util.pcdata(value)
+    end
+    value = value:gsub("&", "&amp;")
+    value = value:gsub("<", "&lt;")
+    value = value:gsub(">", "&gt;")
+    value = value:gsub('"', "&quot;")
+    return value
 end
 
 local quiet_start_now = util.trim(sys.exec("uci -q get jxnu_srun.main.quiet_start 2>/dev/null") or "")
@@ -127,10 +157,12 @@ function login_now.write()
         m.message = "手动登录结果: " .. err
         return
     end
-    if out == "" then
-        out = "已触发登录"
+
+    local line = last_nonempty_line(out)
+    if line == "" then
+        line = "已触发登录"
     end
-    m.message = "手动登录结果: " .. out
+    m.message = "手动登录结果: " .. line
 end
 
 enabled = s:taboption("basic", Flag, "enabled", "启用")
@@ -159,24 +191,48 @@ failover_enabled.default = "1"
 local ssids = list_sta_ssids()
 
 campus_ssid = s:taboption("basic", ListValue, "campus_ssid", "校园网SSID")
-campus_ssid.rmempty = false
+campus_ssid.rmempty = true
 for _, name in ipairs(ssids) do
     campus_ssid:value(name, name)
 end
-if #ssids == 0 then
+local current_campus = util.trim(m.uci:get("jxnu_srun", "main", "campus_ssid") or "")
+if current_campus ~= "" and not list_has_value(ssids, current_campus) then
+    campus_ssid:value(current_campus, current_campus .. "（当前）")
+end
+if #ssids == 0 and current_campus == "" then
     campus_ssid:value("", "未找到 STA 模式 SSID")
 end
 campus_ssid:depends("failover_enabled", "1")
+function campus_ssid.validate(self, value, section)
+    local enabled_now = m.uci:get("jxnu_srun", section, "failover_enabled")
+    local v = util.trim(value or "")
+    if enabled_now == "1" and v == "" then
+        return nil, "启用自动切换SSID时必须选择校园网SSID"
+    end
+    return v
+end
 
 hotspot_ssid = s:taboption("basic", ListValue, "hotspot_ssid", "热点SSID")
-hotspot_ssid.rmempty = false
+hotspot_ssid.rmempty = true
 for _, name in ipairs(ssids) do
     hotspot_ssid:value(name, name)
 end
-if #ssids == 0 then
+local current_hotspot = util.trim(m.uci:get("jxnu_srun", "main", "hotspot_ssid") or "")
+if current_hotspot ~= "" and not list_has_value(ssids, current_hotspot) then
+    hotspot_ssid:value(current_hotspot, current_hotspot .. "（当前）")
+end
+if #ssids == 0 and current_hotspot == "" then
     hotspot_ssid:value("", "未找到 STA 模式 SSID")
 end
 hotspot_ssid:depends("failover_enabled", "1")
+function hotspot_ssid.validate(self, value, section)
+    local enabled_now = m.uci:get("jxnu_srun", section, "failover_enabled")
+    local v = util.trim(value or "")
+    if enabled_now == "1" and v == "" then
+        return nil, "启用自动切换SSID时必须选择热点SSID"
+    end
+    return v
+end
 
 quiet_hours_enabled = s:taboption("advanced", Flag, "quiet_hours_enabled", "按时段自动上下线", quiet_desc)
 quiet_hours_enabled.rmempty = false
@@ -228,7 +284,7 @@ function log_text.cfgvalue(self, section)
     if t == "" then
         t = "暂无日志"
     end
-    return '<pre style="white-space:pre-wrap;word-break:break-all;max-height:420px;overflow:auto;">' .. util.pcdata(t) .. '</pre>'
+    return '<pre style="white-space:pre-wrap;word-break:break-all;max-height:420px;overflow:auto;">' .. html_escape(t) .. '</pre>'
 end
 
 clear_log = s:taboption("log", Button, "_clear_log", "清空日志")
@@ -239,4 +295,3 @@ function clear_log.write()
 end
 
 return m
-

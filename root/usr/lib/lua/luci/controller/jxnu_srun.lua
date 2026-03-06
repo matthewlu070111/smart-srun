@@ -1,7 +1,9 @@
 module("luci.controller.jxnu_srun", package.seeall)
 
+local fs = require "nixio.fs"
+
 function index()
-    if not nixio.fs.access("/etc/config/jxnu_srun") then
+    if not fs.access("/etc/config/jxnu_srun") then
         return
     end
 

@@ -33,6 +33,8 @@ HEADER = {
 BEIJING_TZ = timezone(timedelta(hours=8))
 LOG_FILE = "/var/log/jxnu_srun.log"
 LOG_MAX_BYTES = 512 * 1024
+SWITCH_DELAY_SECONDS = 2
+SSID_READY_TIMEOUT_SECONDS = 12
 
 DEFAULTS = {
     "enabled": "0",
@@ -188,6 +190,19 @@ def in_quiet_window(cfg):
 def failover_enabled(cfg):
     return cfg.get("failover_enabled") == "1"
 
+
+def quiet_connection_state(cfg, urls=None):
+    if not cfg.get("username"):
+        return "未连接"
+
+    if urls is None:
+        urls = build_urls(cfg["base_url"])
+
+    try:
+        online, _ = query_online_status(urls["rad_user_info_api"], cfg["username"])
+        return "在线" if online else "未连接"
+    except Exception:
+        return "未连接"
 
 def _url_encode_component(value):
     safe = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~"
@@ -503,7 +518,7 @@ def commit_reload_wireless():
     return False, "；".join([x for x in [msg1, msg2] if x])
 
 
-def switch_ssid_by_stage(from_ssid, to_ssid, delay_seconds=10):
+def switch_ssid_by_stage(from_ssid, to_ssid, delay_seconds=SWITCH_DELAY_SECONDS):
     from_ssid = str(from_ssid or "").strip()
     to_ssid = str(to_ssid or "").strip()
     if not from_ssid or not to_ssid:
@@ -537,6 +552,11 @@ def switch_ssid_by_stage(from_ssid, to_ssid, delay_seconds=10):
     if msg1:
         msgs.append(msg1)
 
+    ok1b, msg1b = set_wifi_sections_disabled(to_sections, False)
+    ok = ok and ok1b
+    if msg1b:
+        msgs.append(msg1b)
+
     ok2, msg2 = commit_reload_wireless()
     ok = ok and ok2
     if msg2:
@@ -547,18 +567,8 @@ def switch_ssid_by_stage(from_ssid, to_ssid, delay_seconds=10):
         ok = ok and d_ok
         msgs.append(d_msg)
 
-    if from_ssid != to_ssid:
-        time.sleep(max(int(delay_seconds), 1))
-
-    ok3, msg3 = set_wifi_sections_disabled(to_sections, False)
-    ok = ok and ok3
-    if msg3:
-        msgs.append(msg3)
-
-    ok4, msg4 = commit_reload_wireless()
-    ok = ok and ok4
-    if msg4:
-        msgs.append(msg4)
+    if from_ssid != to_ssid and int(delay_seconds) > 0:
+        time.sleep(int(delay_seconds))
 
     for net in sorted(set(to_nets)):
         u_ok, u_msg = interface_up(net)
@@ -567,17 +577,16 @@ def switch_ssid_by_stage(from_ssid, to_ssid, delay_seconds=10):
 
     return ok, "；".join([x for x in msgs if x])
 
-
 def switch_to_hotspot(cfg):
     campus = cfg.get("campus_ssid", "").strip()
     hotspot = cfg.get("hotspot_ssid", "").strip()
-    return switch_ssid_by_stage(campus, hotspot, 10)
+    return switch_ssid_by_stage(campus, hotspot, SWITCH_DELAY_SECONDS)
 
 
 def switch_to_campus(cfg):
     campus = cfg.get("campus_ssid", "").strip()
     hotspot = cfg.get("hotspot_ssid", "").strip()
-    return switch_ssid_by_stage(hotspot, campus, 10)
+    return switch_ssid_by_stage(hotspot, campus, SWITCH_DELAY_SECONDS)
 
 
 def get_md5(password, token):
@@ -729,6 +738,22 @@ def build_urls(base_url):
     }
 
 
+def wait_for_ssid_ipv4(ssid, timeout_seconds=SSID_READY_TIMEOUT_SECONDS, interval_seconds=1):
+    deadline = time.time() + max(int(timeout_seconds), 1)
+    last_net = None
+
+    while time.time() < deadline:
+        net = get_network_interface_from_ssid(ssid)
+        if net:
+            last_net = net
+            ip = get_ipv4_from_network_interface(net)
+            if ip:
+                return net, ip
+        time.sleep(max(int(interval_seconds), 1))
+
+    return last_net, None
+
+
 def prepare_campus_for_login(cfg):
     if not failover_enabled(cfg):
         return True, ""
@@ -737,22 +762,19 @@ def prepare_campus_for_login(cfg):
     if not campus_ssid:
         return True, ""
 
-    campus_net = get_network_interface_from_ssid(campus_ssid)
-    campus_ip = get_ipv4_from_network_interface(campus_net) if campus_net else None
+    _, campus_ip = wait_for_ssid_ipv4(campus_ssid, timeout_seconds=1, interval_seconds=1)
     if campus_ip:
         return True, ""
 
     switched, sw_msg = switch_to_campus(cfg)
-    if switched:
-        # Give wpa_supplicant/dhcp a brief window to settle after SSID switch.
-        time.sleep(2)
-        campus_net = get_network_interface_from_ssid(campus_ssid)
-        campus_ip = get_ipv4_from_network_interface(campus_net) if campus_net else None
-        if campus_ip:
-            return True, ""
+
+    # Wait for WPA association and DHCP lease after SSID switching.
+    _, campus_ip = wait_for_ssid_ipv4(campus_ssid, timeout_seconds=SSID_READY_TIMEOUT_SECONDS, interval_seconds=1)
+    if campus_ip:
+        return True, ""
 
     detail = sw_msg or "未获取到校园网SSID的IPv4地址"
-    return False, "校园网SSID未就绪: " + detail
+    return False, "校园网SSID未就绪: %s。请确认已连接且获取IP。" % detail
 
 
 def init_getip(init_url):
@@ -901,31 +923,33 @@ def run_status(cfg):
             cfg.get("hotspot_ssid", "未设置"),
         )
 
+    urls = build_urls(cfg["base_url"])
+
     if in_quiet_window(cfg):
-        return False, "夜间停用中（北京时间 %s）" % quiet_window_label(cfg) + mode_hint
+        state = quiet_connection_state(cfg, urls)
+        return False, "夜间停用（%s）" % state + mode_hint
 
     if not cfg["username"]:
         return False, "未配置学工号" + mode_hint
 
-    urls = build_urls(cfg["base_url"])
     online, message = query_online_status(urls["rad_user_info_api"], cfg["username"])
     return online, localize_error(message) + mode_hint
 
-
 def run_quiet_logout(cfg):
+    urls = build_urls(cfg["base_url"])
+
     if cfg.get("force_logout_in_quiet") != "1":
-        return True, "夜间停用中（未启用强制下线）"
+        state = quiet_connection_state(cfg, urls)
+        return True, "夜间停用（%s）" % state
 
     if not cfg["username"]:
         return False, "夜间停用下线失败: 未配置学工号"
 
-    urls = build_urls(cfg["base_url"])
     ip = init_getip(urls["init_url"])
     ok, message = logout(urls["srun_portal_api"], cfg, ip)
     if ok:
-        return True, "夜间停用已下线，%s 自动恢复连接" % cfg.get("quiet_end", "06:00")
+        return True, "夜间停用（未连接）"
     return False, "夜间停用下线失败: " + localize_error(message)
-
 
 def run_daemon():
     last_message = ""
@@ -964,7 +988,8 @@ def run_daemon():
                     quiet_logout_done = False
 
                 if quiet_logout_done:
-                    message = "夜间停用中（北京时间 %s）" % quiet_window_label(cfg)
+                    state = quiet_connection_state(cfg)
+                    message = "夜间停用（%s）" % state
                     ok = True
                 else:
                     ok, message = run_quiet_logout(cfg)
@@ -1071,6 +1096,8 @@ def main():
         run_daemon()
         return
 
+    exec_label = "手动登录结果" if args.once else "单次执行结果"
+
     try:
         if args.status:
             _, message = run_status(cfg)
@@ -1078,14 +1105,20 @@ def main():
             return
 
         _, message = run_once(cfg)
+        append_log("[JXNU-SRun] %s: %s" % (exec_label, message))
         print(message)
     except HTTP_EXCEPTIONS as exc:
-        print("网络错误: " + localize_error(exc))
+        message = "网络错误: " + localize_error(exc)
+        append_log("[JXNU-SRun] %s: %s" % (exec_label, message))
+        print(message)
     except ValueError as exc:
-        print("响应解析错误: " + localize_error(exc))
+        message = "响应解析错误: " + localize_error(exc)
+        append_log("[JXNU-SRun] %s: %s" % (exec_label, message))
+        print(message)
     except Exception as exc:
-        print("错误: " + localize_error(exc))
-
+        message = "错误: " + localize_error(exc)
+        append_log("[JXNU-SRun] %s: %s" % (exec_label, message))
+        print(message)
 
 if __name__ == "__main__":
     main()
