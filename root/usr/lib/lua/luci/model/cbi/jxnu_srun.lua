@@ -1,6 +1,5 @@
 local sys = require "luci.sys"
 local util = require "luci.util"
-local jsonc = require "luci.jsonc"
 
 local function find_python()
     local py = util.trim(sys.exec("command -v python3 2>/dev/null") or "")
@@ -48,30 +47,42 @@ local function validate_hhmm(v)
     return string.format("%02d:%02d", hour, minute)
 end
 
-local function list_network_interfaces()
-    local names = {}
+local function strip_quotes(v)
+    local value = util.trim(v or "")
+    if #value >= 2 then
+        local first = value:sub(1, 1)
+        local last = value:sub(-1)
+        if (first == "'" and last == "'") or (first == '"' and last == '"') then
+            value = value:sub(2, -2)
+        end
+    end
+    return value
+end
 
-    local dump = sys.exec("ubus call network.interface dump 2>/dev/null") or ""
-    local parsed = jsonc.parse(dump)
-    if parsed and parsed.interface then
-        for _, item in ipairs(parsed.interface) do
-            local name = item.interface
-            if name and name ~= "loopback" then
-                names[name] = true
-            end
+local function list_sta_ssids()
+    local out = sys.exec("uci show wireless 2>/dev/null") or ""
+    local sections = {}
+
+    for line in out:gmatch("[^\n]+") do
+        local sec, opt, val = line:match("^wireless%.([^.]+)%.([^.=]+)=(.+)$")
+        if sec and opt and val then
+            sections[sec] = sections[sec] or {}
+            sections[sec][opt] = strip_quotes(val)
         end
     end
 
-    local uci_out = sys.exec("uci show network 2>/dev/null") or ""
-    for sec in uci_out:gmatch("network%.([%w_%-]+)=interface") do
-        if sec ~= "loopback" then
-            names[sec] = true
+    local set = {}
+    for _, item in pairs(sections) do
+        local ssid = util.trim(item.ssid or "")
+        local mode = util.trim((item.mode or "")):lower()
+        if ssid ~= "" and (mode == "" or mode == "sta") then
+            set[ssid] = true
         end
     end
 
     local ret = {}
-    for name, _ in pairs(names) do
-        ret[#ret + 1] = name
+    for ssid, _ in pairs(set) do
+        ret[#ret + 1] = ssid
     end
     table.sort(ret)
     return ret
@@ -141,25 +152,31 @@ password = s:taboption("basic", Value, "password", "密码")
 password.password = true
 password.rmempty = false
 
-failover_enabled = s:taboption("basic", Flag, "failover_enabled", "自动切换接口（下线时段/断网）")
+failover_enabled = s:taboption("basic", Flag, "failover_enabled", "自动切换SSID（下线时段/断网）")
 failover_enabled.rmempty = false
 failover_enabled.default = "1"
 
-local ifaces = list_network_interfaces()
+local ssids = list_sta_ssids()
 
-campus_interface = s:taboption("basic", ListValue, "campus_interface", "校园网接口")
-campus_interface.rmempty = false
-for _, name in ipairs(ifaces) do
-    campus_interface:value(name, name)
+campus_ssid = s:taboption("basic", ListValue, "campus_ssid", "校园网SSID")
+campus_ssid.rmempty = false
+for _, name in ipairs(ssids) do
+    campus_ssid:value(name, name)
 end
-campus_interface:depends("failover_enabled", "1")
+if #ssids == 0 then
+    campus_ssid:value("", "未找到 STA 模式 SSID")
+end
+campus_ssid:depends("failover_enabled", "1")
 
-hotspot_interface = s:taboption("basic", ListValue, "hotspot_interface", "热点接口")
-hotspot_interface.rmempty = false
-for _, name in ipairs(ifaces) do
-    hotspot_interface:value(name, name)
+hotspot_ssid = s:taboption("basic", ListValue, "hotspot_ssid", "热点SSID")
+hotspot_ssid.rmempty = false
+for _, name in ipairs(ssids) do
+    hotspot_ssid:value(name, name)
 end
-hotspot_interface:depends("failover_enabled", "1")
+if #ssids == 0 then
+    hotspot_ssid:value("", "未找到 STA 模式 SSID")
+end
+hotspot_ssid:depends("failover_enabled", "1")
 
 quiet_hours_enabled = s:taboption("advanced", Flag, "quiet_hours_enabled", "按时段自动上下线", quiet_desc)
 quiet_hours_enabled.rmempty = false
@@ -222,3 +239,4 @@ function clear_log.write()
 end
 
 return m
+

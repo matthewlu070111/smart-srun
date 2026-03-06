@@ -44,8 +44,8 @@ DEFAULTS = {
     "quiet_start": "00:00",
     "quiet_end": "06:00",
     "failover_enabled": "1",
-    "campus_interface": "",
-    "hotspot_interface": "",
+    "campus_ssid": "",
+    "hotspot_ssid": "",
     "connectivity_check_host": "8.8.8.8",
     "base_url": "http://172.17.1.2",
     "ac_id": "1",
@@ -84,8 +84,8 @@ def load_config():
     cfg["quiet_start"] = str(cfg.get("quiet_start", "")).strip()
     cfg["quiet_end"] = str(cfg.get("quiet_end", "")).strip()
     cfg["failover_enabled"] = str(cfg["failover_enabled"]).strip()
-    cfg["campus_interface"] = str(cfg.get("campus_interface", "")).strip()
-    cfg["hotspot_interface"] = str(cfg.get("hotspot_interface", "")).strip()
+    cfg["campus_ssid"] = str(cfg.get("campus_ssid", "")).strip()
+    cfg["hotspot_ssid"] = str(cfg.get("hotspot_ssid", "")).strip()
     cfg["connectivity_check_host"] = str(cfg["connectivity_check_host"]).strip()
     cfg["base_url"] = str(cfg["base_url"]).strip().rstrip("/")
     cfg["ac_id"] = str(cfg["ac_id"]).strip()
@@ -104,11 +104,15 @@ def load_config():
     if not cfg["connectivity_check_host"]:
         cfg["connectivity_check_host"] = "8.8.8.8"
 
-    # Backward compatibility for old config keys.
-    if not cfg["campus_interface"]:
-        cfg["campus_interface"] = str(uci_get("primary_interface", "")).strip()
-    if not cfg["hotspot_interface"]:
-        cfg["hotspot_interface"] = str(uci_get("backup_interface", "")).strip()
+    # Backward compatibility for old interface-based keys.
+    if not cfg["campus_ssid"]:
+        cfg["campus_ssid"] = str(uci_get("campus_interface", "")).strip()
+    if not cfg["campus_ssid"]:
+        cfg["campus_ssid"] = str(uci_get("primary_interface", "")).strip()
+    if not cfg["hotspot_ssid"]:
+        cfg["hotspot_ssid"] = str(uci_get("hotspot_interface", "")).strip()
+    if not cfg["hotspot_ssid"]:
+        cfg["hotspot_ssid"] = str(uci_get("backup_interface", "")).strip()
 
     cfg["quiet_start"], cfg["quiet_start_minutes"] = normalize_hhmm(cfg.get("quiet_start", ""), "00:00")
     cfg["quiet_end"], cfg["quiet_end_minutes"] = normalize_hhmm(cfg.get("quiet_end", ""), "06:00")
@@ -228,6 +232,24 @@ def http_get(url, params=None, timeout=5):
     host = extract_host_from_url(url)
     bind_ip = get_local_ip_for_target(host) if host else None
 
+    # For private portal hosts (e.g. campus gateway), prefer campus interface IP.
+    host_ip = pick_valid_ip(host)
+    if host_ip:
+        try:
+            if ipaddress.ip_address(host_ip).is_private:
+                campus_ssid = str(uci_get("campus_ssid", "")).strip()
+                if not campus_ssid:
+                    campus_ssid = str(uci_get("campus_interface", "")).strip()
+                if not campus_ssid:
+                    campus_ssid = str(uci_get("primary_interface", "")).strip()
+                campus_net = get_network_interface_from_ssid(campus_ssid)
+                if campus_net:
+                    campus_ip = get_ipv4_from_network_interface(campus_net)
+                    if campus_ip:
+                        bind_ip = campus_ip
+        except ValueError:
+            pass
+
     candidates = [
         ("/usr/bin/wget", "wget"),
         ("/bin/wget", "wget"),
@@ -314,6 +336,41 @@ def get_local_ip_for_target(target_host):
         return None
 
 
+def get_ipv4_from_network_interface(iface_name):
+    if not iface_name:
+        return None
+
+    ok, out = run_cmd(["ubus", "call", "network.interface.%s" % iface_name, "status"])
+    if ok and out:
+        try:
+            data = json.loads(out)
+            ipv4_list = data.get("ipv4-address") or data.get("ipv4_address") or []
+            if isinstance(ipv4_list, list):
+                for item in ipv4_list:
+                    if isinstance(item, dict):
+                        addr = pick_valid_ip(item.get("address"))
+                        if addr:
+                            return addr
+        except Exception:
+            pass
+
+    dev = iface_name
+    if ok and out:
+        try:
+            data = json.loads(out)
+            dev = data.get("l3_device") or data.get("device") or dev
+        except Exception:
+            pass
+
+    ok2, out2 = run_cmd(["ip", "-4", "-o", "addr", "show", "dev", dev])
+    if ok2 and out2:
+        match = re.search(r"\binet\s+(\d+\.\d+\.\d+\.\d+)/", out2)
+        if match:
+            return match.group(1)
+
+    return None
+
+
 def append_log(line):
     timestamp = datetime.now(BEIJING_TZ).strftime("%Y-%m-%d %H:%M:%S")
     log_line = "[%s] %s" % (timestamp, str(line).strip())
@@ -369,68 +426,158 @@ def connectivity_ok(cfg):
     return ping_ok(cfg.get("connectivity_check_host", "8.8.8.8"))
 
 
-def switch_by_stage(down_iface, up_iface, delay_seconds=10):
+def parse_uci_value(raw):
+    text = str(raw or "").strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in ("\"", "'"):
+        return text[1:-1]
+    return text
+
+
+def parse_wireless_iface_data():
+    ok, out = run_cmd(["uci", "show", "wireless"])
+    if not ok or not out:
+        return {}
+
+    data = {}
+    for line in out.splitlines():
+        m = re.match(r"^wireless\.([^.]+)\.([^.=]+)=(.+)$", line.strip())
+        if not m:
+            continue
+        sec, opt, val = m.groups()
+        if opt not in ("ssid", "mode", "network", "disabled"):
+            continue
+        data.setdefault(sec, {})[opt] = parse_uci_value(val)
+    return data
+
+
+def split_network_value(value):
+    return [x for x in str(value or "").split() if x]
+
+
+def find_sta_sections_by_ssid(ssid, wireless_data=None):
+    target = str(ssid or "").strip()
+    if not target:
+        return []
+
+    data = wireless_data if wireless_data is not None else parse_wireless_iface_data()
+    matched = []
+    for sec, opts in data.items():
+        mode = str(opts.get("mode", "")).strip().lower()
+        if mode and mode != "sta":
+            continue
+        if str(opts.get("ssid", "")).strip() == target:
+            matched.append(sec)
+    return matched
+
+
+def get_network_interface_from_ssid(ssid):
+    data = parse_wireless_iface_data()
+    sections = find_sta_sections_by_ssid(ssid, data)
+    for sec in sections:
+        nets = split_network_value(data.get(sec, {}).get("network", ""))
+        if nets:
+            return nets[0]
+    return None
+
+
+def set_wifi_sections_disabled(sections, disabled):
+    if not sections:
+        return False, "未找到对应 SSID 的无线配置"
+
+    errs = []
+    val = "1" if disabled else "0"
+    for sec in sections:
+        ok, msg = run_cmd(["uci", "set", "wireless.%s.disabled=%s" % (sec, val)])
+        if not ok:
+            errs.append("%s: %s" % (sec, msg))
+    if errs:
+        return False, "；".join(errs)
+    return True, ""
+
+
+def commit_reload_wireless():
+    ok1, msg1 = run_cmd(["uci", "commit", "wireless"])
+    ok2, msg2 = run_cmd(["wifi", "reload"])
+    if ok1 and ok2:
+        return True, ""
+    return False, "；".join([x for x in [msg1, msg2] if x])
+
+
+def switch_ssid_by_stage(from_ssid, to_ssid, delay_seconds=10):
+    from_ssid = str(from_ssid or "").strip()
+    to_ssid = str(to_ssid or "").strip()
+    if not from_ssid or not to_ssid:
+        return False, "未配置校园网 SSID 或热点 SSID"
+    if from_ssid == to_ssid:
+        return False, "校园网 SSID 与热点 SSID 不能相同"
+
+    data = parse_wireless_iface_data()
+    if not data:
+        return False, "读取无线配置失败"
+
+    from_sections = find_sta_sections_by_ssid(from_ssid, data)
+    to_sections = find_sta_sections_by_ssid(to_ssid, data)
+    if not from_sections:
+        return False, "未找到校园网 SSID 对应的 STA 配置"
+    if not to_sections:
+        return False, "未找到热点 SSID 对应的 STA 配置"
+
+    from_nets = []
+    for sec in from_sections:
+        from_nets.extend(split_network_value(data.get(sec, {}).get("network", "")))
+    to_nets = []
+    for sec in to_sections:
+        to_nets.extend(split_network_value(data.get(sec, {}).get("network", "")))
+
     msgs = []
     ok = True
 
-    if down_iface:
-        down_ok, down_msg = interface_down(down_iface)
-        ok = ok and down_ok
-        msgs.append(down_msg)
+    ok1, msg1 = set_wifi_sections_disabled(from_sections, True)
+    ok = ok and ok1
+    if msg1:
+        msgs.append(msg1)
 
-    if down_iface and up_iface and down_iface != up_iface:
+    ok2, msg2 = commit_reload_wireless()
+    ok = ok and ok2
+    if msg2:
+        msgs.append(msg2)
+
+    for net in sorted(set(from_nets)):
+        d_ok, d_msg = interface_down(net)
+        ok = ok and d_ok
+        msgs.append(d_msg)
+
+    if from_ssid != to_ssid:
         time.sleep(max(int(delay_seconds), 1))
 
-    if up_iface:
-        up_ok, up_msg = interface_up(up_iface)
-        ok = ok and up_ok
-        msgs.append(up_msg)
+    ok3, msg3 = set_wifi_sections_disabled(to_sections, False)
+    ok = ok and ok3
+    if msg3:
+        msgs.append(msg3)
+
+    ok4, msg4 = commit_reload_wireless()
+    ok = ok and ok4
+    if msg4:
+        msgs.append(msg4)
+
+    for net in sorted(set(to_nets)):
+        u_ok, u_msg = interface_up(net)
+        ok = ok and u_ok
+        msgs.append(u_msg)
 
     return ok, "；".join([x for x in msgs if x])
 
 
 def switch_to_hotspot(cfg):
-    campus = cfg.get("campus_interface", "").strip()
-    hotspot = cfg.get("hotspot_interface", "").strip()
-    if not campus or not hotspot:
-        return False, "未配置校园网接口或热点接口"
-    if campus == hotspot:
-        return False, "校园网接口与热点接口不能相同"
-    return switch_by_stage(campus, hotspot, 10)
+    campus = cfg.get("campus_ssid", "").strip()
+    hotspot = cfg.get("hotspot_ssid", "").strip()
+    return switch_ssid_by_stage(campus, hotspot, 10)
 
 
 def switch_to_campus(cfg):
-    campus = cfg.get("campus_interface", "").strip()
-    hotspot = cfg.get("hotspot_interface", "").strip()
-    if not campus or not hotspot:
-        return False, "未配置校园网接口或热点接口"
-    if campus == hotspot:
-        return False, "校园网接口与热点接口不能相同"
-    return switch_by_stage(hotspot, campus, 10)
-
-
-def evaluate_failover_mode(cfg, current_mode):
-    if not failover_enabled(cfg):
-        return "campus", ""
-
-    # In hotspot mode, periodically try switching back to campus network.
-    if current_mode == "hotspot":
-        switched, _ = switch_to_campus(cfg)
-        if switched and connectivity_ok(cfg):
-            return "campus", "校园网接口已恢复，自动切回。"
-        switch_to_hotspot(cfg)
-        return "hotspot", "校园网接口未恢复，保持热点接口。"
-
-    # In campus mode, switch to hotspot when connectivity is lost.
-    if connectivity_ok(cfg):
-        if current_mode != "campus":
-            switch_to_campus(cfg)
-        return "campus", ""
-
-    switched, _ = switch_to_hotspot(cfg)
-    if switched:
-        return "hotspot", "检测到断网，已切换到热点接口。"
-    return "hotspot", "检测到断网，但切换热点接口失败。"
+    campus = cfg.get("campus_ssid", "").strip()
+    hotspot = cfg.get("hotspot_ssid", "").strip()
+    return switch_ssid_by_stage(hotspot, campus, 10)
 
 
 def get_md5(password, token):
@@ -719,9 +866,9 @@ def run_once(cfg):
 def run_status(cfg):
     mode_hint = ""
     if failover_enabled(cfg):
-        mode_hint = "（校园网接口: %s, 热点接口: %s）" % (
-            cfg.get("campus_interface", "未设置"),
-            cfg.get("hotspot_interface", "未设置"),
+        mode_hint = "（校园网SSID: %s, 热点SSID: %s）" % (
+            cfg.get("campus_ssid", "未设置"),
+            cfg.get("hotspot_ssid", "未设置"),
         )
 
     if in_quiet_window(cfg):
@@ -756,6 +903,7 @@ def run_daemon():
     quiet_logout_done = False
     current_mode = "campus"
     quiet_switched = False
+    has_logged_in = False
 
     while True:
         cfg = load_config()
@@ -766,6 +914,7 @@ def run_daemon():
             quiet_logout_done = False
             current_mode = "campus"
             quiet_switched = False
+            has_logged_in = False
             time.sleep(interval)
             continue
 
@@ -812,21 +961,24 @@ def run_daemon():
             quiet_logout_done = False
             was_in_quiet = False
             quiet_switched = False
+            has_logged_in = False
             if failover_enabled(cfg):
                 switched, sw_msg = switch_to_campus(cfg)
                 current_mode = "campus"
                 if sw_msg:
                     mode_msg = sw_msg
 
-        if failover_enabled(cfg):
-            current_mode, failover_msg = evaluate_failover_mode(cfg, current_mode)
-            if failover_msg:
-                mode_msg = (mode_msg + "；" if mode_msg else "") + failover_msg
-        else:
-            current_mode = "campus"
+        if failover_enabled(cfg) and current_mode == "hotspot" and has_logged_in:
+            switched, sw_msg = switch_to_campus(cfg)
+            if switched:
+                current_mode = "campus"
+                recover_msg = "热点模式下尝试切回校园网SSID。"
+                if sw_msg:
+                    recover_msg = recover_msg + " " + sw_msg
+                mode_msg = (mode_msg + "；" if mode_msg else "") + recover_msg
 
         if current_mode == "hotspot":
-            message = "已切换到热点接口，校园网恢复后将自动切回"
+            message = "已切换到热点SSID，校园网SSID恢复后将自动切回"
             if mode_msg:
                 message = message + "；" + mode_msg
             log_line = ("[JXNU-SRun] " + message).strip()
@@ -838,6 +990,8 @@ def run_daemon():
 
         try:
             ok, message = run_once(cfg)
+            if ok:
+                has_logged_in = True
             if not ok:
                 time.sleep(3)
                 retry_ok, retry_message = run_once(cfg)
@@ -851,6 +1005,18 @@ def run_daemon():
             ok, message = False, "响应解析错误: " + localize_error(exc)
         except Exception as exc:
             ok, message = False, "错误: " + localize_error(exc)
+
+        if failover_enabled(cfg) and has_logged_in and current_mode == "campus":
+            if not connectivity_ok(cfg):
+                switched, sw_msg = switch_to_hotspot(cfg)
+                if switched:
+                    current_mode = "hotspot"
+                    fail_msg = "检测到断网，已切换到热点SSID。"
+                else:
+                    fail_msg = "检测到断网，但切换热点SSID失败。"
+                if sw_msg:
+                    fail_msg = fail_msg + " " + sw_msg
+                mode_msg = (mode_msg + "；" if mode_msg else "") + fail_msg
 
         if mode_msg:
             message = message + "；" + mode_msg
@@ -893,3 +1059,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
