@@ -58,28 +58,34 @@ jobs:
           echo "sdk_url=${BASE_URL}/${SDK_NAME}" >> "$GITHUB_OUTPUT"
           echo "sdk_name=${SDK_NAME}" >> "$GITHUB_OUTPUT"
 
+      - name: Cache SDK archive
+        uses: actions/cache@v4
+        with:
+          path: sdk.tar
+          key: ${{ runner.os }}-${{ steps.sdk.outputs.sdk_name }}
+
       - name: Download and extract SDK
         run: |
-          wget -q "${{ steps.sdk.outputs.sdk_url }}" -O sdk.tar
+          if [ ! -f sdk.tar ]; then
+            wget -q "${{ steps.sdk.outputs.sdk_url }}" -O sdk.tar
+          fi
           mkdir -p sdk
           tar -xf sdk.tar -C sdk
           SDK_DIR="$(find sdk -maxdepth 1 -type d -name 'openwrt-sdk-*' | head -n1)"
           mv "$SDK_DIR" openwrt
 
-      - name: Cache OpenWrt build
+      - name: Cache OpenWrt downloads
         uses: actions/cache@v4
         with:
           path: |
-            openwrt/staging_dir
-            openwrt/build_dir
             openwrt/dl
-          key: ${{ runner.os }}-sdk-${{ github.event.inputs.openwrt_version || '23.05.5' }}-${{ github.event.inputs.target || 'rockchip' }}-${{ github.event.inputs.subtarget || 'armv8' }}-v1
+          key: ${{ runner.os }}-openwrt-dl-${{ github.event.inputs.openwrt_version || '23.05.5' }}-${{ github.event.inputs.target || 'rockchip' }}-${{ github.event.inputs.subtarget || 'armv8' }}-v2
 
-      - name: Update and install feeds
+      - name: Update and install required feeds
         working-directory: openwrt
         run: |
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
+          ./scripts/feeds update luci
+          ./scripts/feeds install -p luci -a
 
       - name: Inject package
         run: |
@@ -96,13 +102,14 @@ jobs:
       - name: Configure
         working-directory: openwrt
         run: |
+          echo "CONFIG_ALL_KMODS=n" >> .config
           echo "CONFIG_PACKAGE_luci-app-jxnu-srun=y" >> .config
           make defconfig
 
       - name: Compile package
         working-directory: openwrt
         run: |
-          make package/luci-app-jxnu-srun/compile V=s -j"$(nproc)"
+          make package/luci-app-jxnu-srun/compile -j"$(nproc)"
 
       - name: Collect artifacts
         run: |
