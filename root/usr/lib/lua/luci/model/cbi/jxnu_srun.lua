@@ -406,4 +406,8 @@ function clear_log.write()
     m.message = "日志已清空"
 end
 
+m.on_after_commit = function()
+    run_client("--sync-json", false)
+end
+
 return m

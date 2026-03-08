@@ -20,10 +20,6 @@ define Package/$(PKG_NAME)/postinst
 exit 0
 endef
 
-define Package/$(PKG_NAME)/conffiles
-/etc/config/jxnu_srun
-endef
-
 include $(TOPDIR)/feeds/luci/luci.mk
 
 # call BuildPackage - OpenWrt buildroot signature

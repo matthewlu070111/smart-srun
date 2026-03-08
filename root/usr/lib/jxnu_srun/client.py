@@ -32,6 +32,7 @@ HEADER = {
 
 BEIJING_TZ = timezone(timedelta(hours=8))
 LOG_FILE = "/var/log/jxnu_srun.log"
+JSON_CONFIG_FILE = "/usr/lib/jxnu_srun/config.json"
 LOG_MAX_BYTES = 512 * 1024
 SWITCH_DELAY_SECONDS = 2
 SSID_READY_TIMEOUT_SECONDS = 12
@@ -91,6 +92,53 @@ def uci_get(option, default=""):
         return default
 
 
+def load_uci_raw_config():
+    return {k: uci_get(k, v) for k, v in DEFAULTS.items()}
+
+
+def ensure_parent_dir(path):
+    parent = os.path.dirname(str(path or ""))
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+
+def ensure_json_config_file():
+    ensure_parent_dir(JSON_CONFIG_FILE)
+    if os.path.exists(JSON_CONFIG_FILE):
+        return
+    with open(JSON_CONFIG_FILE, "w", encoding="utf-8") as wf:
+        wf.write("{}\n")
+
+
+def load_json_raw_config():
+    ensure_json_config_file()
+    try:
+        with open(JSON_CONFIG_FILE, "r", encoding="utf-8") as rf:
+            data = json.load(rf)
+        if isinstance(data, dict):
+            return {k: str(v) for k, v in data.items() if k in DEFAULTS}
+    except Exception:
+        pass
+    return {}
+
+
+def save_json_raw_config(raw_cfg):
+    payload = {}
+    for key, default_value in DEFAULTS.items():
+        payload[key] = str(raw_cfg.get(key, default_value))
+
+    ensure_parent_dir(JSON_CONFIG_FILE)
+    with open(JSON_CONFIG_FILE, "w", encoding="utf-8") as wf:
+        json.dump(payload, wf, ensure_ascii=False, indent=2, sort_keys=True)
+        wf.write("\n")
+
+
+def sync_json_from_uci():
+    raw = load_uci_raw_config()
+    save_json_raw_config(raw)
+    return raw
+
+
 def parse_non_negative_int(value, default_value):
     try:
         parsed = int(str(value).strip())
@@ -108,7 +156,8 @@ def parse_non_negative_float(value, default_value):
 
 
 def load_config():
-    cfg = {k: uci_get(k, v) for k, v in DEFAULTS.items()}
+    raw = load_json_raw_config()
+    cfg = {k: str(raw.get(k, v)) for k, v in DEFAULTS.items()}
     cfg["enabled"] = str(cfg["enabled"]).strip()
     cfg["user_id"] = str(cfg["user_id"]).strip()
     cfg["operator"] = str(cfg["operator"]).strip().lower()
@@ -353,6 +402,40 @@ def extract_host_from_url(url):
     return match.group(1) if match else ""
 
 
+def compact_http_error_detail(detail, max_len=180):
+    text = re.sub(r"\s+", " ", str(detail or "")).strip()
+    if not text:
+        return ""
+    if len(text) > max_len:
+        return text[:max_len] + "..."
+    return text
+
+
+def humanize_http_errors(url, errors):
+    host = extract_host_from_url(url) or str(url or "")
+    lower = " | ".join([str(e or "") for e in errors]).lower()
+
+    reasons = []
+    if ("network unreachable" in lower) or ("no route to host" in lower):
+        reasons.append("当前网络到认证网关不通（通常是还没连上校园网）")
+    if "operation not permitted" in lower:
+        reasons.append("请求被系统策略拦截（可能是防火墙或权限限制）")
+    if ("timed out" in lower) or ("timeout" in lower):
+        reasons.append("网关响应超时")
+    if "connection refused" in lower:
+        reasons.append("网关拒绝连接")
+    if not reasons:
+        reasons.append("与网关通信失败")
+
+    details = []
+    for e in errors:
+        d = compact_http_error_detail(e)
+        if d:
+            details.append(d)
+    details_text = " | ".join(details[:3]) if details else "无"
+    return "无法访问认证网关 %s：%s。技术详情：%s" % (host, "；".join(reasons), details_text)
+
+
 def http_get(url, params=None, timeout=5):
     if params:
         query = _urlencode(params)
@@ -412,7 +495,9 @@ def http_get(url, params=None, timeout=5):
             output = subprocess.check_output(cmd, stderr=subprocess.STDOUT)
             return output.decode("utf-8", errors="replace")
         except subprocess.CalledProcessError as exc:
-            details = exc.output.decode("utf-8", errors="replace") if exc.output else str(exc)
+            details = exc.output.decode("utf-8", errors="replace") if exc.output else ""
+            if not details:
+                details = "exit status %s" % getattr(exc, "returncode", "unknown")
             errors.append("%s: %s" % (kind, details.strip()))
         except OSError as exc:
             errors.append("%s: %s" % (kind, str(exc)))
@@ -420,7 +505,7 @@ def http_get(url, params=None, timeout=5):
     if not available:
         raise RuntimeError("未找到可用 HTTP 客户端（uclient-fetch/wget）")
 
-    raise RuntimeError("HTTP 请求失败: " + " | ".join([e for e in errors if e]))
+    raise RuntimeError(humanize_http_errors(url, [e for e in errors if e]))
 
 
 def parse_jsonp(text):
@@ -1289,9 +1374,20 @@ def main():
     parser.add_argument("--daemon", action="store_true", help="run as daemon loop")
     parser.add_argument("--once", action="store_true", help="run login once")
     parser.add_argument("--status", action="store_true", help="query online status")
+    parser.add_argument("--sync-json", action="store_true", help="sync json config from uci")
     parser.add_argument("--switch-hotspot", action="store_true", help="switch STA profile to hotspot")
     parser.add_argument("--switch-campus", action="store_true", help="switch STA profile to campus")
     args = parser.parse_args()
+
+    if args.sync_json:
+        try:
+            sync_json_from_uci()
+            print("配置已同步到 JSON")
+        except Exception as exc:
+            message = "同步 JSON 配置失败: " + localize_error(exc)
+            append_log("[JXNU-SRun] " + message)
+            print(message)
+        return
 
     cfg = load_config()
 
@@ -1323,7 +1419,12 @@ def main():
             print(message)
             return
 
-        _, message = run_once(cfg)
+        if args.once:
+            _, message = run_once(cfg)
+        else:
+            # Legacy no-arg invocation is often used by one-shot auto triggers.
+            # Use retry path here to reduce failures during transient network bring-up.
+            _, message = run_once_with_retry(cfg)
         append_log("[JXNU-SRun] %s: %s" % (exec_label, message))
         print(message)
     except HTTP_EXCEPTIONS as exc:

@@ -1,15 +1,10 @@
 module("luci.controller.jxnu_srun", package.seeall)
 
-local fs = require "nixio.fs"
 local http = require "luci.http"
 local jsonc = require "luci.jsonc"
 local sys = require "luci.sys"
 
 function index()
-    if not fs.access("/etc/config/jxnu_srun") then
-        return
-    end
-
     entry({"admin", "services", "jxnu_srun"}, cbi("jxnu_srun"), _("JXNU SRun"), 80).dependent = true
     entry({"admin", "services", "jxnu_srun", "log_tail"}, call("action_log_tail")).leaf = true
 end
