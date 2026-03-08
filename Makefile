@@ -1,7 +1,7 @@
 ﻿include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-jxnu-srun
-PKG_VERSION:=1.0.1-0.5
+PKG_VERSION:=1.0.1-0.6
 PKG_RELEASE:=1
 
 include $(INCLUDE_DIR)/package.mk
@@ -18,6 +18,10 @@ define Package/$(PKG_NAME)/postinst
 	chmod 0755 /usr/lib/jxnu_srun/client.py 2>/dev/null
 }
 exit 0
+endef
+
+define Package/$(PKG_NAME)/conffiles
+/etc/config/jxnu_srun
 endef
 
 include $(TOPDIR)/feeds/luci/luci.mk
