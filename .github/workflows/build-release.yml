@@ -164,8 +164,8 @@ jobs:
             A new OpenWRT extension that helps you connect to JXNU SRun's network service.
             一款新的 OpenWRT 扩展程序，可帮助您连接到江西师范大学校园网。
 
-            **This is the first usable Stable Version release of the software.
-            此版本为第一个可用的正式版！**
+            **This is a Stable Version release of the software.
+            此版本为正式版！**
 
             文件介绍：
             `rockchip_armv8` 为针对armv8小型设备构建的软件包；
