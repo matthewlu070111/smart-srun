@@ -24,7 +24,7 @@ local function load_defaults()
         force_logout_in_quiet = "1", developer_mode = "0", failover_enabled = "1",
         sta_iface = "", campus_ssid = "jxnu_stu", campus_encryption = "none",
         campus_key = "", hotspot_ssid = "", hotspot_encryption = "psk2",
-        hotspot_key = "", backoff_enable = "1", backoff_max_retries = "0",
+        hotspot_key = "", hotspot_radio = "", backoff_enable = "1", backoff_max_retries = "0",
         backoff_initial_duration = "10", backoff_max_duration = "600",
         backoff_exponent_factor = "1.5", backoff_inter_const_factor = "0",
         backoff_outer_const_factor = "0", base_url = "http://172.17.1.2",
@@ -149,6 +149,42 @@ local function validate_non_negative_number(v)
     end
     return tostring(num)
 end
+
+local function load_radio_choices()
+    local out = {}
+    local seen = {}
+    local raw = sys.exec("uci show wireless 2>/dev/null") or ""
+    for line in raw:gmatch("[^\n]+") do
+        local radio, opt, val = line:match("^wireless%.(radio%d+)%.([%w_]+)=(.+)$")
+        if radio and (opt == "band" or opt == "hwmode") then
+            local entry = out[radio] or { label = radio }
+            val = util.trim(val or "")
+            val = val:gsub("^['\"]", ""):gsub("['\"]$", "")
+            if opt == "band" then
+                if val == "2g" then
+                    entry.label = radio .. " (2.4GHz)"
+                elseif val == "5g" then
+                    entry.label = radio .. " (5GHz)"
+                elseif val == "6g" then
+                    entry.label = radio .. " (6GHz)"
+                else
+                    entry.label = radio .. " (" .. val .. ")"
+                end
+            elseif not seen[radio] then
+                if val:find("a", 1, true) then
+                    entry.label = radio .. " (5GHz)"
+                else
+                    entry.label = radio .. " (2.4GHz)"
+                end
+            end
+            out[radio] = entry
+            seen[radio] = true
+        end
+    end
+    return out
+end
+
+local RADIO_CHOICES = load_radio_choices()
 
 local cfg = load_cfg()
 local changed = false
@@ -310,6 +346,22 @@ function hotspot_key.validate(self, value)
     return v
 end
 bind_text(hotspot_key, "hotspot_key")
+
+hotspot_radio = s:taboption("basic", ListValue, "hotspot_radio", "热点所在 radio", "留空时沿用当前 STA；如果热点固定在另一个频段，请手动指定对应 radio")
+hotspot_radio:value("", "自动")
+for radio, meta in pairs(RADIO_CHOICES) do
+    hotspot_radio:value(radio, meta.label)
+end
+function hotspot_radio.cfgvalue()
+    return cfg.hotspot_radio or ""
+end
+function hotspot_radio.write(self, section, value)
+    local v = util.trim(value or "")
+    if v ~= "" and not RADIO_CHOICES[v] then
+        v = ""
+    end
+    set_value("hotspot_radio", v)
+end
 
 quiet_hours_enabled = s:taboption("advanced", Flag, "quiet_hours_enabled", "按时段自动上/下线", quiet_desc)
 bind_flag(quiet_hours_enabled, "quiet_hours_enabled")

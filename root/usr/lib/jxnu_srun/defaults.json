@@ -18,6 +18,7 @@
   "force_logout_in_quiet": "1",
   "hotspot_encryption": "psk2",
   "hotspot_key": "",
+  "hotspot_radio": "",
   "hotspot_ssid": "",
   "interval": "180",
   "n": "200",
