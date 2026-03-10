@@ -2,6 +2,8 @@
 
 OpenWrt 的 LuCI 插件，用于江西师范大学校园网（SRun）自动认证。
 
+感谢 [@guiguisocute](https://github.com/guiguisocute) 的协助！
+
 ## 功能
 
 - 自动校园网认证
