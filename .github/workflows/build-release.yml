@@ -18,20 +18,13 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - label: rockchip_armv8
-            target: rockchip
-            subtarget: armv8
-          - label: x86_64
-            target: x86
-            subtarget: "64"
 
     steps:
       - name: Checkout plugin repo
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
 
       - name: Install dependencies
         run: |
@@ -46,11 +39,9 @@ jobs:
         id: sdk
         run: |
           VER="${{ github.event.inputs.openwrt_version }}"
-          TARGET="${{ matrix.target }}"
-          SUBTARGET="${{ matrix.subtarget }}"
           if [ -z "$VER" ]; then VER="23.05.5"; fi
 
-          BASE_URL="https://downloads.openwrt.org/releases/${VER}/targets/${TARGET}/${SUBTARGET}"
+          BASE_URL="https://downloads.openwrt.org/releases/${VER}/targets/x86/64"
           SDK_NAME="$(curl -fsSL "${BASE_URL}/" | grep -oE 'openwrt-sdk-[^" ]+Linux-x86_64\.tar\.(xz|zst)' | head -n1)"
           if [ -z "$SDK_NAME" ]; then
             echo "Cannot find SDK from: ${BASE_URL}"
@@ -93,7 +84,7 @@ jobs:
         with:
           path: |
             openwrt/dl
-          key: ${{ runner.os }}-openwrt-dl-${{ github.event.inputs.openwrt_version || '23.05.5' }}-${{ matrix.target }}-${{ matrix.subtarget }}-v2
+          key: ${{ runner.os }}-openwrt-dl-${{ github.event.inputs.openwrt_version || '23.05.5' }}-x86-64-v2
 
       - name: Update and install required feeds
         working-directory: openwrt
@@ -133,26 +124,44 @@ jobs:
             echo "Failed: no ipk found."
             exit 1
           fi
-          DST_IPK="artifacts/luci-app-jxnu-srun_${{ matrix.label }}.ipk"
-          cp -v "$SRC_IPK" "$DST_IPK"
+          cp -v "$SRC_IPK" "artifacts/$(basename "$SRC_IPK")"
           ls -lh artifacts/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: luci-app-jxnu-srun-ipk-${{ matrix.label }}
+          name: luci-app-jxnu-srun-ipk
           path: artifacts/*.ipk
 
   publish:
     needs: build
     runs-on: ubuntu-22.04
     steps:
+      - name: Checkout plugin repo
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
       - name: Download built artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-          pattern: luci-app-jxnu-srun-ipk-*
+          pattern: luci-app-jxnu-srun-ipk*
           merge-multiple: true
+
+      - name: Render release notes from template
+        run: |
+          VERSION='${{ github.event.inputs.version }}'
+          OPENWRT_VERSION='${{ github.event.inputs.openwrt_version }}'
+          if [ -z "$OPENWRT_VERSION" ]; then OPENWRT_VERSION='23.05.5'; fi
+          COMPARE_REF="main...${VERSION}"
+
+          sed \
+            -e "s/\${VERSION}/${VERSION}/g" \
+            -e "s/\${OPENWRT_VERSION}/${OPENWRT_VERSION}/g" \
+            -e "s/\${COMPARE_REF}/${COMPARE_REF}/g" \
+            .github/release-template.md > release-notes.md
 
       - name: Publish release and upload assets
         uses: softprops/action-gh-release@v2
@@ -160,16 +169,7 @@ jobs:
           tag_name: ${{ github.event.inputs.version }}
           name: ${{ github.event.inputs.version }}
           files: artifacts/*.ipk
-          body: |
-            A new OpenWRT extension that helps you connect to JXNU SRun's network service.
-            一款新的 OpenWRT 扩展程序，可帮助您连接到江西师范大学校园网。
-
-            **This is a Stable Version release of the software.
-            此版本为正式版！**
-
-            文件介绍：
-            `rockchip_armv8` 为针对armv8小型设备构建的软件包；
-            `x86_64` 为针对一般x86电脑构建的软件包；
-            其他框架请自行fork本项目，修改.github/workflow中build文件相关信息。
+          body_path: release-notes.md
+          draft: true
           prerelease: false
           overwrite_files: true

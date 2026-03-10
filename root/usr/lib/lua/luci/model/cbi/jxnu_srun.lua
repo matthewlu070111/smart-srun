@@ -4,39 +4,35 @@ local util = require "luci.util"
 local jsonc = require "luci.jsonc"
 
 local CONFIG_FILE = "/usr/lib/jxnu_srun/config.json"
+local DEFAULTS_FILE = "/usr/lib/jxnu_srun/defaults.json"
 
-local DEFAULTS = {
-    enabled = "0",
-    user_id = "",
-    operator = "cucc",
-    password = "",
-    quiet_hours_enabled = "1",
-    quiet_start = "00:00",
-    quiet_end = "06:00",
-    force_logout_in_quiet = "1",
-    developer_mode = "0",
-    failover_enabled = "1",
-    sta_iface = "",
-    campus_ssid = "jxnu_stu",
-    campus_encryption = "none",
-    campus_key = "",
-    hotspot_ssid = "",
-    hotspot_encryption = "psk2",
-    hotspot_key = "",
-    backoff_enable = "1",
-    backoff_max_retries = "0",
-    backoff_initial_duration = "10",
-    backoff_max_duration = "600",
-    backoff_exponent_factor = "1.5",
-    backoff_inter_const_factor = "0",
-    backoff_outer_const_factor = "0",
-    base_url = "http://172.17.1.2",
-    ac_id = "1",
-    n = "200",
-    type = "1",
-    enc = "srun_bx1",
-    interval = "180",
-}
+local function load_defaults()
+    local raw = fs.readfile(DEFAULTS_FILE)
+    if raw then
+        local parsed = jsonc.parse(raw)
+        if type(parsed) == "table" then
+            local out = {}
+            for k, v in pairs(parsed) do
+                out[k] = tostring(v)
+            end
+            return out
+        end
+    end
+    return {
+        enabled = "0", user_id = "", operator = "cucc", password = "",
+        quiet_hours_enabled = "1", quiet_start = "00:00", quiet_end = "06:00",
+        force_logout_in_quiet = "1", developer_mode = "0", failover_enabled = "1",
+        sta_iface = "", campus_ssid = "jxnu_stu", campus_encryption = "none",
+        campus_key = "", hotspot_ssid = "", hotspot_encryption = "psk2",
+        hotspot_key = "", hotspot_radio = "", backoff_enable = "1", backoff_max_retries = "0",
+        backoff_initial_duration = "10", backoff_max_duration = "600",
+        backoff_exponent_factor = "1.5", backoff_inter_const_factor = "0",
+        backoff_outer_const_factor = "0", base_url = "http://172.17.1.2",
+        ac_id = "1", n = "200", type = "1", enc = "srun_bx1", interval = "180",
+    }
+end
+
+local DEFAULTS = load_defaults()
 
 local function ensure_json_file()
     local dir = CONFIG_FILE:match("^(.+)/[^/]+$")
@@ -154,6 +150,42 @@ local function validate_non_negative_number(v)
     return tostring(num)
 end
 
+local function load_radio_choices()
+    local out = {}
+    local seen = {}
+    local raw = sys.exec("uci show wireless 2>/dev/null") or ""
+    for line in raw:gmatch("[^\n]+") do
+        local radio, opt, val = line:match("^wireless%.(radio%d+)%.([%w_]+)=(.+)$")
+        if radio and (opt == "band" or opt == "hwmode") then
+            local entry = out[radio] or { label = radio }
+            val = util.trim(val or "")
+            val = val:gsub("^['\"]", ""):gsub("['\"]$", "")
+            if opt == "band" then
+                if val == "2g" then
+                    entry.label = radio .. " (2.4GHz)"
+                elseif val == "5g" then
+                    entry.label = radio .. " (5GHz)"
+                elseif val == "6g" then
+                    entry.label = radio .. " (6GHz)"
+                else
+                    entry.label = radio .. " (" .. val .. ")"
+                end
+            elseif not seen[radio] then
+                if val:find("a", 1, true) then
+                    entry.label = radio .. " (5GHz)"
+                else
+                    entry.label = radio .. " (2.4GHz)"
+                end
+            end
+            out[radio] = entry
+            seen[radio] = true
+        end
+    end
+    return out
+end
+
+local RADIO_CHOICES = load_radio_choices()
+
 local cfg = load_cfg()
 local changed = false
 
@@ -171,7 +203,7 @@ local function bind_flag(opt, key)
         return cfg[key] == "1" and "1" or "0"
     end
     function opt.write(self, section, value)
-        set_value(key, "1")
+        set_value(key, (value == "1") and "1" or "0")
     end
     function opt.remove(self, section)
         set_value(key, "0")
@@ -205,6 +237,88 @@ if not m.uci:get("jxnu_srun", "main") then
     m.uci:save("jxnu_srun")
     m.uci:commit("jxnu_srun")
 end
+
+overview = m:section(SimpleSection)
+overview.anonymous = true
+overview_status = overview:option(DummyValue, "_overview_status", "")
+overview_status.rawhtml = true
+function overview_status.cfgvalue()
+    return [[
+<div id="jxnu-srun-overview" style="margin:4px 0 18px 0;border-left:4px solid #c62828;background:linear-gradient(180deg,#2c1b1b 0%,#221616 100%);padding:14px 16px;border-radius:0 6px 6px 0;box-shadow:0 8px 24px rgba(0,0,0,.14);">
+  <div id="jxnu-srun-overview-title" style="font-size:18px;font-weight:700;color:#ffb4b4;margin-bottom:8px;">状态读取中</div>
+  <div id="jxnu-srun-overview-meta" style="font-size:13px;color:#f1d3d3;display:flex;gap:14px;flex-wrap:wrap;line-height:1.6;">
+    <span>WiFi: --</span>
+    <span>模式: --</span>
+    <span>连通性: --</span>
+  </div>
+</div>
+<script type="text/javascript">
+(function() {
+  var root = document.getElementById('jxnu-srun-overview');
+  var title = document.getElementById('jxnu-srun-overview-title');
+  var meta = document.getElementById('jxnu-srun-overview-meta');
+  if (!root || !title || !meta || window.__jxnuSrunOverviewInit) return;
+  window.__jxnuSrunOverviewInit = true;
+
+  var palette = {
+    online: { border: '#2e7d32', bg1: '#16311b', bg2: '#112616', title: '#b8f2bb', meta: '#d6f3d7' },
+    portal: { border: '#ef6c00', bg1: '#352313', bg2: '#291b10', title: '#ffd08f', meta: '#f5dfbb' },
+    limited: { border: '#c62828', bg1: '#2c1b1b', bg2: '#221616', title: '#ffb4b4', meta: '#f1d3d3' },
+    offline: { border: '#6b7280', bg1: '#24272d', bg2: '#1d2025', title: '#d5d7dc', meta: '#c9ced6' }
+  };
+
+  function applyTone(level) {
+    var tone = palette[level] || palette.offline;
+    root.style.borderLeftColor = tone.border;
+    root.style.background = 'linear-gradient(180deg,' + tone.bg1 + ' 0%,' + tone.bg2 + ' 100%)';
+    title.style.color = tone.title;
+    meta.style.color = tone.meta;
+  }
+
+  function refreshOverview() {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/cgi-bin/luci/admin/services/jxnu_srun/status?_=' + Date.now(), true);
+    xhr.onreadystatechange = function() {
+      if (xhr.readyState !== 4) return;
+      if (xhr.status !== 200) {
+        applyTone('offline');
+        title.textContent = '状态读取失败';
+        meta.innerHTML = '<span>WiFi: --</span><span>模式: --</span><span>连通性: --</span>';
+        return;
+      }
+      try {
+        var data = JSON.parse(xhr.responseText || '{}');
+        var level = (typeof data.connectivity_level === 'string' && data.connectivity_level !== '') ? data.connectivity_level : 'offline';
+        if (data.enabled === false) {
+          level = 'limited';
+        }
+        var status = (typeof data.status === 'string' && data.status !== '') ? data.status : '未知';
+        var ssid = (typeof data.current_ssid === 'string' && data.current_ssid !== '') ? data.current_ssid : '未连接';
+        var mode = (typeof data.mode_label === 'string' && data.mode_label !== '') ? data.mode_label : '未知模式';
+        var conn = (typeof data.connectivity === 'string' && data.connectivity !== '') ? data.connectivity : '未知';
+        var iface = (typeof data.current_iface === 'string' && data.current_iface !== '') ? data.current_iface : '--';
+        var ip = (typeof data.current_ip === 'string' && data.current_ip !== '') ? data.current_ip : '--';
+        var pending = (typeof data.pending_action === 'string' && data.pending_action !== '') ? ('；待执行动作: ' + data.pending_action) : '';
+
+        applyTone(level);
+        title.textContent = status + pending;
+        meta.innerHTML = '<span>WiFi: ' + ssid + '</span><span>模式: ' + mode + '</span><span>连通性: ' + conn + '</span><span>接口/IP: ' + iface + ' / ' + ip + '</span>';
+      } catch (e) {
+        applyTone('offline');
+        title.textContent = '状态读取失败';
+        meta.innerHTML = '<span>WiFi: --</span><span>模式: --</span><span>连通性: --</span>';
+      }
+    };
+    xhr.send(null);
+  }
+
+  refreshOverview();
+  setInterval(refreshOverview, 3000);
+})();
+</script>
+]]
+end
+
 s = m:section(NamedSection, "main", "main", "配置")
 s.addremove = false
 s.anonymous = true
@@ -214,18 +328,6 @@ if cfg.developer_mode == "1" then
     s:tab("developer", "开发者调试")
 end
 s:tab("log", "日志")
-
-status = s:taboption("basic", DummyValue, "_status", "当前在线状态")
-function status.cfgvalue()
-    local out, err = run_client("--status", false)
-    if err then
-        return err
-    end
-    if out == "" then
-        return "未知"
-    end
-    return out
-end
 
 login_now = s:taboption("basic", Button, "_login_now", "立即登录")
 login_now.inputstyle = "apply"
@@ -252,10 +354,10 @@ user_id.rmempty = false
 bind_text(user_id, "user_id")
 
 operator = s:taboption("basic", ListValue, "operator", "运营商")
-operator:value("cmcc", "中国移动 (cmcc)")
-operator:value("ctcc", "中国电信 (ctcc)")
-operator:value("cucc", "中国联通 (cucc)")
-operator:value("xn", "校内网 (xn)")
+operator:value("cmcc", "中国移动")
+operator:value("ctcc", "中国电信")
+operator:value("cucc", "中国联通")
+operator:value("xn", "校内网")
 operator.default = "cucc"
 operator.rmempty = false
 function operator.cfgvalue()
@@ -314,6 +416,22 @@ function hotspot_key.validate(self, value)
     return v
 end
 bind_text(hotspot_key, "hotspot_key")
+
+hotspot_radio = s:taboption("basic", ListValue, "hotspot_radio", "热点所在频段", "留空时沿用当前 STA；如果热点固定在另一个频段，请手动指定对应频段")
+hotspot_radio:value("", "自动")
+for radio, meta in pairs(RADIO_CHOICES) do
+    hotspot_radio:value(radio, meta.label)
+end
+function hotspot_radio.cfgvalue()
+    return cfg.hotspot_radio or ""
+end
+function hotspot_radio.write(self, section, value)
+    local v = util.trim(value or "")
+    if v ~= "" and not RADIO_CHOICES[v] then
+        v = ""
+    end
+    set_value("hotspot_radio", v)
+end
 
 quiet_hours_enabled = s:taboption("advanced", Flag, "quiet_hours_enabled", "按时段自动上/下线", quiet_desc)
 bind_flag(quiet_hours_enabled, "quiet_hours_enabled")
@@ -403,36 +521,54 @@ interval.datatype = "uinteger"
 bind_text(interval, "interval")
 
 if cfg.developer_mode == "1" then
-    switch_hotspot_test = s:taboption("developer", Button, "_switch_hotspot_test", "测试切到热点")
-    switch_hotspot_test.inputstyle = "apply"
-    switch_hotspot_test.inputtitle = "执行"
-    function switch_hotspot_test.write()
-        local out, err = run_client("--switch-hotspot", true)
-        if err then
-            m.message = "切换测试结果: " .. err
-            return
-        end
-        local line = last_nonempty_line(out)
-        if line == "" then
-            line = "已触发切换到热点测试"
-        end
-        m.message = "切换测试结果: " .. line
-    end
+    switch_test = s:taboption("developer", DummyValue, "_switch_test", "切网测试")
+    switch_test.rawhtml = true
+    function switch_test.cfgvalue()
+        return [[
+<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+  <button id="jxnu-srun-switch-hotspot" type="button" class="cbi-button cbi-button-apply">测试切到热点</button>
+  <button id="jxnu-srun-switch-campus" type="button" class="cbi-button">测试切回校园网</button>
+  <span id="jxnu-srun-switch-result" style="color:#666;">点击后会异步执行</span>
+</div>
+<script type="text/javascript">
+(function() {
+  var hotspot = document.getElementById('jxnu-srun-switch-hotspot');
+  var campus = document.getElementById('jxnu-srun-switch-campus');
+  var result = document.getElementById('jxnu-srun-switch-result');
+  if (!hotspot || !campus || !result || window.__jxnuSrunSwitchInit) return;
+  window.__jxnuSrunSwitchInit = true;
 
-    switch_campus_test = s:taboption("developer", Button, "_switch_campus_test", "测试切回校园网")
-    switch_campus_test.inputstyle = "apply"
-    switch_campus_test.inputtitle = "执行"
-    function switch_campus_test.write()
-        local out, err = run_client("--switch-campus", true)
-        if err then
-            m.message = "切换测试结果: " .. err
-            return
-        end
-        local line = last_nonempty_line(out)
-        if line == "" then
-            line = "已触发切回校园网测试"
-        end
-        m.message = "切换测试结果: " .. line
+  function enqueue(action) {
+    result.textContent = '正在提交...';
+    hotspot.disabled = true;
+    campus.disabled = true;
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/cgi-bin/luci/admin/services/jxnu_srun/enqueue', true);
+    xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded; charset=UTF-8');
+    xhr.onreadystatechange = function() {
+      if (xhr.readyState !== 4) return;
+      hotspot.disabled = false;
+      campus.disabled = false;
+      if (xhr.status !== 200) {
+        result.textContent = '提交失败';
+        return;
+      }
+      try {
+        var data = JSON.parse(xhr.responseText || '{}');
+        result.textContent = (typeof data.message === 'string' && data.message !== '') ? data.message : '已提交';
+      } catch (e) {
+        result.textContent = '提交失败';
+      }
+    };
+    xhr.send('action=' + encodeURIComponent(action));
+  }
+
+  hotspot.addEventListener('click', function() { enqueue('switch_hotspot'); });
+  campus.addEventListener('click', function() { enqueue('switch_campus'); });
+})();
+</script>
+]]
     end
 end
 
@@ -511,8 +647,13 @@ function m.parse(self, ...)
     Map.parse(self, ...)
     if changed then
         save_cfg(cfg)
+        m.uci:set("jxnu_srun", "main", "_stamp", tostring(os.time()))
         m.message = (m.message and (m.message .. "；") or "") .. "配置已保存到 JSON"
     end
+end
+
+function m.on_before_commit(self)
+    sys.call("(sleep 1; /etc/init.d/jxnu_srun restart >/dev/null 2>&1) >/dev/null 2>&1 &")
 end
 
 return m
