@@ -443,6 +443,36 @@ function manual_login.cfgvalue()
     var footer = E('div', { 'class': 'right' });
     var closed = false;
     var timer = null;
+    var forceShown = false;
+
+    function showForceStopButton() {
+      if (closed || forceShown || action !== 'manual_login') return;
+      forceShown = true;
+      footer.appendChild(E('button', {
+        'class': 'btn cbi-button cbi-button-remove',
+        'click': function(ev) {
+          ev.preventDefault();
+          this.disabled = true;
+          result.textContent = '正在强制停止...';
+          var xhr = new XMLHttpRequest();
+          xhr.open('POST', '/cgi-bin/luci/admin/services/jxnu_srun/enqueue', true);
+          xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded; charset=UTF-8');
+          xhr.onreadystatechange = function() {
+            if (xhr.readyState !== 4) return;
+            var text = '已触发强制停止';
+            if (xhr.status === 200) {
+              try {
+                var data = JSON.parse(xhr.responseText || '{}');
+                if (typeof data.message === 'string' && data.message !== '')
+                  text = data.message;
+              } catch (e) {}
+            }
+            unlock(text, false);
+          };
+          xhr.send('action=' + encodeURIComponent('force_stop'));
+        }
+      }, '强制停止'));
+    }
 
     function unlock(text, success) {
       if (closed) return;
@@ -460,6 +490,10 @@ function manual_login.cfgvalue()
       if (!statusData) return false;
       if (statusData.last_action !== action) return false;
       if ((statusData.last_action_ts || 0) < requestedAt) return false;
+      if (statusData.action_result === 'forced') {
+        unlock(statusData.status || '已强制停止', false);
+        return true;
+      }
       if (statusData.action_result === 'error') {
         unlock(statusData.status || '执行失败', false);
         return true;
@@ -486,6 +520,10 @@ function manual_login.cfgvalue()
     }
 
     function poll() {
+      if (!closed && requestedAt > 0 && ((Date.now() / 1000) - requestedAt) >= 10) {
+        showForceStopButton();
+      }
+
       fetchJson('/cgi-bin/luci/admin/services/jxnu_srun/log_tail?lines=200&since=' + encodeURIComponent(requestedAt) + '&_=' + Date.now(), function(err, logData) {
         if (!err && logData && typeof logData.log === 'string') {
           logBox.textContent = logData.log;
@@ -585,7 +623,9 @@ function tables_html.cfgvalue()
     local campus = cfg.campus_accounts or {}
     local hotspots = cfg.hotspot_profiles or {}
     local active_cid = cfg.active_campus_id or ""
+    local default_cid = cfg.default_campus_id or ""
     local active_hid = cfg.active_hotspot_id or ""
+    local default_hid = cfg.default_hotspot_id or ""
 
     local operator_labels = { cmcc = "移动", ctcc = "电信", cucc = "联通", xn = "校内网" }
     local radio_labels = { [""] = "自动" }
@@ -602,8 +642,19 @@ function tables_html.cfgvalue()
         for _, a in ipairs(campus) do
             local aid = tostring(a.id or "")
             local is_active = (aid == active_cid)
-            local badge = is_active and '<span style="color:#16a34a;font-weight:700;">✓ 当前</span>' or
-                ("<button type=\"button\" class=\"cbi-button\" style=\"font-size:12px;padding:1px 8px;\" onclick=\"jxnuSetActive('campus','%s')\">设当前</button>"):format(util.pcdata(aid))
+            local is_default = (aid == default_cid)
+            local badge_parts = {}
+            if is_active then
+                badge_parts[#badge_parts + 1] = '<span style="display:inline-block;color:#16a34a;font-weight:700;">✓ 当前</span>'
+            end
+            if is_default then
+                if not is_active then
+                    badge_parts[#badge_parts + 1] = '<span style="display:inline-block;color:#d97706;font-weight:700;">待生效</span>'
+                end
+            else
+                badge_parts[#badge_parts + 1] = ("<button type=\"button\" class=\"cbi-button\" style=\"font-size:12px;padding:1px 8px;\" onclick=\"jxnuSetDefault('campus','%s')\">设当前</button>"):format(util.pcdata(aid))
+            end
+            local badge = table.concat(badge_parts, '<br>')
             campus_rows = campus_rows .. '<tr class="tr">'
                 .. '<td class="td">' .. badge .. '</td>'
                 .. '<td class="td">' .. util.pcdata(tostring(a.label or "")) .. '</td>'
@@ -630,8 +681,19 @@ function tables_html.cfgvalue()
         for _, h in ipairs(hotspots) do
             local hid = tostring(h.id or "")
             local is_active = (hid == active_hid)
-            local badge = is_active and '<span style="color:#16a34a;font-weight:700;">✓ 当前</span>' or
-                ("<button type=\"button\" class=\"cbi-button\" style=\"font-size:12px;padding:1px 8px;\" onclick=\"jxnuSetActive('hotspot','%s')\">设当前</button>"):format(util.pcdata(hid))
+            local is_default = (hid == default_hid)
+            local badge_parts = {}
+            if is_active then
+                badge_parts[#badge_parts + 1] = '<span style="display:inline-block;color:#16a34a;font-weight:700;">✓ 当前</span>'
+            end
+            if is_default then
+                if not is_active then
+                    badge_parts[#badge_parts + 1] = '<span style="display:inline-block;color:#d97706;font-weight:700;">待生效</span>'
+                end
+            else
+                badge_parts[#badge_parts + 1] = ("<button type=\"button\" class=\"cbi-button\" style=\"font-size:12px;padding:1px 8px;\" onclick=\"jxnuSetDefault('hotspot','%s')\">设当前</button>"):format(util.pcdata(hid))
+            end
+            local badge = table.concat(badge_parts, '<br>')
             hotspot_rows = hotspot_rows .. '<tr class="tr">'
                 .. '<td class="td">' .. badge .. '</td>'
                 .. '<td class="td">' .. util.pcdata(tostring(h.label or "")) .. '</td>'
@@ -674,6 +736,7 @@ function tables_html.cfgvalue()
 
 <div class="cbi-section cbi-tblsection jxnu-native-box">
   <h3>校园网账号</h3>
+  <div style="margin:0 0 .75rem 0;color:#4b5563;line-height:1.6;">点击“设当前”后不会立刻切网；若与当前运行配置不同，会标记为“待生效”，并在下次手动登录、手动切换或自动重连时应用。</div>
   <table class="table cbi-section-table">
     <tr class="tr table-titles"><th class="th" style="width:80px;">状态</th><th class="th">标签</th><th class="th">认证地址</th><th class="th">ACID</th><th class="th">学工号</th><th class="th">运营商</th><th class="th">SSID</th><th class="th">BSSID</th><th class="th">频段</th><th class="th cbi-section-actions" style="width:120px;">操作</th></tr>
     <tbody>]] .. campus_rows .. [[</tbody>
@@ -685,6 +748,7 @@ function tables_html.cfgvalue()
 
 <div class="cbi-section cbi-tblsection jxnu-native-box">
   <h3>热点配置</h3>
+  <div style="margin:0 0 .75rem 0;color:#4b5563;line-height:1.6;">点击“设当前”后不会立刻切换热点；若与当前运行配置不同，会标记为“待生效”，并在下次手动切换或自动故障切换时应用。</div>
   <table class="table cbi-section-table">
     <tr class="tr table-titles"><th class="th" style="width:80px;">状态</th><th class="th">标签</th><th class="th">SSID</th><th class="th">加密方式</th><th class="th">频段</th><th class="th cbi-section-actions" style="width:120px;">操作</th></tr>
     <tbody>]] .. hotspot_rows .. [[</tbody>
@@ -750,13 +814,24 @@ function showNativeModal(title, bodyHtml, afterOpen, onSave) {
     afterOpen();
 }
 
-window.jxnuSetActive = function(kind, id) {
+window.jxnuSetDefault = function(kind, id) {
   var fd = new FormData();
-  fd.append('action', 'set_active_' + kind);
+  fd.append('action', 'set_default_' + kind);
   fd.append('id', id);
   var xhr = new XMLHttpRequest();
   xhr.open('POST', '/cgi-bin/luci/admin/services/jxnu_srun/enqueue', true);
-  xhr.onload = function() { location.reload(); };
+  xhr.onload = function() {
+    var message = '已保存当前选择';
+    if (xhr.status === 200) {
+      try {
+        var data = JSON.parse(xhr.responseText || '{}');
+        if (typeof data.message === 'string' && data.message !== '')
+          message = data.message;
+      } catch (e) {}
+    }
+    alert(message);
+    location.reload();
+  };
   xhr.send(fd);
 };
 

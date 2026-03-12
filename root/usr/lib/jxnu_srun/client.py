@@ -57,6 +57,7 @@ GLOBAL_SCALAR_KEYS = {
     "backoff_max_retries",
     "backoff_initial_duration",
     "backoff_max_duration",
+    "manual_terminal_check_max_attempts",
     "backoff_exponent_factor",
     "backoff_inter_const_factor",
     "backoff_outer_const_factor",
@@ -124,6 +125,7 @@ def _load_defaults():
         "backoff_max_retries": "0",
         "backoff_initial_duration": "10",
         "backoff_max_duration": "600",
+        "manual_terminal_check_max_attempts": "5",
         "backoff_exponent_factor": "1.5",
         "backoff_inter_const_factor": "0",
         "backoff_outer_const_factor": "0",
@@ -195,6 +197,117 @@ def save_json_raw_config(raw_cfg):
     with open(JSON_CONFIG_FILE, "w", encoding="utf-8") as wf:
         json.dump(payload, wf, ensure_ascii=False, indent=2, sort_keys=True)
         wf.write("\n")
+
+
+def get_json_scalar_config(key, default_value=""):
+    raw = load_json_raw_config()
+    value = raw.get(str(key), default_value)
+    if value is None:
+        value = default_value
+    return str(value).strip()
+
+
+def set_json_scalar_config(key, value):
+    raw = load_json_raw_config()
+    raw[str(key)] = str(value)
+    save_json_raw_config(raw)
+
+
+def _state_flag_enabled(value):
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def begin_manual_login_service_guard():
+    previous_enabled = get_json_scalar_config("enabled", DEFAULTS.get("enabled", "0"))
+    if previous_enabled != "1":
+        return False, previous_enabled
+
+    set_json_scalar_config("enabled", "0")
+    runtime_state = load_runtime_state()
+    runtime_state["manual_service_guard_active"] = True
+    runtime_state["manual_service_enabled_before"] = previous_enabled
+    save_runtime_state(runtime_state)
+    return True, previous_enabled
+
+
+def restore_manual_login_service_guard(clear_only=False):
+    runtime_state = load_runtime_state()
+    if not _state_flag_enabled(runtime_state.get("manual_service_guard_active")):
+        return False, ""
+
+    previous_enabled = str(
+        runtime_state.get("manual_service_enabled_before", "")
+    ).strip()
+    if (not clear_only) and previous_enabled:
+        set_json_scalar_config("enabled", previous_enabled)
+
+    runtime_state["manual_service_guard_active"] = False
+    runtime_state["manual_service_enabled_before"] = ""
+    save_runtime_state(runtime_state)
+    return True, previous_enabled
+
+
+def reconcile_manual_login_service_guard():
+    runtime_state = load_runtime_state()
+    if not _state_flag_enabled(runtime_state.get("manual_service_guard_active")):
+        return False
+
+    pending_action = str(load_json_file(ACTION_FILE).get("action", "")).strip()
+    if pending_action == "manual_login":
+        return False
+
+    restored, previous_enabled = restore_manual_login_service_guard()
+    if restored and previous_enabled == "1":
+        append_log("[JXNU-SRun] 检测到遗留的手动登录保护状态，已恢复自动服务开关。")
+    return restored
+
+
+def _pointer_meta(expect_hotspot):
+    if expect_hotspot:
+        return {
+            "label": "热点配置",
+            "list_key": "hotspot_profiles",
+            "active_key": "active_hotspot_id",
+            "default_key": "default_hotspot_id",
+        }
+    return {
+        "label": "校园网账号",
+        "list_key": "campus_accounts",
+        "active_key": "active_campus_id",
+        "default_key": "default_campus_id",
+    }
+
+
+def apply_default_selection_for_runtime(expect_hotspot, reason=""):
+    meta = _pointer_meta(expect_hotspot)
+    raw = load_json_raw_config()
+    items = raw.get(meta["list_key"])
+    if not isinstance(items, list) or not items:
+        return load_config(), False, ""
+
+    default_id = str(raw.get(meta["default_key"], "")).strip()
+    if not default_id:
+        return load_config(), False, ""
+
+    found = _find_item_by_id(items, default_id)
+    if not found:
+        return load_config(), False, ""
+
+    active_id = str(raw.get(meta["active_key"], "")).strip()
+    if active_id == default_id:
+        return load_config(), False, ""
+
+    raw[meta["active_key"]] = default_id
+    save_json_raw_config(raw)
+
+    suffix = ""
+    if reason:
+        suffix = "（%s）" % str(reason).strip()
+    append_log(
+        "[JXNU-SRun] 已应用默认%s到运行态%s：%s -> %s。"
+        % (meta["label"], suffix, active_id or "未设置", default_id)
+    )
+    return load_config(), True, default_id
 
 
 def load_json_file(path, allowed_keys=None):
@@ -703,7 +816,7 @@ def run_once_safe(cfg):
         return False, "错误: " + localize_error(exc)
 
 
-def run_once_with_retry(cfg):
+def run_once_with_retry(cfg, ignore_service_disabled=False):
     ok, message = run_once_safe(cfg)
     if ok:
         return True, message
@@ -730,7 +843,7 @@ def run_once_with_retry(cfg):
         runtime_cfg = load_config()
         max_retries = int(runtime_cfg.get("backoff_max_retries", 0))
 
-        if runtime_cfg.get("enabled") != "1":
+        if runtime_cfg.get("enabled") != "1" and not ignore_service_disabled:
             return False, "服务已禁用，停止重试"
         if not backoff_enabled(runtime_cfg):
             return False, message
@@ -1558,6 +1671,7 @@ def select_sta_section(cfg, expect_hotspot, base_section, target, wireless_data)
 
 
 def switch_sta_profile(cfg, expect_hotspot):
+    cfg, _, _ = apply_default_selection_for_runtime(expect_hotspot, "执行无线切换前")
     data = parse_wireless_iface_data()
     named_ok, named_result = ensure_named_managed_sta_sections(cfg, data)
     if not named_ok:
@@ -1983,13 +2097,21 @@ def wait_for_manual_login_ready(cfg, attempts=5, delay_seconds=2):
         snapshot = build_runtime_snapshot(cfg)
         ssid_ok = snapshot.get("current_ssid") == cfg.get("campus_ssid")
         bssid_expect = str(cfg.get("campus_bssid", "")).strip().lower()
-        bssid_ok = (not bssid_expect) or snapshot.get("current_bssid") == bssid_expect
+        current_bssid = str(snapshot.get("current_bssid", "")).strip().lower()
+        bssid_ok = (
+            (not bssid_expect) or (not current_bssid) or current_bssid == bssid_expect
+        )
         online_ok = snapshot.get("connectivity_level") == "online"
         if ssid_ok and bssid_ok and online_ok:
             return True, "已关联目标校园网并确认互联网可达"
+        if ssid_ok and online_ok and bssid_expect and not current_bssid:
+            return (
+                True,
+                "已关联目标校园网并确认互联网可达（BSSID 暂未上报，忽略本次终态校验阻塞）",
+            )
         last_message = "当前 SSID=%s BSSID=%s 连通性=%s" % (
             snapshot.get("current_ssid", "") or "-",
-            snapshot.get("current_bssid", "") or "-",
+            current_bssid or "-",
             snapshot.get("connectivity", "未知") or "未知",
         )
         if idx + 1 < attempts:
@@ -2233,6 +2355,7 @@ def logout(rad_user_dm_api, cfg, ip, bind_ip=None):
 
 
 def run_once(cfg):
+    cfg, _, _ = apply_default_selection_for_runtime(False, "登录前")
     if in_quiet_window(cfg):
         return False, "夜间停用中（北京时间 %s），不执行登录" % quiet_window_label(cfg)
 
@@ -2338,43 +2461,64 @@ def run_manual_logout(cfg, override_user_id=None):
 
 
 def run_manual_login(cfg):
-    urls = build_urls(cfg["base_url"])
+    service_guard_enabled = False
 
     try:
-        online_now, online_user, _ = query_online_identity(
-            urls["rad_user_info_api"], cfg["username"]
-        )
-    except Exception:
-        online_now, online_user = False, ""
+        service_guard_enabled, _ = begin_manual_login_service_guard()
+        if service_guard_enabled:
+            cfg["enabled"] = "0"
+            append_log(
+                "[JXNU-SRun] 手动登录保护已启用：检测到自动服务原本开启，当前流程执行期间将临时停用守护逻辑。"
+            )
 
-    clean_ok, clean_msg = clean_slate_for_manual_login(
-        cfg, online_user if online_now else ""
-    )
-    if not clean_ok:
-        return False, clean_msg
+        cfg, _, _ = apply_default_selection_for_runtime(False, "手动登录前")
+        urls = build_urls(cfg["base_url"])
 
-    append_log(
-        "[JXNU-SRun] 正在执行手动登录：开始提交认证请求，目标账号=%s。"
-        % get_logout_username(cfg)
-    )
-    login_ok, login_msg = run_once_with_retry(cfg)
-    if login_ok:
-        append_log(
-            "[JXNU-SRun] 手动登录请求已成功：登录阶段返回结果=%s，开始校验目标无线配置与互联网连通性。"
-            % login_msg
+        try:
+            online_now, online_user, _ = query_online_identity(
+                urls["rad_user_info_api"], cfg["username"]
+            )
+        except Exception:
+            online_now, online_user = False, ""
+
+        clean_ok, clean_msg = clean_slate_for_manual_login(
+            cfg, online_user if online_now else ""
         )
-        max_attempts = get_manual_terminal_check_attempts(cfg)
-        ready_ok, ready_msg = wait_for_manual_login_ready(cfg, attempts=max_attempts)
-        if ready_ok:
-            append_log("[JXNU-SRun] 手动登录成功：%s。" % ready_msg)
-            return True, "登录成功"
+        if not clean_ok:
+            return False, clean_msg
+
         append_log(
-            "[JXNU-SRun] 手动登录校验失败：达到最大检查次数 %d 次，返回结果=%s。"
-            % (max_attempts, ready_msg)
+            "[JXNU-SRun] 正在执行手动登录：开始提交认证请求，目标账号=%s。"
+            % get_logout_username(cfg)
         )
-        return False, "登录后校验失败：%s" % ready_msg
-    append_log("[JXNU-SRun] 手动登录失败：登录阶段返回结果=%s。" % login_msg)
-    return False, login_msg
+        login_ok, login_msg = run_once_with_retry(cfg, ignore_service_disabled=True)
+        if login_ok:
+            append_log(
+                "[JXNU-SRun] 手动登录请求已成功：登录阶段返回结果=%s，开始校验目标无线配置与互联网连通性。"
+                % login_msg
+            )
+            max_attempts = get_manual_terminal_check_attempts(cfg)
+            ready_ok, ready_msg = wait_for_manual_login_ready(
+                cfg, attempts=max_attempts
+            )
+            if ready_ok:
+                append_log("[JXNU-SRun] 手动登录成功：%s。" % ready_msg)
+                return True, "登录成功"
+            append_log(
+                "[JXNU-SRun] 手动登录校验失败：达到最大检查次数 %d 次，返回结果=%s。"
+                % (max_attempts, ready_msg)
+            )
+            return False, "登录后校验失败：%s" % ready_msg
+
+        append_log("[JXNU-SRun] 手动登录失败：登录阶段返回结果=%s。" % login_msg)
+        return False, login_msg
+    finally:
+        if service_guard_enabled:
+            restored, restored_enabled = restore_manual_login_service_guard()
+            if restored and restored_enabled == "1":
+                append_log(
+                    "[JXNU-SRun] 手动登录收尾完成：已恢复自动服务开关到执行前状态。"
+                )
 
 
 def run_status(cfg):
@@ -2441,6 +2585,18 @@ def handle_runtime_action(cfg, state):
     if not action:
         return False, ""
 
+    action_started_at = int(time.time())
+    save_runtime_status(
+        "正在执行动作: %s" % action,
+        state,
+        last_action=action,
+        last_action_ts=action_started_at,
+        action_result="pending",
+        pending_action=action,
+        action_started_at=action_started_at,
+        **build_runtime_snapshot(cfg, state),
+    )
+
     action_map = {
         "switch_hotspot": True,
         "switch_campus": False,
@@ -2454,6 +2610,7 @@ def handle_runtime_action(cfg, state):
             last_action=action,
             last_action_ts=int(time.time()),
             action_result="ok" if ok else "error",
+            action_started_at=0,
             pending_action="",
             **build_runtime_snapshot(cfg, state),
         )
@@ -2468,6 +2625,7 @@ def handle_runtime_action(cfg, state):
             last_action=action,
             last_action_ts=int(time.time()),
             action_result="ok" if ok else "error",
+            action_started_at=0,
             pending_action="",
             **build_runtime_snapshot(cfg, state),
         )
@@ -2482,6 +2640,7 @@ def handle_runtime_action(cfg, state):
             last_action=action,
             last_action_ts=int(time.time()),
             action_result="ignored",
+            action_started_at=0,
             **build_runtime_snapshot(cfg, state),
         )
         return True, message
@@ -2500,6 +2659,7 @@ def handle_runtime_action(cfg, state):
         last_action=action,
         last_action_ts=int(time.time()),
         action_result=action_result,
+        action_started_at=0,
         pending_action="",
         **build_runtime_snapshot(cfg, state),
     )
@@ -2662,6 +2822,7 @@ def _daemon_tick_active(cfg, state, interval):
 
 
 def run_daemon():
+    reconcile_manual_login_service_guard()
     state = _make_daemon_state()
     save_runtime_status(
         "守护进程已启动",

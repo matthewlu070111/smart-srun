@@ -9,6 +9,7 @@ local fs = require "nixio.fs"
 local STATE_FILE = "/var/run/jxnu_srun/state.json"
 local ACTION_FILE = "/var/run/jxnu_srun/action.json"
 local LOG_FILE = "/var/log/jxnu_srun.log"
+local restore_manual_guarded_enabled
 
 function index()
     entry({"admin", "services", "jxnu_srun"}, cbi("jxnu_srun"), _("JXNU SRun"), 80).dependent = true
@@ -36,6 +37,61 @@ local function write_json_file(path, payload)
         fs.mkdirr(dir)
     end
     fs.writefile(path, (jsonc.stringify(payload) or "{}") .. "\n")
+end
+
+local function remove_file(path)
+    if fs.access(path) then
+        fs.remove(path)
+    end
+end
+
+local function collect_client_pids()
+    local pids = {}
+    local proc = fs.dir("/proc")
+    if not proc then
+        return pids
+    end
+
+    for entry in proc do
+        if tostring(entry):match("^%d+$") then
+            local cmdline = fs.readfile("/proc/" .. entry .. "/cmdline") or ""
+            cmdline = cmdline:gsub("%z", " ")
+            if cmdline:find("/usr/lib/jxnu_srun/client.py", 1, true) then
+                pids[#pids + 1] = tostring(entry)
+            end
+        end
+    end
+    return pids
+end
+
+local function force_stop_client_processes()
+    local pids = collect_client_pids()
+    for _, pid in ipairs(pids) do
+        sys.call("kill -TERM " .. pid .. " >/dev/null 2>&1")
+    end
+    for _, pid in ipairs(collect_client_pids()) do
+        sys.call("kill -KILL " .. pid .. " >/dev/null 2>&1")
+    end
+    return pids
+end
+
+local function handle_force_stop()
+    sys.call("/etc/init.d/jxnu_srun stop >/dev/null 2>&1")
+    local killed = force_stop_client_processes()
+    remove_file(ACTION_FILE)
+
+    local state = read_json_file(STATE_FILE)
+    restore_manual_guarded_enabled(state)
+    state.message = "已强制停止插件进程"
+    state.pending_action = ""
+    state.last_action = "force_stop"
+    state.last_action_ts = os.time()
+    state.action_result = "forced"
+    state.action_started_at = 0
+    state.daemon_running = false
+    write_json_file(STATE_FILE, state)
+
+    return true, string.format("已强制停止插件进程（结束 %d 个进程）", #killed)
 end
 
 function action_status()
@@ -71,6 +127,7 @@ function action_status()
         last_action = tostring(data.last_action or ""),
         action_result = tostring(data.action_result or ""),
         last_action_ts = tonumber(data.last_action_ts) or 0,
+        action_started_at = tonumber(data.action_started_at) or 0,
         last_log = last_log,
         updated_at = tonumber(data.updated_at) or 0,
         ts = os.time(),
@@ -105,6 +162,24 @@ end
 
 local function save_config_json(data)
     fs.writefile(CONFIG_FILE, (jsonc.stringify(data) or "{}") .. "\n")
+end
+
+restore_manual_guarded_enabled = function(state)
+    if type(state) ~= "table" or not state.manual_service_guard_active then
+        return false
+    end
+
+    local previous_enabled = tostring(state.manual_service_enabled_before or "")
+    if previous_enabled == "" then
+        previous_enabled = "1"
+    end
+
+    local cfg = load_config_json()
+    cfg.enabled = previous_enabled
+    save_config_json(cfg)
+    state.manual_service_guard_active = false
+    state.manual_service_enabled_before = ""
+    return true
 end
 
 local function find_index_by_id(items, target_id)
@@ -145,6 +220,13 @@ function action_enqueue()
         manual_login = "已提交手动登录请求",
         manual_logout = "已提交手动登出请求",
     }
+    if action == "force_stop" then
+        local ok_force, message_force = handle_force_stop()
+        http.prepare_content("application/json")
+        http.write(jsonc.stringify({ ok = ok_force, message = message_force, action = action, ts = os.time() }))
+        return
+    end
+
     if daemon_actions[action] then
         local requested_at = os.time()
         write_json_file(ACTION_FILE, {
@@ -163,6 +245,7 @@ function action_enqueue()
     if type(cfg.hotspot_profiles) ~= "table" then cfg.hotspot_profiles = {} end
     local ok = false
     local message = "不支持的动作"
+    local need_restart = false
 
     if action == "add_campus" or action == "edit_campus" then
         local id = fv("id")
@@ -187,7 +270,7 @@ function action_enqueue()
             if idx then
                 item.id = id
                 cfg.campus_accounts[idx] = item
-                ok = true; message = "已更新"
+                ok = true; message = "已更新"; need_restart = true
             else
                 ok = false; message = "未找到 ID: " .. id
             end
@@ -198,7 +281,7 @@ function action_enqueue()
                 cfg.active_campus_id = item.id
                 cfg.default_campus_id = item.id
             end
-            ok = true; message = "已添加"
+            ok = true; message = "已添加"; need_restart = true
         end
 
     elseif action == "add_hotspot" or action == "edit_hotspot" then
@@ -216,7 +299,7 @@ function action_enqueue()
             if idx then
                 item.id = id
                 cfg.hotspot_profiles[idx] = item
-                ok = true; message = "已更新"
+                ok = true; message = "已更新"; need_restart = true
             else
                 ok = false; message = "未找到 ID: " .. id
             end
@@ -227,7 +310,7 @@ function action_enqueue()
                 cfg.active_hotspot_id = item.id
                 cfg.default_hotspot_id = item.id
             end
-            ok = true; message = "已添加"
+            ok = true; message = "已添加"; need_restart = true
         end
 
     elseif action == "delete_campus" then
@@ -241,7 +324,7 @@ function action_enqueue()
             if tostring(cfg.default_campus_id or "") == id then
                 cfg.default_campus_id = cfg.active_campus_id
             end
-            ok = true; message = "已删除"
+            ok = true; message = "已删除"; need_restart = true
         else
             ok = false; message = "未找到"
         end
@@ -257,27 +340,25 @@ function action_enqueue()
             if tostring(cfg.default_hotspot_id or "") == id then
                 cfg.default_hotspot_id = cfg.active_hotspot_id
             end
-            ok = true; message = "已删除"
+            ok = true; message = "已删除"; need_restart = true
         else
             ok = false; message = "未找到"
         end
 
-    elseif action == "set_active_campus" then
+    elseif action == "set_default_campus" then
         local id = fv("id")
         if find_index_by_id(cfg.campus_accounts, id) then
-            cfg.active_campus_id = id
             cfg.default_campus_id = id
-            ok = true; message = "已切换"
+            ok = true; message = "已设为当前选择，不会立即切换；如与运行配置不同，将显示为待生效，并在下次手动登录、手动切换或自动重连时生效"
         else
             ok = false; message = "未找到"
         end
 
-    elseif action == "set_active_hotspot" then
+    elseif action == "set_default_hotspot" then
         local id = fv("id")
         if find_index_by_id(cfg.hotspot_profiles, id) then
-            cfg.active_hotspot_id = id
             cfg.default_hotspot_id = id
-            ok = true; message = "已切换"
+            ok = true; message = "已设为当前选择，不会立即切换；如与运行配置不同，将显示为待生效，并在下次手动切换或自动故障切换时生效"
         else
             ok = false; message = "未找到"
         end
@@ -285,7 +366,9 @@ function action_enqueue()
 
     if ok then
         save_config_json(cfg)
-        sys.call("(sleep 1; /etc/init.d/jxnu_srun restart >/dev/null 2>&1) >/dev/null 2>&1 &")
+        if need_restart then
+            sys.call("(sleep 1; /etc/init.d/jxnu_srun restart >/dev/null 2>&1) >/dev/null 2>&1 &")
+        end
     end
 
     http.prepare_content("application/json")
