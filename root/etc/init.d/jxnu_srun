@@ -25,6 +25,29 @@ start_service() {
 	procd_close_instance
 }
 
+stop_client_processes() {
+	for proc in /proc/[0-9]*; do
+		[ -r "$proc/cmdline" ] || continue
+		cmdline="$(tr '\000' ' ' < "$proc/cmdline" 2>/dev/null)"
+		case "$cmdline" in
+			*"$PROG"*)
+				kill -TERM "${proc##*/}" 2>/dev/null
+				;;
+		esac
+	done
+	sleep 1
+	for proc in /proc/[0-9]*; do
+		[ -r "$proc/cmdline" ] || continue
+		cmdline="$(tr '\000' ' ' < "$proc/cmdline" 2>/dev/null)"
+		case "$cmdline" in
+			*"$PROG"*)
+				kill -KILL "${proc##*/}" 2>/dev/null
+				;;
+		esac
+	done
+}
+
 stop_service() {
+	stop_client_processes
 	return 0
 }
