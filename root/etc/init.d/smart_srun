@@ -3,8 +3,8 @@
 START=99
 USE_PROCD=1
 
-SERVICE_NAME="jxnu_srun"
-PROG="/usr/lib/jxnu_srun/client.py"
+SERVICE_NAME="smart_srun"
+PROG="/usr/lib/smart_srun/client.py"
 
 find_python() {
 	command -v python3 2>/dev/null || command -v python3.11 2>/dev/null
@@ -18,7 +18,7 @@ start_service() {
 	fi
 
 	procd_open_instance
-	procd_set_param command "$PYTHON_BIN" -B "$PROG" --daemon
+	procd_set_param command "$PYTHON_BIN" -B "$PROG" daemon
 	procd_set_param respawn 3600 5 5
 	procd_set_param stdout 1
 	procd_set_param stderr 1

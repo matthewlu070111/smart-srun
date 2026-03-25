@@ -1,4 +1,4 @@
-module("luci.controller.jxnu_srun", package.seeall)
+module("luci.controller.smart_srun", package.seeall)
 
 local http = require "luci.http"
 local jsonc = require "luci.jsonc"
@@ -6,17 +6,17 @@ local sys = require "luci.sys"
 local util = require "luci.util"
 local fs = require "nixio.fs"
 
-local STATE_FILE = "/var/run/jxnu_srun/state.json"
-local ACTION_FILE = "/var/run/jxnu_srun/action.json"
-local LOG_FILE = "/var/log/jxnu_srun.log"
+local STATE_FILE = "/var/run/smart_srun/state.json"
+local ACTION_FILE = "/var/run/smart_srun/action.json"
+local LOG_FILE = "/var/log/smart_srun.log"
 local restore_manual_guarded_enabled
 local ACTION_STALE_SECONDS = 20
 
 function index()
-    entry({"admin", "services", "jxnu_srun"}, cbi("jxnu_srun"), _("JXNU SRun"), 80).dependent = true
-    entry({"admin", "services", "jxnu_srun", "status"}, call("action_status")).leaf = true
-    entry({"admin", "services", "jxnu_srun", "enqueue"}, call("action_enqueue")).leaf = true
-    entry({"admin", "services", "jxnu_srun", "log_tail"}, call("action_log_tail")).leaf = true
+    entry({"admin", "services", "smart_srun"}, cbi("smart_srun"), _("SMART SRun"), 80).dependent = true
+    entry({"admin", "services", "smart_srun", "status"}, call("action_status")).leaf = true
+    entry({"admin", "services", "smart_srun", "enqueue"}, call("action_enqueue")).leaf = true
+    entry({"admin", "services", "smart_srun", "log_tail"}, call("action_log_tail")).leaf = true
 end
 
 local function read_json_file(path)
@@ -57,7 +57,7 @@ local function collect_client_pids()
         if tostring(entry):match("^%d+$") then
             local cmdline = fs.readfile("/proc/" .. entry .. "/cmdline") or ""
             cmdline = cmdline:gsub("%z", " ")
-            if cmdline:find("/usr/lib/jxnu_srun/client.py", 1, true) then
+            if cmdline:find("/usr/lib/smart_srun/client.py", 1, true) then
                 pids[#pids + 1] = tostring(entry)
             end
         end
@@ -77,13 +77,13 @@ local function force_stop_client_processes()
 end
 
 local function handle_force_stop()
-    sys.call("/etc/init.d/jxnu_srun stop >/dev/null 2>&1")
+    sys.call("/etc/init.d/smart_srun stop >/dev/null 2>&1")
     local killed = force_stop_client_processes()
     remove_file(ACTION_FILE)
 
     local state = read_json_file(STATE_FILE)
     restore_manual_guarded_enabled(state)
-    state.message = "已强制停止插件进程"
+    state.message = "已强制关闭插件并停止服务"
     state.pending_action = ""
     state.last_action = "force_stop"
     state.last_action_ts = os.time()
@@ -92,7 +92,7 @@ local function handle_force_stop()
     state.daemon_running = false
     write_json_file(STATE_FILE, state)
 
-    return true, string.format("已强制停止插件进程（结束 %d 个进程）", #killed)
+    return true, string.format("已强制关闭插件并停止服务（结束 %d 个进程）", #killed)
 end
 
 local function current_pending_runtime_action()
@@ -159,17 +159,20 @@ function action_status()
 end
 
 -- 表格 CRUD 需要的配置读写
-local CONFIG_FILE = "/usr/lib/jxnu_srun/config.json"
+local CONFIG_FILE = "/usr/lib/smart_srun/config.json"
 
 local GLOBAL_SCALAR_KEYS_SET = {}
 for _, k in ipairs({
     "enabled", "quiet_hours_enabled", "quiet_start", "quiet_end",
     "force_logout_in_quiet", "failover_enabled", "backoff_enable",
     "backoff_max_retries", "backoff_initial_duration", "backoff_max_duration",
-    "manual_terminal_check_max_attempts",
+    "retry_cooldown_seconds", "retry_max_cooldown_seconds",
+    "switch_ready_timeout_seconds", "manual_terminal_check_max_attempts",
+    "manual_terminal_check_interval_seconds", "hotspot_failback_enabled",
+    "connectivity_check_mode",
     "backoff_exponent_factor", "backoff_inter_const_factor",
     "backoff_outer_const_factor", "interval", "developer_mode",
-    "sta_iface", "n", "type", "enc",
+    "sta_iface", "n", "type", "enc", "school",
 }) do GLOBAL_SCALAR_KEYS_SET[k] = true end
 
 local POINTER_KEYS_LIST = {
@@ -285,7 +288,7 @@ function action_enqueue()
         state.action_started_at = requested_at
         state.updated_at = requested_at
         write_json_file(STATE_FILE, state)
-        sys.call("(/etc/init.d/jxnu_srun restart >/dev/null 2>&1) >/dev/null 2>&1 &")
+        sys.call("(/etc/init.d/smart_srun restart >/dev/null 2>&1) >/dev/null 2>&1 &")
         http.prepare_content("application/json")
         http.write(jsonc.stringify({ ok = true, message = daemon_actions[action], requested_at = requested_at }))
         return
@@ -303,7 +306,8 @@ function action_enqueue()
         local id = fv("id")
         local item = {
             label = fv("label"), user_id = fv("user_id"),
-            operator = fv("operator"), password = fv("password"),
+            operator = fv("operator"), operator_suffix = fv("operator_suffix"),
+            password = fv("password"),
             access_mode = fv("access_mode"),
             base_url = fv("base_url"), ac_id = fv("ac_id"),
             ssid = fv("ssid"), bssid = fv("bssid"), radio = fv("radio"),
@@ -317,8 +321,11 @@ function action_enqueue()
             item.radio = ""
         end
         if item.label == "" then
+            local suffix = item.operator_suffix or ""
             local op = item.operator or ""
-            if item.user_id ~= "" and op ~= "" and op ~= "xn" then
+            if suffix ~= "" and item.user_id ~= "" then
+                item.label = item.user_id .. "@" .. suffix
+            elseif item.user_id ~= "" and op ~= "" and op ~= "xn" then
                 item.label = item.user_id .. "@" .. op
             elseif item.user_id ~= "" then
                 item.label = item.user_id
@@ -428,7 +435,7 @@ function action_enqueue()
     if ok then
         save_config_json(cfg)
         if need_restart then
-            sys.call("(sleep 1; /etc/init.d/jxnu_srun restart >/dev/null 2>&1) >/dev/null 2>&1 &")
+            sys.call("(sleep 1; /etc/init.d/smart_srun restart >/dev/null 2>&1) >/dev/null 2>&1 &")
         end
     end
 
@@ -436,16 +443,117 @@ function action_enqueue()
     http.write(jsonc.stringify({ ok = ok, message = message, action = action, ts = os.time() }))
 end
 
+-- Structured log translation table (event -> Chinese)
+local event_zh = {
+    login_success       = "登录成功",
+    login_failed        = "登录失败",
+    retry_scheduled     = "即将重试",
+    retry_success       = "重试成功",
+    retry_failed        = "重试失败",
+    retry_stopped       = "停止重试",
+    disconnect_detected = "检测到断线",
+    status_check_error  = "状态检测异常",
+    logout_request      = "正在登出",
+    logout_success      = "登出成功",
+    logout_failed       = "登出失败",
+    logout_verify_failed = "登出校验失败",
+    manual_login_start  = "开始手动登录",
+    manual_login_success = "手动登录成功",
+    manual_login_failed = "手动登录失败",
+    manual_preclean     = "登录预清理",
+    manual_preclean_done = "预清理完成",
+    action_result       = "操作结果",
+    action_unknown      = "未知操作",
+    quiet_enter         = "进入夜间停用",
+    quiet_exit          = "退出夜间停用",
+    daemon_tick         = "状态更新",
+    daemon_start        = "守护进程启动",
+    daemon_stop         = "守护进程停止",
+    switch_campus_done  = "已切换到校园网",
+    switch_campus_no_ip = "校园网切换未获取IP",
+    switch_hotspot_done = "已切换到热点",
+    switch_hotspot_no_ip = "热点未获取IP",
+    hotspot_failback    = "热点回退",
+    config_migrated     = "配置已迁移",
+    config_legacy_fix   = "修复遗留状态",
+    config_default_applied = "应用默认配置",
+    config_action_queued = "操作已入队",
+    status_query        = "状态查询",
+}
+
+-- Error reason translation (reuses server-side mapping)
+local reason_zh = {
+    username_or_password_error = "用户名或密码错误",
+    ip_already_online_error    = "IP已在线",
+    challenge_expire_error     = "挑战码已过期",
+    sign_error                 = "签名错误",
+    radius_error               = "RADIUS认证失败",
+    login_error                = "认证失败",
+}
+
+-- Parse structured log line: "[ts] LEVEL EVENT k=v ... | msg"
+local function parse_structured(line)
+    local ts, rest = line:match("^(%[.-%]) (.+)$")
+    if not rest then return nil end
+    local level, event = rest:match("^(%u+) ([%w_]+)")
+    if not level or not event then return nil end
+    return ts, level, event, rest
+end
+
+-- Extract a key=value pair from structured log rest string.
+-- Supports both unquoted (key=val) and quoted (key="val with spaces").
+local function extract_kv(rest, key)
+    local quoted = rest:match(key .. '="(.-)"')
+    if quoted then return quoted end
+    return rest:match(key .. "=(%S+)")
+end
+
+-- Translate a structured log line to user-friendly Chinese
+local function friendly_line(line)
+    local ts, level, event, rest = parse_structured(line)
+    if not ts then return line end
+    local zh = event_zh[event]
+    if not zh then return line end
+
+    local parts = { ts, " " }
+    if level == "ERROR" then
+        parts[#parts + 1] = "[错误] "
+    elseif level == "WARN" then
+        parts[#parts + 1] = "[警告] "
+    end
+    parts[#parts + 1] = zh
+
+    local account = extract_kv(rest, "account")
+    if account then parts[#parts + 1] = " [" .. account .. "]" end
+
+    local reason = extract_kv(rest, "reason")
+    if reason then
+        local rzh = reason_zh[reason]
+        parts[#parts + 1] = ": " .. (rzh or reason)
+    end
+
+    local attempt = rest:match("attempt=(%d+)")
+    if attempt then parts[#parts + 1] = " (第" .. attempt .. "次)" end
+
+    local detail = rest:match("|%s*(.+)$")
+    if detail and not reason and not account then
+        parts[#parts + 1] = ": " .. detail
+    end
+
+    return table.concat(parts)
+end
+
 function action_log_tail()
     local since = tonumber(http.formvalue("since")) or 0
     local lines = tonumber(http.formvalue("lines")) or 400
+    local fmt = http.formvalue("format") or "raw"
     if lines < 10 then
         lines = 10
     elseif lines > 1000 then
         lines = 1000
     end
 
-    local text = sys.exec("tail -n " .. lines .. " /var/log/jxnu_srun.log 2>/dev/null") or ""
+    local text = sys.exec("tail -n " .. lines .. " /var/log/smart_srun.log 2>/dev/null") or ""
     if since > 0 and text ~= "" then
         local kept = {}
         for line in text:gmatch("[^\n]+") do
@@ -462,6 +570,15 @@ function action_log_tail()
         end
         text = table.concat(kept, "\n")
     end
+
+    if fmt == "friendly" and text ~= "" then
+        local translated = {}
+        for line in text:gmatch("[^\n]+") do
+            translated[#translated + 1] = friendly_line(line)
+        end
+        text = table.concat(translated, "\n")
+    end
+
     if text == "" then
         text = "No logs yet."
     end

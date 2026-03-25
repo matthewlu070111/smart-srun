@@ -99,7 +99,7 @@ jobs:
 
       - name: Inject package
         run: |
-          mkdir -p openwrt/package/luci-app-jxnu-srun
+          mkdir -p openwrt/package/luci-app-smart-srun
           rsync -a --delete \
             --exclude ".git" \
             --exclude ".github" \
@@ -107,35 +107,44 @@ jobs:
             --exclude "openwrt" \
             --exclude "sdk" \
             --exclude "artifacts" \
-            ./ openwrt/package/luci-app-jxnu-srun/
+            ./ openwrt/package/luci-app-smart-srun/
 
       - name: Configure
         working-directory: openwrt
         run: |
           echo "CONFIG_ALL_KMODS=n" >> .config
-          echo "CONFIG_PACKAGE_luci-app-jxnu-srun=y" >> .config
+          echo "CONFIG_PACKAGE_smart-srun=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-smart-srun=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-smart-srun-bundle=y" >> .config
           make defconfig
 
       - name: Compile package
         working-directory: openwrt
         run: |
-          make package/luci-app-jxnu-srun/compile -j"$(nproc)"
+          make package/luci-app-smart-srun/{clean,compile} -j1 V=s
 
       - name: Collect artifact
         run: |
           mkdir -p artifacts
-          SRC_IPK="$(find openwrt/bin/packages -type f -name 'luci-app-jxnu-srun*.ipk' | head -n1)"
-          if [ -z "$SRC_IPK" ]; then
+          echo "=== All ipk files ==="
+          find openwrt/bin -type f -name '*.ipk' | sort
+          echo "====================="
+          for pattern in 'smart-srun_*.ipk' 'luci-app-smart-srun_*.ipk' 'luci-app-smart-srun-bundle_*.ipk'; do
+            IPK="$(find openwrt/bin -type f -name "$pattern" | head -n1)"
+            if [ -n "$IPK" ]; then
+              cp -v "$IPK" "artifacts/$(basename "$IPK")"
+            fi
+          done
+          if [ -z "$(ls artifacts/*.ipk 2>/dev/null)" ]; then
             echo "Failed: no ipk found."
             exit 1
           fi
-          cp -v "$SRC_IPK" "artifacts/$(basename "$SRC_IPK")"
           ls -lh artifacts/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: luci-app-jxnu-srun-ipk
+          name: smart-srun-ipk
           path: artifacts/*.ipk
 
   publish:
@@ -160,7 +169,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-          pattern: luci-app-jxnu-srun-ipk*
+          pattern: smart-srun-ipk*
           merge-multiple: true
 
       - name: Render pre-release notes from template

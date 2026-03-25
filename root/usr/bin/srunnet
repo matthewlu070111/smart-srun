@@ -1,0 +1,17 @@
+#!/bin/sh
+# SMART SRun campus network client -- shortcut entry point.
+# Default action: show status.
+
+PROG="/usr/lib/smart_srun/client.py"
+PYTHON="$(command -v python3 2>/dev/null || command -v python3.11 2>/dev/null)"
+
+if [ -z "$PYTHON" ]; then
+    echo "Error: python3 not found"
+    exit 1
+fi
+
+if [ $# -eq 0 ]; then
+    exec "$PYTHON" -B "$PROG" status
+fi
+
+exec "$PYTHON" -B "$PROG" "$@"
