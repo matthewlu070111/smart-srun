@@ -83,7 +83,7 @@ local function handle_force_stop()
 
     local state = read_json_file(STATE_FILE)
     restore_manual_guarded_enabled(state)
-    state.message = "已强制停止插件进程"
+    state.message = "已强制关闭插件并停止服务"
     state.pending_action = ""
     state.last_action = "force_stop"
     state.last_action_ts = os.time()
@@ -92,7 +92,7 @@ local function handle_force_stop()
     state.daemon_running = false
     write_json_file(STATE_FILE, state)
 
-    return true, string.format("已强制停止插件进程（结束 %d 个进程）", #killed)
+    return true, string.format("已强制关闭插件并停止服务（结束 %d 个进程）", #killed)
 end
 
 local function current_pending_runtime_action()

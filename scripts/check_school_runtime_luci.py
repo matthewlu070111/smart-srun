@@ -100,6 +100,96 @@ def main():
         "runtime diagnostics marker",
         failures,
     )
+    require_regex(
+        lua_source,
+        r"if \(action === 'manual_login'\) \{\s*if \(statusData\.action_result === 'ok'\) \{",
+        "manual login terminal state trusts backend result",
+        failures,
+    )
+    require_regex(
+        lua_source,
+        r"if \(action === 'manual_logout'\) \{\s*if \(statusData\.action_result === 'ok'\) \{",
+        "manual logout terminal state trusts backend result",
+        failures,
+    )
+    require_not_contains(
+        lua_source,
+        "statusData.connectivity_level === 'online'",
+        "manual terminal online gate",
+        failures,
+    )
+    require_not_contains(
+        lua_source,
+        "statusData.connectivity_level !== 'online'",
+        "manual terminal logout connectivity gate",
+        failures,
+    )
+    require_not_contains(
+        lua_source,
+        "statusData.current_ssid === statusData.campus_ssid",
+        "manual terminal ssid gate",
+        failures,
+    )
+    require_not_contains(
+        lua_source,
+        "statusData.current_bssid === statusData.campus_bssid",
+        "manual terminal bssid gate",
+        failures,
+    )
+    require_contains(
+        lua_source,
+        "'进行中'",
+        "manual modal progress button label",
+        failures,
+    )
+    require_contains(
+        lua_source,
+        "smart-srun-force-close",
+        "page-level force close button id",
+        failures,
+    )
+    require_contains(
+        lua_source,
+        "强制关闭插件",
+        "page-level force close button label",
+        failures,
+    )
+    require_contains(
+        lua_source,
+        "confirm('这会停止 SMART SRun 服务并终止插件进程，是否继续？')",
+        "force close confirmation prompt",
+        failures,
+    )
+    require_contains(
+        lua_source,
+        "enqueueForceClose()",
+        "force close click flow helper",
+        failures,
+    )
+    require_contains(
+        lua_source,
+        "xhr.send('action=' + encodeURIComponent('force_stop'));",
+        "force close submits shared force_stop action",
+        failures,
+    )
+    require_not_contains(
+        lua_source,
+        "((Date.now() / 1000) - requestedAt) >= 10",
+        "delayed force stop visibility gate",
+        failures,
+    )
+    require_not_contains(
+        lua_source,
+        "window.setTimeout(function() { window.location.reload(); }, 1200);",
+        "automatic modal reload timer",
+        failures,
+    )
+    require_regex(
+        lua_source,
+        r"progressButton\.addEventListener\('click', function\(ev\) \{.*L\.hideModal\(\);\s*location\.reload\(\);",
+        "manual modal close button performs user-driven refresh",
+        failures,
+    )
 
     require_contains(
         config_source,
@@ -130,6 +220,19 @@ def main():
         daemon_source,
         "build_school_runtime_luci_contract,",
         "daemon uses contract builder",
+        failures,
+    )
+    controller_source = read_text("root/usr/lib/lua/luci/controller/smart_srun.lua")
+    require_contains(
+        controller_source,
+        'state.message = "已强制关闭插件并停止服务"',
+        "shared force stop state message",
+        failures,
+    )
+    require_contains(
+        controller_source,
+        'return true, string.format("已强制关闭插件并停止服务（结束 %d 个进程）", #killed)',
+        "shared force stop return message",
         failures,
     )
     require_regex(

@@ -899,48 +899,60 @@ function manual_login.cfgvalue()
     var footer = E('div', { 'class': 'right' });
     var closed = false;
     var timer = null;
-    var forceShown = false;
+    var progressButton = E('button', {
+      'class': 'btn cbi-button',
+      'disabled': 'disabled'
+    }, '进行中');
+    var forceButton = E('button', {
+      'class': 'btn cbi-button cbi-button-remove',
+      'click': function(ev) {
+        ev.preventDefault();
+        if (closed || forceButton.disabled) return;
+        forceButton.disabled = true;
+        result.textContent = '正在强制停止...';
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', '/cgi-bin/luci/admin/services/smart_srun/enqueue', true);
+        xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded; charset=UTF-8');
+        xhr.onreadystatechange = function() {
+          if (xhr.readyState !== 4) return;
+          var text = '已触发强制停止';
+          if (xhr.status === 200) {
+            try {
+              var data = JSON.parse(xhr.responseText || '{}');
+              if (typeof data.message === 'string' && data.message !== '')
+                text = data.message;
+            } catch (e) {}
+          }
+          unlock(text, false);
+        };
+        xhr.send('action=' + encodeURIComponent('force_stop'));
+      }
+    }, '强制停止');
 
-    function showForceStopButton() {
-      if (closed || forceShown) return;
-      forceShown = true;
-      footer.appendChild(E('button', {
-        'class': 'btn cbi-button cbi-button-remove',
-        'click': function(ev) {
-          ev.preventDefault();
-          this.disabled = true;
-          result.textContent = '正在强制停止...';
-          var xhr = new XMLHttpRequest();
-          xhr.open('POST', '/cgi-bin/luci/admin/services/smart_srun/enqueue', true);
-          xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded; charset=UTF-8');
-          xhr.onreadystatechange = function() {
-            if (xhr.readyState !== 4) return;
-            var text = '已触发强制停止';
-            if (xhr.status === 200) {
-              try {
-                var data = JSON.parse(xhr.responseText || '{}');
-                if (typeof data.message === 'string' && data.message !== '')
-                  text = data.message;
-              } catch (e) {}
-            }
-            unlock(text, false);
-          };
-          xhr.send('action=' + encodeURIComponent('force_stop'));
-        }
-      }, '强制停止'));
+    progressButton.addEventListener('click', function(ev) {
+      if (progressButton.disabled) {
+        ev.preventDefault();
+        return;
+      }
+      L.hideModal();
+      location.reload();
+    });
+
+    footer.appendChild(progressButton);
+    footer.appendChild(forceButton);
+
+    function setTerminalFooter() {
+      progressButton.disabled = false;
+      progressButton.textContent = '关闭返回';
+      forceButton.disabled = true;
     }
 
     function unlock(text, success) {
       if (closed) return;
       closed = true;
       if (timer) window.clearInterval(timer);
-      while (footer.firstChild) footer.removeChild(footer.firstChild);
-      footer.appendChild(E('button', {
-        'class': 'btn cbi-button',
-        'click': function() { L.hideModal(); }
-      }, '关闭返回'));
+      setTerminalFooter();
       if (text) result.textContent = text + (success ? ' 🎉' : ' ⚠');
-      window.setTimeout(function() { window.location.reload(); }, 1200);
     }
 
     function checkTerminal(statusData) {
@@ -957,10 +969,7 @@ function manual_login.cfgvalue()
       }
 
       if (action === 'manual_login') {
-        var ssidOk = !!statusData.current_ssid && statusData.current_ssid === statusData.campus_ssid;
-        var bssidOk = !statusData.campus_bssid || statusData.current_bssid === statusData.campus_bssid;
-        var onlineOk = statusData.connectivity_level === 'online';
-        if (statusData.action_result === 'ok' && ssidOk && bssidOk && onlineOk) {
+        if (statusData.action_result === 'ok') {
           unlock(statusData.status || '登录成功', true);
           return true;
         }
@@ -991,10 +1000,6 @@ function manual_login.cfgvalue()
     }
 
     function poll() {
-      if (!closed && requestedAt > 0 && ((Date.now() / 1000) - requestedAt) >= 10) {
-        showForceStopButton();
-      }
-
       fetchJson('/cgi-bin/luci/admin/services/smart_srun/log_tail?lines=200&format=friendly&since=' + encodeURIComponent(requestedAt) + '&_=' + Date.now(), function(err, logData) {
         if (!err && logData && typeof logData.log === 'string') {
           logBox.textContent = logData.log;
@@ -1096,6 +1101,7 @@ function switch_test.cfgvalue()
 <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
   <button id="smart-srun-switch-hotspot" type="button" class="cbi-button cbi-button-apply">切到热点</button>
   <button id="smart-srun-switch-campus" type="button" class="cbi-button cbi-button-apply">切回校园网</button>
+  <button id="smart-srun-force-close" type="button" class="cbi-button cbi-button-remove">强制关闭插件</button>
   <span id="smart-srun-switch-result" style="color:#666;"></span>
 </div>
 <div class="cbi-value-description">手动切网会停用自动登录服务，如需启用请再次手动开启。</div>
@@ -1103,14 +1109,16 @@ function switch_test.cfgvalue()
 (function() {
   var hotspot = document.getElementById('smart-srun-switch-hotspot');
   var campus = document.getElementById('smart-srun-switch-campus');
+  var forceClose = document.getElementById('smart-srun-force-close');
   var result = document.getElementById('smart-srun-switch-result');
-  if (!hotspot || !campus || !result || window.__smartSrunSwitchInit) return;
+  if (!hotspot || !campus || !forceClose || !result || window.__smartSrunSwitchInit) return;
   window.__smartSrunSwitchInit = true;
 
   function enqueue(action) {
     result.textContent = '正在提交...';
     hotspot.disabled = true;
     campus.disabled = true;
+    forceClose.disabled = true;
 
     var xhr = new XMLHttpRequest();
     xhr.open('POST', '/cgi-bin/luci/admin/services/smart_srun/enqueue', true);
@@ -1119,6 +1127,7 @@ function switch_test.cfgvalue()
       if (xhr.readyState !== 4) return;
       hotspot.disabled = false;
       campus.disabled = false;
+      forceClose.disabled = false;
       if (xhr.status !== 200) {
         result.textContent = '提交失败';
         return;
@@ -1137,8 +1146,43 @@ function switch_test.cfgvalue()
     xhr.send('action=' + encodeURIComponent(action));
   }
 
+  function enqueueForceClose() {
+    if (!confirm('这会停止 SMART SRun 服务并终止插件进程，是否继续？')) {
+      return;
+    }
+    result.textContent = '正在强制关闭插件...';
+    hotspot.disabled = true;
+    campus.disabled = true;
+    forceClose.disabled = true;
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/cgi-bin/luci/admin/services/smart_srun/enqueue', true);
+    xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded; charset=UTF-8');
+    xhr.onreadystatechange = function() {
+      if (xhr.readyState !== 4) return;
+      hotspot.disabled = false;
+      campus.disabled = false;
+      forceClose.disabled = false;
+      if (xhr.status !== 200) {
+        result.textContent = '强制关闭失败';
+        return;
+      }
+      try {
+        var data = JSON.parse(xhr.responseText || '{}');
+        result.textContent = (typeof data.message === 'string' && data.message !== '') ? data.message : '已强制关闭插件';
+        if (data.ok) {
+          location.reload();
+        }
+      } catch (e) {
+        result.textContent = '强制关闭失败';
+      }
+    };
+    xhr.send('action=' + encodeURIComponent('force_stop'));
+  }
+
   hotspot.addEventListener('click', function() { enqueue('switch_hotspot'); });
   campus.addEventListener('click', function() { enqueue('switch_campus'); });
+  forceClose.addEventListener('click', enqueueForceClose);
 })();
 </script>
 ]]

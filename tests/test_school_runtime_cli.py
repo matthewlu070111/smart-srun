@@ -35,6 +35,12 @@ def load_hot_update_module(test_case):
     return module
 
 
+def read_repo_text(*parts):
+    path = os.path.join(REPO_ROOT, *parts)
+    with open(path, "r", encoding="utf-8") as handle:
+        return handle.read()
+
+
 class FakeRuntime(object):
     def __init__(self):
         self.calls = []
@@ -517,6 +523,98 @@ class HotUpdateScriptTests(unittest.TestCase):
             hot_update.require_router_password()
 
         self.assertIn("SMARTSRUN_ROUTER_PASSWORD", str(exc.exception))
+
+
+class DaemonStartupStateTests(unittest.TestCase):
+    def test_run_daemon_preserves_pending_action_context_on_startup(self):
+        cfg = {"enabled": "1", "interval": "30", "school": "custom"}
+        startup_state = {
+            "pending_action": "manual_login",
+            "last_action": "manual_login",
+            "last_action_ts": 1711111111,
+            "action_result": "pending",
+            "action_started_at": 1711111111,
+            "message": "已提交手动登录请求",
+        }
+        save_calls = []
+
+        class StopLoop(Exception):
+            pass
+
+        def fake_save_runtime_status(message, state=None, **extra):
+            save_calls.append((message, dict(state or {}), dict(extra)))
+
+        with (
+            mock.patch.object(daemon, "reconcile_manual_login_service_guard"),
+            mock.patch.object(daemon, "load_config", return_value=dict(cfg)),
+            mock.patch.object(
+                school_runtime, "resolve_runtime", return_value=FakeRuntime()
+            ),
+            mock.patch.object(daemon, "build_runtime_snapshot", return_value={}),
+            mock.patch.object(
+                daemon, "save_runtime_status", side_effect=fake_save_runtime_status
+            ),
+            mock.patch.object(
+                daemon,
+                "handle_runtime_action",
+                side_effect=StopLoop("stop after startup save"),
+            ),
+            mock.patch.object(
+                daemon,
+                "load_runtime_state",
+                return_value=dict(startup_state),
+                create=True,
+            ),
+            mock.patch.object(
+                daemon,
+                "load_pending_runtime_action",
+                return_value={"action": "manual_login", "requested_at": 1711111111},
+                create=True,
+            ),
+        ):
+            with self.assertRaises(StopLoop):
+                daemon.run_daemon()
+
+        self.assertTrue(save_calls)
+        _, _, startup_extra = save_calls[0]
+        self.assertEqual(startup_extra["pending_action"], "manual_login")
+        self.assertEqual(startup_extra["last_action"], "manual_login")
+        self.assertEqual(startup_extra["action_result"], "pending")
+        self.assertEqual(startup_extra["last_action_ts"], 1711111111)
+
+
+class ForceClosePluginSourceTests(unittest.TestCase):
+    def test_switch_section_exposes_page_level_force_close_flow(self):
+        lua_source = read_repo_text(
+            "root", "usr", "lib", "lua", "luci", "model", "cbi", "smart_srun.lua"
+        )
+
+        self.assertIn("smart-srun-force-close", lua_source)
+        self.assertIn("强制关闭插件", lua_source)
+        self.assertIn(
+            "forceClose.addEventListener('click', enqueueForceClose)", lua_source
+        )
+        self.assertIn(
+            "confirm('这会停止 SMART SRun 服务并终止插件进程，是否继续？')",
+            lua_source,
+        )
+        self.assertIn(
+            "xhr.send('action=' + encodeURIComponent('force_stop'));", lua_source
+        )
+
+    def test_shared_force_stop_controller_path_stays_smart_only(self):
+        controller_source = read_repo_text(
+            "root", "usr", "lib", "lua", "luci", "controller", "smart_srun.lua"
+        )
+
+        self.assertIn('state.message = "已强制关闭插件并停止服务"', controller_source)
+        self.assertIn(
+            'return true, string.format("已强制关闭插件并停止服务（结束 %d 个进程）", #killed)',
+            controller_source,
+        )
+        self.assertIn("/etc/init.d/smart_srun stop", controller_source)
+        self.assertIn("/usr/lib/smart_srun/client.py", controller_source)
+        self.assertNotIn("jxnu_srun", controller_source)
 
     def test_hot_update_uploads_runtime_payload_dependency_closure(self):
         hot_update = load_hot_update_module(self)

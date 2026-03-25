@@ -7,6 +7,7 @@
 import time
 
 from config import (
+    ACTION_FILE,
     LOG_FILE,
     append_log,
     build_school_runtime_luci_contract,
@@ -15,7 +16,9 @@ from config import (
     failover_enabled,
     in_quiet_window,
     load_config,
+    load_json_file,
     load_json_raw_config,
+    load_runtime_state,
     localize_error,
     pop_runtime_action,
     save_runtime_status,
@@ -50,6 +53,50 @@ def _make_daemon_state():
         "was_online": False,
         "last_switch_ts": 0,
     }
+
+
+def load_pending_runtime_action():
+    payload = load_json_file(ACTION_FILE)
+    return payload if isinstance(payload, dict) else {}
+
+
+def _build_startup_status_payload():
+    runtime_state = load_runtime_state()
+    queued_action = load_pending_runtime_action()
+
+    pending_action = str(
+        queued_action.get("action") or runtime_state.get("pending_action") or ""
+    ).strip()
+    action_result = str(runtime_state.get("action_result") or "").strip()
+    requested_at = int(
+        queued_action.get("requested_at")
+        or runtime_state.get("action_started_at")
+        or runtime_state.get("last_action_ts")
+        or 0
+    )
+
+    if pending_action and (queued_action.get("action") or action_result == "pending"):
+        return (
+            str(runtime_state.get("message") or ("正在执行动作: %s" % pending_action)),
+            {
+                "last_action": str(runtime_state.get("last_action") or pending_action),
+                "last_action_ts": requested_at,
+                "action_result": "pending",
+                "action_started_at": requested_at,
+                "pending_action": pending_action,
+            },
+        )
+
+    return (
+        "守护进程已启动",
+        {
+            "last_action": "",
+            "last_action_ts": 0,
+            "action_result": "",
+            "action_started_at": 0,
+            "pending_action": "",
+        },
+    )
 
 
 def _safe_call(fn, *args, **kwargs):
@@ -350,16 +397,13 @@ def run_daemon(runtime=None):
     state = _make_daemon_state()
     startup_cfg = load_config()
     runtime = runtime or school_runtime.resolve_runtime(startup_cfg)
+    startup_message, startup_action_state = _build_startup_status_payload()
     save_runtime_status(
-        "守护进程已启动",
+        startup_message,
         state,
         daemon_running=True,
         enabled=True,
-        last_action="",
-        last_action_ts=0,
-        action_result="",
-        action_started_at=0,
-        pending_action="",
+        **startup_action_state,
         **build_runtime_snapshot(startup_cfg, state),
     )
 
