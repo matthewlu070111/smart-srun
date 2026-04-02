@@ -4,6 +4,7 @@
 依赖 orchestrator（编排）、wireless（WiFi）、srun_auth（认证）、config（配置）、snapshot（快照）。
 """
 
+import os
 import time
 
 from config import (
@@ -13,6 +14,7 @@ from config import (
     build_school_runtime_luci_contract,
     log,
     campus_uses_wired,
+    ensure_parent_dir,
     failover_enabled,
     in_quiet_window,
     load_config,
@@ -38,6 +40,9 @@ import orchestrator
 import school_runtime
 import srun_auth
 from snapshot import build_runtime_snapshot
+
+
+DAEMON_LOCK_FILE = "/var/run/smart_srun/daemon.lock"
 
 
 # ---------------------------------------------------------------------------
@@ -392,7 +397,30 @@ def _run_runtime_daemon_hook(app_ctx, state, interval):
     )
 
 
+def _acquire_daemon_lock():
+    ensure_parent_dir(DAEMON_LOCK_FILE)
+    lock_handle = open(DAEMON_LOCK_FILE, "a+", encoding="utf-8")
+
+    try:
+        import fcntl
+
+        fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except ImportError:
+        pass
+    except OSError:
+        lock_handle.close()
+        print("另一个 daemon 实例已在运行，退出。", flush=True)
+        raise SystemExit(1)
+
+    lock_handle.seek(0)
+    lock_handle.truncate()
+    lock_handle.write(str(os.getpid()))
+    lock_handle.flush()
+    return lock_handle
+
+
 def run_daemon(runtime=None):
+    daemon_lock = _acquire_daemon_lock()
     reconcile_manual_login_service_guard()
     state = _make_daemon_state()
     startup_cfg = load_config()

@@ -583,6 +583,63 @@ class DaemonStartupStateTests(unittest.TestCase):
         self.assertEqual(startup_extra["last_action_ts"], 1711111111)
 
 
+class DaemonSingleInstanceTests(unittest.TestCase):
+    def test_run_daemon_acquires_process_lock_before_entering_loop(self):
+        cfg = {"enabled": "1", "interval": "30", "school": "custom"}
+
+        class StopLoop(Exception):
+            pass
+
+        with (
+            mock.patch.object(
+                daemon, "_acquire_daemon_lock", create=True, return_value=object()
+            ) as acquire_lock,
+            mock.patch.object(daemon, "reconcile_manual_login_service_guard"),
+            mock.patch.object(daemon, "load_config", return_value=dict(cfg)),
+            mock.patch.object(
+                school_runtime, "resolve_runtime", return_value=FakeRuntime()
+            ),
+            mock.patch.object(
+                daemon, "_build_startup_status_payload", return_value=("startup", {})
+            ),
+            mock.patch.object(daemon, "build_runtime_snapshot", return_value={}),
+            mock.patch.object(daemon, "save_runtime_status"),
+            mock.patch.object(
+                daemon, "handle_runtime_action", side_effect=StopLoop("stop after lock")
+            ),
+        ):
+            with self.assertRaises(StopLoop):
+                daemon.run_daemon()
+
+        acquire_lock.assert_called_once_with()
+
+    def test_run_daemon_stops_immediately_when_process_lock_is_unavailable(self):
+        cfg = {"enabled": "1", "interval": "30", "school": "custom"}
+
+        with (
+            mock.patch.object(
+                daemon, "_acquire_daemon_lock", create=True, side_effect=SystemExit(1)
+            ),
+            mock.patch.object(daemon, "reconcile_manual_login_service_guard"),
+            mock.patch.object(daemon, "load_config", return_value=dict(cfg)),
+            mock.patch.object(
+                school_runtime, "resolve_runtime", return_value=FakeRuntime()
+            ),
+            mock.patch.object(
+                daemon, "_build_startup_status_payload", return_value=("startup", {})
+            ),
+            mock.patch.object(daemon, "build_runtime_snapshot", return_value={}),
+            mock.patch.object(daemon, "save_runtime_status"),
+            mock.patch.object(
+                daemon,
+                "handle_runtime_action",
+                side_effect=AssertionError("lock failure should stop before main loop"),
+            ),
+        ):
+            with self.assertRaises(SystemExit):
+                daemon.run_daemon()
+
+
 class ForceClosePluginSourceTests(unittest.TestCase):
     def test_switch_section_exposes_page_level_force_close_flow(self):
         lua_source = read_repo_text(
