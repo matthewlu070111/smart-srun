@@ -5,6 +5,7 @@ local jsonc = require "luci.jsonc"
 local sys = require "luci.sys"
 local util = require "luci.util"
 local fs = require "nixio.fs"
+local schema = require "luci.smart_srun.schema"
 
 local STATE_FILE = "/var/run/smart_srun/state.json"
 local ACTION_FILE = "/var/run/smart_srun/action.json"
@@ -161,36 +162,44 @@ end
 -- 表格 CRUD 需要的配置读写
 local CONFIG_FILE = "/usr/lib/smart_srun/config.json"
 
-local GLOBAL_SCALAR_KEYS_SET = {}
-for _, k in ipairs({
-    "enabled", "quiet_hours_enabled", "quiet_start", "quiet_end",
-    "force_logout_in_quiet", "failover_enabled", "backoff_enable",
-    "backoff_max_retries", "backoff_initial_duration", "backoff_max_duration",
-    "retry_cooldown_seconds", "retry_max_cooldown_seconds",
-    "switch_ready_timeout_seconds", "manual_terminal_check_max_attempts",
-    "manual_terminal_check_interval_seconds", "hotspot_failback_enabled",
-    "connectivity_check_mode",
-    "backoff_exponent_factor", "backoff_inter_const_factor",
-    "backoff_outer_const_factor", "interval", "developer_mode",
-    "sta_iface", "n", "type", "enc", "school",
-}) do GLOBAL_SCALAR_KEYS_SET[k] = true end
+local GLOBAL_SCALAR_KEYS_SET = schema.global_scalar_key_set()
+local POINTER_KEYS_LIST = schema.POINTER_KEYS
+local LIST_KEYS_LIST = schema.LIST_KEYS
 
-local POINTER_KEYS_LIST = {
-    "active_campus_id", "default_campus_id",
-    "active_hotspot_id", "default_hotspot_id",
-}
-local LIST_KEYS_LIST = { "campus_accounts", "hotspot_profiles" }
-
-local function load_config_json()
+local function load_config_json_unlocked()
     local raw = fs.readfile(CONFIG_FILE) or "{}"
     local parsed = jsonc.parse(raw)
     return type(parsed) == "table" and parsed or {}
 end
 
-local function save_config_json(data)
+local function write_config_json_unlocked(data)
     local tmp = CONFIG_FILE .. ".tmp"
     fs.writefile(tmp, (jsonc.stringify(data) or "{}") .. "\n")
     os.rename(tmp, CONFIG_FILE)
+end
+
+local function load_config_json()
+    return schema.with_file_lock(CONFIG_FILE, function()
+        return load_config_json_unlocked()
+    end)
+end
+
+local function save_config_json(data)
+    schema.with_file_lock(CONFIG_FILE, function()
+        write_config_json_unlocked(data)
+    end)
+end
+
+local function update_config_json(mutator)
+    return schema.with_file_lock(CONFIG_FILE, function()
+        local cfg = load_config_json_unlocked()
+        local should_save, result = mutator(cfg)
+        local payload = type(result) == "table" and result or cfg
+        if should_save then
+            write_config_json_unlocked(payload)
+        end
+        return payload, should_save
+    end)
 end
 
 restore_manual_guarded_enabled = function(state)
@@ -203,9 +212,10 @@ restore_manual_guarded_enabled = function(state)
         previous_enabled = "1"
     end
 
-    local cfg = load_config_json()
-    cfg.enabled = previous_enabled
-    save_config_json(cfg)
+    update_config_json(function(cfg)
+        cfg.enabled = previous_enabled
+        return true, cfg
+    end)
     state.manual_service_guard_active = false
     state.manual_service_enabled_before = ""
     return true
@@ -273,9 +283,10 @@ function action_enqueue()
         local requested_at = os.time()
         local state = read_json_file(STATE_FILE)
         if action == "switch_hotspot" or action == "switch_campus" then
-            local cfg = load_config_json()
-            cfg.enabled = "0"
-            save_config_json(cfg)
+            update_config_json(function(cfg)
+                cfg.enabled = "0"
+                return true, cfg
+            end)
             state.enabled = false
         end
         write_json_file(ACTION_FILE, {
@@ -297,145 +308,159 @@ function action_enqueue()
     end
 
     -- 表格 CRUD 操作
-    local cfg = load_config_json()
-    if type(cfg.campus_accounts) ~= "table" then cfg.campus_accounts = {} end
-    if type(cfg.hotspot_profiles) ~= "table" then cfg.hotspot_profiles = {} end
     local ok = false
     local message = "不支持的动作"
     local need_restart = false
 
-    if action == "add_campus" or action == "edit_campus" then
-        local id = fv("id")
-        local item = {
-            label = fv("label"), user_id = fv("user_id"),
-            operator = fv("operator"), operator_suffix = fv("operator_suffix"),
-            password = fv("password"),
-            access_mode = fv("access_mode"),
-            base_url = fv("base_url"), ac_id = fv("ac_id"),
-            ssid = fv("ssid"), bssid = fv("bssid"), radio = fv("radio"),
-        }
-        if item.access_mode ~= "wired" then
-            item.access_mode = "wifi"
-        end
-        if item.access_mode == "wired" then
-            item.ssid = ""
-            item.bssid = ""
-            item.radio = ""
-        end
-        if item.label == "" then
-            local suffix = item.operator_suffix or ""
-            local op = item.operator or ""
-            if suffix ~= "" and item.user_id ~= "" then
-                item.label = item.user_id .. "@" .. suffix
-            elseif item.user_id ~= "" and op ~= "" and op ~= "xn" then
-                item.label = item.user_id .. "@" .. op
-            elseif item.user_id ~= "" then
-                item.label = item.user_id
-            else
-                item.label = "未命名账号"
+    update_config_json(function(cfg)
+        if type(cfg.campus_accounts) ~= "table" then cfg.campus_accounts = {} end
+        if type(cfg.hotspot_profiles) ~= "table" then cfg.hotspot_profiles = {} end
+
+        if action == "add_campus" or action == "edit_campus" then
+            local id = fv("id")
+            local item = {
+                label = fv("label"), user_id = fv("user_id"),
+                operator = fv("operator"), operator_suffix = fv("operator_suffix"),
+                password = fv("password"),
+                access_mode = fv("access_mode"),
+                base_url = fv("base_url"), ac_id = fv("ac_id"),
+                ssid = fv("ssid"), bssid = fv("bssid"), radio = fv("radio"),
+            }
+            if item.access_mode ~= "wired" then
+                item.access_mode = "wifi"
             end
+            if item.access_mode == "wired" then
+                item.ssid = ""
+                item.bssid = ""
+                item.radio = ""
+            end
+            if item.label == "" then
+                local suffix = item.operator_suffix or ""
+                local op = item.operator or ""
+                if suffix ~= "" and item.user_id ~= "" then
+                    item.label = item.user_id .. "@" .. suffix
+                elseif item.user_id ~= "" and op ~= "" and op ~= "xn" then
+                    item.label = item.user_id .. "@" .. op
+                elseif item.user_id ~= "" then
+                    item.label = item.user_id
+                else
+                    item.label = "未命名账号"
+                end
+            end
+            if action == "edit_campus" and id ~= "" then
+                local idx = find_index_by_id(cfg.campus_accounts, id)
+                if idx then
+                    item.id = id
+                    cfg.campus_accounts[idx] = item
+                    ok = true; message = "已更新"; need_restart = true
+                else
+                    ok = false; message = "未找到 ID: " .. id
+                end
+            else
+                item.id = next_id(cfg.campus_accounts, "campus")
+                cfg.campus_accounts[#cfg.campus_accounts + 1] = item
+                if #cfg.campus_accounts == 1 then
+                    cfg.active_campus_id = item.id
+                    cfg.default_campus_id = item.id
+                end
+                ok = true; message = "已添加"; need_restart = true
+            end
+            return ok, cfg
         end
-        if action == "edit_campus" and id ~= "" then
+
+        if action == "add_hotspot" or action == "edit_hotspot" then
+            local id = fv("id")
+            local item = {
+                label = fv("label"), ssid = fv("ssid"),
+                encryption = fv("encryption"), key = fv("key"),
+                radio = fv("radio"),
+            }
+            if item.label == "" then
+                item.label = item.ssid ~= "" and item.ssid or "未命名热点"
+            end
+            if action == "edit_hotspot" and id ~= "" then
+                local idx = find_index_by_id(cfg.hotspot_profiles, id)
+                if idx then
+                    item.id = id
+                    cfg.hotspot_profiles[idx] = item
+                    ok = true; message = "已更新"; need_restart = true
+                else
+                    ok = false; message = "未找到 ID: " .. id
+                end
+            else
+                item.id = next_id(cfg.hotspot_profiles, "hotspot")
+                cfg.hotspot_profiles[#cfg.hotspot_profiles + 1] = item
+                if #cfg.hotspot_profiles == 1 then
+                    cfg.active_hotspot_id = item.id
+                    cfg.default_hotspot_id = item.id
+                end
+                ok = true; message = "已添加"; need_restart = true
+            end
+            return ok, cfg
+        end
+
+        if action == "delete_campus" then
+            local id = fv("id")
             local idx = find_index_by_id(cfg.campus_accounts, id)
             if idx then
-                item.id = id
-                cfg.campus_accounts[idx] = item
-                ok = true; message = "已更新"; need_restart = true
+                table.remove(cfg.campus_accounts, idx)
+                if tostring(cfg.active_campus_id or "") == id then
+                    cfg.active_campus_id = #cfg.campus_accounts > 0 and cfg.campus_accounts[1].id or ""
+                end
+                if tostring(cfg.default_campus_id or "") == id then
+                    cfg.default_campus_id = cfg.active_campus_id
+                end
+                ok = true; message = "已删除"; need_restart = true
             else
-                ok = false; message = "未找到 ID: " .. id
+                ok = false; message = "未找到"
             end
-        else
-            item.id = next_id(cfg.campus_accounts, "campus")
-            cfg.campus_accounts[#cfg.campus_accounts + 1] = item
-            if #cfg.campus_accounts == 1 then
-                cfg.active_campus_id = item.id
-                cfg.default_campus_id = item.id
-            end
-            ok = true; message = "已添加"; need_restart = true
+            return ok, cfg
         end
 
-    elseif action == "add_hotspot" or action == "edit_hotspot" then
-        local id = fv("id")
-        local item = {
-            label = fv("label"), ssid = fv("ssid"),
-            encryption = fv("encryption"), key = fv("key"),
-            radio = fv("radio"),
-        }
-        if item.label == "" then
-            item.label = item.ssid ~= "" and item.ssid or "未命名热点"
-        end
-        if action == "edit_hotspot" and id ~= "" then
+        if action == "delete_hotspot" then
+            local id = fv("id")
             local idx = find_index_by_id(cfg.hotspot_profiles, id)
             if idx then
-                item.id = id
-                cfg.hotspot_profiles[idx] = item
-                ok = true; message = "已更新"; need_restart = true
+                table.remove(cfg.hotspot_profiles, idx)
+                if tostring(cfg.active_hotspot_id or "") == id then
+                    cfg.active_hotspot_id = #cfg.hotspot_profiles > 0 and cfg.hotspot_profiles[1].id or ""
+                end
+                if tostring(cfg.default_hotspot_id or "") == id then
+                    cfg.default_hotspot_id = cfg.active_hotspot_id
+                end
+                ok = true; message = "已删除"; need_restart = true
             else
-                ok = false; message = "未找到 ID: " .. id
+                ok = false; message = "未找到"
             end
-        else
-            item.id = next_id(cfg.hotspot_profiles, "hotspot")
-            cfg.hotspot_profiles[#cfg.hotspot_profiles + 1] = item
-            if #cfg.hotspot_profiles == 1 then
-                cfg.active_hotspot_id = item.id
-                cfg.default_hotspot_id = item.id
-            end
-            ok = true; message = "已添加"; need_restart = true
+            return ok, cfg
         end
 
-    elseif action == "delete_campus" then
-        local id = fv("id")
-        local idx = find_index_by_id(cfg.campus_accounts, id)
-        if idx then
-            table.remove(cfg.campus_accounts, idx)
-            if tostring(cfg.active_campus_id or "") == id then
-                cfg.active_campus_id = #cfg.campus_accounts > 0 and cfg.campus_accounts[1].id or ""
+        if action == "set_default_campus" then
+            local id = fv("id")
+            if find_index_by_id(cfg.campus_accounts, id) then
+                cfg.default_campus_id = id
+                ok = true; message = "已设为默认账号，手动登录后生效"
+            else
+                ok = false; message = "未找到"
             end
-            if tostring(cfg.default_campus_id or "") == id then
-                cfg.default_campus_id = cfg.active_campus_id
-            end
-            ok = true; message = "已删除"; need_restart = true
-        else
-            ok = false; message = "未找到"
+            return ok, cfg
         end
 
-    elseif action == "delete_hotspot" then
-        local id = fv("id")
-        local idx = find_index_by_id(cfg.hotspot_profiles, id)
-        if idx then
-            table.remove(cfg.hotspot_profiles, idx)
-            if tostring(cfg.active_hotspot_id or "") == id then
-                cfg.active_hotspot_id = #cfg.hotspot_profiles > 0 and cfg.hotspot_profiles[1].id or ""
+        if action == "set_default_hotspot" then
+            local id = fv("id")
+            if find_index_by_id(cfg.hotspot_profiles, id) then
+                cfg.default_hotspot_id = id
+                ok = true; message = "已设为默认热点，不会立即切换；如与当前连接不同，将显示为待生效"
+            else
+                ok = false; message = "未找到"
             end
-            if tostring(cfg.default_hotspot_id or "") == id then
-                cfg.default_hotspot_id = cfg.active_hotspot_id
-            end
-            ok = true; message = "已删除"; need_restart = true
-        else
-            ok = false; message = "未找到"
+            return ok, cfg
         end
 
-    elseif action == "set_default_campus" then
-        local id = fv("id")
-        if find_index_by_id(cfg.campus_accounts, id) then
-            cfg.default_campus_id = id
-            ok = true; message = "已设为默认账号，手动登录后生效"
-        else
-            ok = false; message = "未找到"
-        end
-
-    elseif action == "set_default_hotspot" then
-        local id = fv("id")
-        if find_index_by_id(cfg.hotspot_profiles, id) then
-            cfg.default_hotspot_id = id
-            ok = true; message = "已设为默认热点，不会立即切换；如与当前连接不同，将显示为待生效"
-        else
-            ok = false; message = "未找到"
-        end
-    end
+        return false, cfg
+    end)
 
     if ok then
-        save_config_json(cfg)
         if need_restart then
             sys.call("(sleep 1; /etc/init.d/smart_srun restart >/dev/null 2>&1) >/dev/null 2>&1 &")
         end

@@ -3,6 +3,7 @@
 import json
 import os
 import posixpath
+import re
 import shlex
 import sys
 import time
@@ -30,6 +31,10 @@ RUNTIME_TARGETS = [
     {
         "local": "root/usr/lib/smart_srun/client.py",
         "remote": "/usr/lib/smart_srun/client.py",
+    },
+    {
+        "local": "root/usr/lib/smart_srun/cli.py",
+        "remote": "/usr/lib/smart_srun/cli.py",
     },
     {
         "local": "root/usr/lib/smart_srun/config.py",
@@ -91,8 +96,16 @@ LUA_AND_SERVICE_TARGETS = [
         "remote": "/usr/lib/lua/luci/controller/smart_srun.lua",
     },
     {
+        "local": "root/usr/lib/lua/luci/smart_srun/schema.lua",
+        "remote": "/usr/lib/lua/luci/smart_srun/schema.lua",
+    },
+    {
         "local": "root/usr/lib/lua/luci/model/cbi/smart_srun.lua",
         "remote": "/usr/lib/lua/luci/model/cbi/smart_srun.lua",
+    },
+    {
+        "local": "root/www/luci-static/resources/smart_srun.js",
+        "remote": "/www/luci-static/resources/smart_srun.js",
     },
     {
         "local": "root/etc/init.d/smart_srun",
@@ -114,6 +127,7 @@ def build_remote_commands():
         "syntax_checks": [
             "python3 -m py_compile %s" % " ".join(python_files),
             "lua -e \"assert(loadfile('/usr/lib/lua/luci/controller/smart_srun.lua'))\"",
+            "lua -e \"assert(loadfile('/usr/lib/lua/luci/smart_srun/schema.lua'))\"",
             "lua -e \"assert(loadfile('/usr/lib/lua/luci/model/cbi/smart_srun.lua'))\"",
             "sh -n /etc/init.d/smart_srun",
         ],
@@ -127,7 +141,7 @@ def build_remote_commands():
             "/etc/init.d/uwsgi restart",
         ],
         "sanity_checks": [
-            "python3 -c \"import sys; sys.path.insert(0, '/usr/lib/smart_srun'); import school_runtime; import schools; import srun_auth; import orchestrator; import snapshot; import daemon; print('runtime-loader-import-ok')\"",
+            "python3 -c \"import sys; sys.path.insert(0, '/usr/lib/smart_srun'); import cli; import school_runtime; import schools; import srun_auth; import orchestrator; import snapshot; import daemon; print('runtime-loader-import-ok')\"",
             "srunnet status",
             "srunnet schools",
             "srunnet schools inspect --selected",
@@ -274,6 +288,13 @@ def fetch_luci_page(opener):
     return body
 
 
+def fetch_luci_asset(opener, asset_path):
+    base = parse.urlsplit(LUCI_BASE_URL)
+    asset_url = parse.urlunsplit((base.scheme, base.netloc, asset_path, "", ""))
+    _, body, _ = open_url(opener, asset_url, timeout=15)
+    return body
+
+
 def verify_luci_page(expected_descriptor_count):
     opener = build_luci_opener()
     login_body = login_luci(opener)
@@ -299,6 +320,14 @@ def verify_luci_page(expected_descriptor_count):
         raise RuntimeError(
             "LuCI page still contains removed markers: %s" % ", ".join(present)
         )
+
+    match = re.search(r'(/luci-static/resources/smart_srun\.js(?:\?[^"\']*)?)', page)
+    if not match:
+        raise RuntimeError("LuCI page missing expected markers: smart_srun.js asset")
+
+    asset_body = fetch_luci_asset(opener, match.group(1))
+    if "smartOpenBlockingFeedback" not in asset_body:
+        raise RuntimeError("LuCI static asset missing expected runtime hooks")
     return page
 
 

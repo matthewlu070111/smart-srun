@@ -648,18 +648,22 @@ class ForceClosePluginSourceTests(unittest.TestCase):
         lua_source = read_repo_text(
             "root", "usr", "lib", "lua", "luci", "model", "cbi", "smart_srun.lua"
         )
+        js_source = read_repo_text(
+            "root", "www", "luci-static", "resources", "smart_srun.js"
+        )
 
         self.assertIn("smart-srun-force-close", lua_source)
         self.assertIn("强制关闭插件", lua_source)
+        self.assertIn("/luci-static/resources/smart_srun.js", lua_source)
         self.assertIn(
-            "forceClose.addEventListener('click', enqueueForceClose)", lua_source
+            "forceClose.addEventListener('click', enqueueForceClose)", js_source
         )
         self.assertIn(
             "confirm('这会停止 SMART SRun 服务并终止插件进程，是否继续？')",
-            lua_source,
+            js_source,
         )
         self.assertIn(
-            "xhr.send('action=' + encodeURIComponent('force_stop'));", lua_source
+            "xhr.send('action=' + encodeURIComponent('force_stop'));", js_source
         )
 
     def test_shared_force_stop_controller_path_stays_smart_only(self):
@@ -678,18 +682,54 @@ class ForceClosePluginSourceTests(unittest.TestCase):
 
 
 class LuciSourceHardeningTests(unittest.TestCase):
-    def test_cbi_model_escapes_embedded_json_inside_script_blocks(self):
+    def test_cbi_model_uses_escaped_hidden_json_payloads_and_static_js_asset(self):
         source = read_repo_text(
             "root", "usr", "lib", "lua", "luci", "model", "cbi", "smart_srun.lua"
         )
 
-        self.assertIn("local function safe_json_for_script(json_str)", source)
-        self.assertIn('gsub("<", "\\\\u003C")', source)
-        self.assertIn(
-            "var campusData = ]] .. safe_json_for_script(campus_json) .. [[;", source
+        self.assertIn("/luci-static/resources/smart_srun.js", source)
+        self.assertIn('id="smart-campus-data"', source)
+        self.assertIn('id="smart-hotspot-data"', source)
+        self.assertIn("util.pcdata(campus_json)", source)
+        self.assertIn("util.pcdata(hotspot_json)", source)
+        self.assertNotIn("safe_json_for_script", source)
+        self.assertNotIn('<script type="text/javascript">', source)
+
+    def test_luci_model_and_controller_share_schema_module(self):
+        controller_source = read_repo_text(
+            "root", "usr", "lib", "lua", "luci", "controller", "smart_srun.lua"
         )
+        model_source = read_repo_text(
+            "root", "usr", "lib", "lua", "luci", "model", "cbi", "smart_srun.lua"
+        )
+        schema_source = read_repo_text(
+            "root", "usr", "lib", "lua", "luci", "smart_srun", "schema.lua"
+        )
+
+        self.assertIn('require "luci.smart_srun.schema"', controller_source)
+        self.assertIn('require "luci.smart_srun.schema"', model_source)
+        self.assertIn("defaults.json", schema_source)
+        self.assertIn("GLOBAL_SCALAR_KEYS", schema_source)
+        self.assertIn("POINTER_KEYS", schema_source)
+        self.assertIn("LIST_KEYS", schema_source)
+        self.assertIn("global_scalar_key_set", schema_source)
+        self.assertNotIn("local GLOBAL_SCALAR_KEYS_SET = {}", controller_source)
+
+    def test_model_save_cfg_merges_latest_pointer_and_list_state(self):
+        model_source = read_repo_text(
+            "root", "usr", "lib", "lua", "luci", "model", "cbi", "smart_srun.lua"
+        )
+
+        self.assertIn("local dirty_scalar_keys = {}", model_source)
+        self.assertIn("local school_extra_dirty = false", model_source)
         self.assertIn(
-            "var hotspotData = ]] .. safe_json_for_script(hotspot_json) .. [[;", source
+            'local latest = jsonc.parse(fs.readfile(CONFIG_FILE) or "{}")', model_source
+        )
+        self.assertIn("dirty_scalar_keys[key]", model_source)
+        self.assertIn('out[key] = tostring(latest[key] or "")', model_source)
+        self.assertIn(
+            'out[key] = type(latest[key]) == "table" and latest[key] or {}',
+            model_source,
         )
 
     def test_luci_config_writes_use_temp_file_replace_flow(self):
@@ -716,6 +756,7 @@ class LuciSourceHardeningTests(unittest.TestCase):
         expected_runtime_payload = {
             "root/usr/bin/srunnet",
             "root/usr/lib/smart_srun/client.py",
+            "root/usr/lib/smart_srun/cli.py",
             "root/usr/lib/smart_srun/config.py",
             "root/usr/lib/smart_srun/crypto.py",
             "root/usr/lib/smart_srun/network.py",
@@ -729,6 +770,8 @@ class LuciSourceHardeningTests(unittest.TestCase):
             "root/usr/lib/smart_srun/schools/__init__.py",
             "root/usr/lib/smart_srun/schools/_base.py",
             "root/usr/lib/smart_srun/schools/jxnu.py",
+            "root/usr/lib/lua/luci/smart_srun/schema.lua",
+            "root/www/luci-static/resources/smart_srun.js",
         }
 
         self.assertTrue(
@@ -788,7 +831,15 @@ class LuciSourceHardeningTests(unittest.TestCase):
         )
         self.assertTrue(
             any(
-                "import school_runtime" in command and "import schools" in command
+                "/usr/lib/lua/luci/smart_srun/schema.lua" in command
+                for command in syntax_commands
+            )
+        )
+        self.assertTrue(
+            any(
+                "import school_runtime" in command
+                and "import schools" in command
+                and "import cli" in command
                 for command in sanity_commands
             ),
             "hot update sanity checks must smoke-test runtime loader imports",
@@ -818,6 +869,7 @@ class LuciSourceHardeningTests(unittest.TestCase):
         hot_update = load_hot_update_module(self)
         page = """
         <html>
+            <script src="/luci-static/resources/smart_srun.js"></script>
             <input id="cbid.smart_srun.main.school" />
             <input id="cbid.smart_srun.main._school_extra_region" />
         </html>
@@ -828,9 +880,34 @@ class LuciSourceHardeningTests(unittest.TestCase):
                 with mock.patch.object(
                     hot_update, "fetch_luci_page", return_value=page
                 ):
-                    verified = hot_update.verify_luci_page(expected_descriptor_count=1)
+                    with mock.patch.object(
+                        hot_update,
+                        "open_url",
+                        return_value=(
+                            200,
+                            "window.smartOpenBlockingFeedback = function() {};",
+                            "http://router/luci-static/resources/smart_srun.js",
+                        ),
+                    ) as open_url:
+                        verified = hot_update.verify_luci_page(
+                            expected_descriptor_count=1
+                        )
 
         self.assertEqual(verified, page)
+        open_url.assert_called()
+
+
+class CliSplitSourceTests(unittest.TestCase):
+    def test_client_entrypoint_uses_cli_main(self):
+        client_source = read_repo_text("root", "usr", "lib", "smart_srun", "client.py")
+        cli_source = read_repo_text("root", "usr", "lib", "smart_srun", "cli.py")
+        daemon_source = read_repo_text("root", "usr", "lib", "smart_srun", "daemon.py")
+
+        self.assertIn("from cli import main", client_source)
+        self.assertIn("import argparse", cli_source)
+        self.assertIn('prog="srunnet"', cli_source)
+        self.assertNotIn('prog="srunnet"', daemon_source)
+        self.assertNotIn("import argparse", daemon_source)
 
 
 if __name__ == "__main__":

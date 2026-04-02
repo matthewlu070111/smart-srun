@@ -830,7 +830,7 @@ def _config_get(key):
 def _config_set(pairs, json_file=None):
     """Set config values from KEY=VALUE pairs or import from a JSON file."""
     import json as _json
-    from config import save_json_raw_config, GLOBAL_SCALAR_KEYS
+    from config import GLOBAL_SCALAR_KEYS, update_json_raw_config
 
     raw = load_json_raw_config()
 
@@ -844,8 +844,7 @@ def _config_set(pairs, json_file=None):
         if not isinstance(imported, dict):
             print("JSON 文件内容必须是对象")
             return
-        raw.update(imported)
-        save_json_raw_config(raw)
+        update_json_raw_config(lambda current: current.update(imported))
         print("已从 %s 导入配置（%d 个字段）" % (json_file, len(imported)))
         return
 
@@ -865,10 +864,13 @@ def _config_set(pairs, json_file=None):
             print("可用: %s" % ", ".join(sorted(GLOBAL_SCALAR_KEYS)))
             return
         old = raw.get(key, "")
-        raw[key] = val
         changed.append((key, old, val))
 
-    save_json_raw_config(raw)
+    def _apply(current):
+        for key, _, val in changed:
+            current[key] = val
+
+    update_json_raw_config(_apply)
     for key, old, val in changed:
         print("  %s: %s -> %s" % (key, old or "(empty)", val))
     print("配置已保存。重启生效: /etc/init.d/smart_srun restart")
@@ -1028,7 +1030,7 @@ def _interactive_hotspot(existing=None):
 
 
 def _config_account(args):
-    from config import save_json_raw_config, _next_id, _find_item_by_id
+    from config import _find_item_by_id, _next_id, update_json_raw_config
 
     raw = load_json_raw_config()
     accounts = raw.get("campus_accounts", [])
@@ -1045,15 +1047,25 @@ def _config_account(args):
         fields = _interactive_campus()
         if not fields:
             return
-        new_id = _next_id(accounts, "campus")
-        fields["id"] = new_id
-        accounts.append(fields)
-        raw["campus_accounts"] = accounts
-        if not raw.get("default_campus_id"):
-            raw["default_campus_id"] = new_id
-            raw["active_campus_id"] = new_id
-        save_json_raw_config(raw)
-        print("\n已添加: %s (%s)" % (new_id, fields.get("label", "")))
+        state = {"new_id": ""}
+
+        def _apply(current):
+            current_accounts = current.get("campus_accounts", [])
+            if not isinstance(current_accounts, list):
+                current_accounts = []
+            new_id = _next_id(current_accounts, "campus")
+            state["new_id"] = new_id
+            item = dict(fields)
+            item["id"] = new_id
+            current_accounts = list(current_accounts)
+            current_accounts.append(item)
+            current["campus_accounts"] = current_accounts
+            if not current.get("default_campus_id"):
+                current["default_campus_id"] = new_id
+                current["active_campus_id"] = new_id
+
+        update_json_raw_config(_apply)
+        print("\n已添加: %s (%s)" % (state["new_id"], fields.get("label", "")))
         return
 
     if subcmd == "edit":
@@ -1065,12 +1077,18 @@ def _config_account(args):
         if not fields:
             return
         fields["id"] = args.id
-        for i, acc in enumerate(accounts):
-            if str(acc.get("id", "")) == args.id:
-                accounts[i] = fields
-                break
-        raw["campus_accounts"] = accounts
-        save_json_raw_config(raw)
+
+        def _apply(current):
+            current_accounts = current.get("campus_accounts", [])
+            if not isinstance(current_accounts, list):
+                current_accounts = []
+            for i, acc in enumerate(current_accounts):
+                if str(acc.get("id", "")) == args.id:
+                    current_accounts[i] = dict(fields)
+                    break
+            current["campus_accounts"] = current_accounts
+
+        update_json_raw_config(_apply)
         print("\n已更新: %s (%s)" % (args.id, fields.get("label", "")))
         return
 
@@ -1079,13 +1097,23 @@ def _config_account(args):
         if not found:
             print("未找到账号: %s" % args.id)
             return
-        accounts = [a for a in accounts if str(a.get("id", "")) != args.id]
-        raw["campus_accounts"] = accounts
-        if raw.get("default_campus_id") == args.id:
-            raw["default_campus_id"] = accounts[0]["id"] if accounts else ""
-        if raw.get("active_campus_id") == args.id:
-            raw["active_campus_id"] = raw.get("default_campus_id", "")
-        save_json_raw_config(raw)
+
+        def _apply(current):
+            current_accounts = current.get("campus_accounts", [])
+            if not isinstance(current_accounts, list):
+                current_accounts = []
+            current_accounts = [
+                a for a in current_accounts if str(a.get("id", "")) != args.id
+            ]
+            current["campus_accounts"] = current_accounts
+            if current.get("default_campus_id") == args.id:
+                current["default_campus_id"] = (
+                    current_accounts[0]["id"] if current_accounts else ""
+                )
+            if current.get("active_campus_id") == args.id:
+                current["active_campus_id"] = current.get("default_campus_id", "")
+
+        update_json_raw_config(_apply)
         print("已删除: %s" % args.id)
         return
 
@@ -1094,14 +1122,15 @@ def _config_account(args):
         if not found:
             print("未找到账号: %s" % args.id)
             return
-        raw["default_campus_id"] = args.id
-        save_json_raw_config(raw)
+        update_json_raw_config(
+            lambda current: current.__setitem__("default_campus_id", args.id)
+        )
         print("已设为默认: %s (%s)" % (args.id, found.get("label", "")))
         return
 
 
 def _config_hotspot(args):
-    from config import save_json_raw_config, _next_id, _find_item_by_id
+    from config import _find_item_by_id, _next_id, update_json_raw_config
 
     raw = load_json_raw_config()
     hotspots = raw.get("hotspot_profiles", [])
@@ -1118,15 +1147,25 @@ def _config_hotspot(args):
         fields = _interactive_hotspot()
         if not fields:
             return
-        new_id = _next_id(hotspots, "hotspot")
-        fields["id"] = new_id
-        hotspots.append(fields)
-        raw["hotspot_profiles"] = hotspots
-        if not raw.get("default_hotspot_id"):
-            raw["default_hotspot_id"] = new_id
-            raw["active_hotspot_id"] = new_id
-        save_json_raw_config(raw)
-        print("\n已添加: %s (%s)" % (new_id, fields.get("label", "")))
+        state = {"new_id": ""}
+
+        def _apply(current):
+            current_hotspots = current.get("hotspot_profiles", [])
+            if not isinstance(current_hotspots, list):
+                current_hotspots = []
+            new_id = _next_id(current_hotspots, "hotspot")
+            state["new_id"] = new_id
+            item = dict(fields)
+            item["id"] = new_id
+            current_hotspots = list(current_hotspots)
+            current_hotspots.append(item)
+            current["hotspot_profiles"] = current_hotspots
+            if not current.get("default_hotspot_id"):
+                current["default_hotspot_id"] = new_id
+                current["active_hotspot_id"] = new_id
+
+        update_json_raw_config(_apply)
+        print("\n已添加: %s (%s)" % (state["new_id"], fields.get("label", "")))
         return
 
     if subcmd == "edit":
@@ -1138,12 +1177,18 @@ def _config_hotspot(args):
         if not fields:
             return
         fields["id"] = args.id
-        for i, hp in enumerate(hotspots):
-            if str(hp.get("id", "")) == args.id:
-                hotspots[i] = fields
-                break
-        raw["hotspot_profiles"] = hotspots
-        save_json_raw_config(raw)
+
+        def _apply(current):
+            current_hotspots = current.get("hotspot_profiles", [])
+            if not isinstance(current_hotspots, list):
+                current_hotspots = []
+            for i, hp in enumerate(current_hotspots):
+                if str(hp.get("id", "")) == args.id:
+                    current_hotspots[i] = dict(fields)
+                    break
+            current["hotspot_profiles"] = current_hotspots
+
+        update_json_raw_config(_apply)
         print("\n已更新: %s (%s)" % (args.id, fields.get("label", "")))
         return
 
@@ -1152,13 +1197,23 @@ def _config_hotspot(args):
         if not found:
             print("未找到热点配置: %s" % args.id)
             return
-        hotspots = [h for h in hotspots if str(h.get("id", "")) != args.id]
-        raw["hotspot_profiles"] = hotspots
-        if raw.get("default_hotspot_id") == args.id:
-            raw["default_hotspot_id"] = hotspots[0]["id"] if hotspots else ""
-        if raw.get("active_hotspot_id") == args.id:
-            raw["active_hotspot_id"] = raw.get("default_hotspot_id", "")
-        save_json_raw_config(raw)
+
+        def _apply(current):
+            current_hotspots = current.get("hotspot_profiles", [])
+            if not isinstance(current_hotspots, list):
+                current_hotspots = []
+            current_hotspots = [
+                h for h in current_hotspots if str(h.get("id", "")) != args.id
+            ]
+            current["hotspot_profiles"] = current_hotspots
+            if current.get("default_hotspot_id") == args.id:
+                current["default_hotspot_id"] = (
+                    current_hotspots[0]["id"] if current_hotspots else ""
+                )
+            if current.get("active_hotspot_id") == args.id:
+                current["active_hotspot_id"] = current.get("default_hotspot_id", "")
+
+        update_json_raw_config(_apply)
         print("已删除: %s" % args.id)
         return
 
@@ -1167,219 +1222,14 @@ def _config_hotspot(args):
         if not found:
             print("未找到热点配置: %s" % args.id)
             return
-        raw["default_hotspot_id"] = args.id
-        save_json_raw_config(raw)
+        update_json_raw_config(
+            lambda current: current.__setitem__("default_hotspot_id", args.id)
+        )
         print("已设为默认: %s (%s)" % (args.id, found.get("label", "")))
         return
 
 
-# ---------------------------------------------------------------------------
-# CLI entry point (subcommand style)
-# ---------------------------------------------------------------------------
-
-
 def main():
-    import argparse
-    import json as _json
-    import schools
-    import sys
+    from cli import main as cli_main
 
-    cfg = load_config()
-    runtime = None
-    app_ctx = None
-    argv = sys.argv[1:]
-
-    parser = argparse.ArgumentParser(
-        prog="srunnet",
-        description="SMART SRun campus network client for OpenWrt",
-    )
-    sub = parser.add_subparsers(dest="command")
-
-    # --- top-level commands ---
-    sub.add_parser("status", help="show current status")
-    sub.add_parser("login", help="login once")
-    sub.add_parser("logout", help="logout current account")
-    sub.add_parser("relogin", help="logout then login")
-    sub.add_parser("daemon", help="run as daemon (used by init script)")
-    sub.add_parser("enable", help="enable the daemon service")
-    sub.add_parser("disable", help="disable the daemon service")
-    p_schools = sub.add_parser("schools", help="list available school profiles (JSON)")
-    schools_sub = p_schools.add_subparsers(dest="schools_command")
-    p_schools_inspect = schools_sub.add_parser("inspect", help="inspect school runtime")
-    p_schools_inspect.add_argument(
-        "--selected",
-        action="store_true",
-        help="show selected runtime metadata (JSON)",
-    )
-
-    p_log = sub.add_parser("log", help="tail the daemon log")
-    p_log.add_argument(
-        "-n", type=int, default=0, help="show last N lines then exit (default: follow)"
-    )
-    p_log.add_argument(
-        "log_target",
-        nargs="?",
-        choices=["runtime"],
-        help="show selected runtime diagnostics",
-    )
-
-    p_switch = sub.add_parser("switch", help="switch network mode")
-    p_switch.add_argument(
-        "target", choices=["hotspot", "campus"], help="switch to hotspot or campus"
-    )
-
-    # --- config subcommand tree ---
-    p_config = sub.add_parser("config", help="view or modify configuration")
-    config_sub = p_config.add_subparsers(dest="config_command")
-
-    config_sub.add_parser("show", help="show full configuration summary")
-
-    p_get = config_sub.add_parser("get", help="get a scalar config value")
-    p_get.add_argument("key", help="config key name")
-
-    p_set = config_sub.add_parser("set", help="set config values or import JSON")
-    p_set.add_argument(
-        "pairs", nargs="*", metavar="KEY=VALUE", help="scalar config values to set"
-    )
-    p_set.add_argument(
-        "-f", "--file", metavar="PATH", help="import config from a JSON file"
-    )
-
-    # config account
-    p_account = config_sub.add_parser("account", help="manage campus accounts")
-    account_sub = p_account.add_subparsers(dest="account_command")
-    account_sub.add_parser("add", help="add a campus account (interactive)")
-    p_acc_edit = account_sub.add_parser("edit", help="edit a campus account")
-    p_acc_edit.add_argument("id", help="account ID (e.g. campus-1)")
-    p_acc_rm = account_sub.add_parser("rm", help="remove a campus account")
-    p_acc_rm.add_argument("id", help="account ID")
-    p_acc_def = account_sub.add_parser("default", help="set default campus account")
-    p_acc_def.add_argument("id", help="account ID")
-
-    # config hotspot
-    p_hotspot = config_sub.add_parser("hotspot", help="manage hotspot profiles")
-    hotspot_sub = p_hotspot.add_subparsers(dest="hotspot_command")
-    hotspot_sub.add_parser("add", help="add a hotspot profile (interactive)")
-    p_hp_edit = hotspot_sub.add_parser("edit", help="edit a hotspot profile")
-    p_hp_edit.add_argument("id", help="hotspot ID (e.g. hotspot-1)")
-    p_hp_rm = hotspot_sub.add_parser("rm", help="remove a hotspot profile")
-    p_hp_rm.add_argument("id", help="hotspot ID")
-    p_hp_def = hotspot_sub.add_parser("default", help="set default hotspot profile")
-    p_hp_def.add_argument("id", help="hotspot ID")
-
-    needs_runtime_for_parse = bool(argv) and not argv[0].startswith("-")
-    if needs_runtime_for_parse and argv[0] not in school_runtime.CORE_RESERVED_COMMANDS:
-        runtime = school_runtime.resolve_runtime(cfg)
-        app_ctx = school_runtime.build_app_context(cfg, runtime=runtime)
-        for item in school_runtime.get_runtime_cli_commands(runtime):
-            sub.add_parser(item["name"], help=item.get("help") or None)
-
-    args = parser.parse_args()
-
-    # No command → show status
-    if not args.command:
-        _show_status(cfg)
-        return
-
-    # --- dispatch ---
-    if args.command == "status":
-        _show_status(cfg)
-        return
-
-    if args.command == "login":
-        runtime = runtime or school_runtime.resolve_runtime(cfg)
-        app_ctx = app_ctx or school_runtime.build_app_context(cfg, runtime=runtime)
-        _emit_cli_result(_runtime_cli_login(app_ctx))
-        return
-
-    if args.command == "logout":
-        runtime = runtime or school_runtime.resolve_runtime(cfg)
-        app_ctx = app_ctx or school_runtime.build_app_context(cfg, runtime=runtime)
-        _emit_cli_result(_runtime_cli_logout(app_ctx))
-        return
-
-    if args.command == "relogin":
-        runtime = runtime or school_runtime.resolve_runtime(cfg)
-        app_ctx = app_ctx or school_runtime.build_app_context(cfg, runtime=runtime)
-        _emit_cli_result(_runtime_cli_relogin(app_ctx))
-        return
-
-    if args.command == "daemon":
-        runtime = runtime or school_runtime.resolve_runtime(cfg)
-        run_daemon(runtime=runtime)
-        return
-
-    if args.command == "log":
-        if getattr(args, "log_target", "") == "runtime":
-            _show_runtime_log(cfg)
-            return
-        _tail_log(args.n)
-        return
-
-    if args.command == "enable":
-        _config_set(["enabled=1"])
-        return
-
-    if args.command == "disable":
-        _config_set(["enabled=0"])
-        return
-
-    if args.command == "schools":
-        if getattr(args, "schools_command", "") == "inspect" and getattr(
-            args, "selected", False
-        ):
-            inspect_payload = build_school_runtime_luci_contract(
-                cfg, school_runtime.inspect_runtime(cfg)
-            )
-            print(
-                _json.dumps(
-                    inspect_payload,
-                    ensure_ascii=False,
-                    indent=2,
-                )
-            )
-            return
-        print(_json.dumps(schools.list_schools(), ensure_ascii=False, indent=2))
-        return
-
-    if args.command == "switch":
-        cfg = load_config()
-        expect_hotspot = args.target == "hotspot"
-        _, message = run_switch(cfg, expect_hotspot=expect_hotspot)
-        log(
-            "INFO",
-            "action_result",
-            "switch %s: %s" % (args.target, message),
-            action="switch_%s" % args.target,
-        )
-        print(message)
-        return
-
-    if args.command == "config":
-        cmd = args.config_command
-
-        if not cmd or cmd == "show":
-            _show_config()
-            return
-
-        if cmd == "get":
-            _config_get(args.key)
-            return
-
-        if cmd == "set":
-            _config_set(args.pairs, json_file=args.file)
-            return
-
-        if cmd == "account":
-            _config_account(args)
-            return
-
-        if cmd == "hotspot":
-            _config_hotspot(args)
-            return
-
-        # Shouldn't reach here
-        parser.parse_args(["config", "--help"])
-        return
-
-    _emit_cli_result(school_runtime.dispatch_custom_cli(runtime, app_ctx, args))
+    return cli_main()
