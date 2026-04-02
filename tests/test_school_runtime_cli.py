@@ -17,6 +17,7 @@ if MODULE_ROOT not in sys.path:
 
 
 import daemon
+import version_info
 import school_runtime
 import schools
 
@@ -402,6 +403,23 @@ class SchoolRuntimeCliTests(unittest.TestCase):
         self.assertEqual(output, "")
         tail_log.assert_called_once_with(0)
 
+    def test_version_flag_prints_cli_package_and_version(self):
+        stdout = io.StringIO()
+        with (
+            mock.patch.object(sys, "argv", ["srunnet", "--version"]),
+            mock.patch.object(
+                version_info,
+                "get_cli_version_string",
+                return_value="luci-app-smart-srun-bundle v1.3.0-r1",
+            ),
+            redirect_stdout(stdout),
+        ):
+            with self.assertRaises(SystemExit) as exc:
+                daemon.main()
+
+        self.assertEqual(0, exc.exception.code)
+        self.assertEqual("luci-app-smart-srun-bundle v1.3.0-r1\n", stdout.getvalue())
+
     def test_schools_command_works_when_runtime_resolution_is_broken(self):
         payload = [{"short_name": "jxnu"}]
         stdout = io.StringIO()
@@ -545,6 +563,9 @@ class DaemonStartupStateTests(unittest.TestCase):
             save_calls.append((message, dict(state or {}), dict(extra)))
 
         with (
+            mock.patch.object(
+                daemon, "_acquire_daemon_lock", return_value=object(), create=True
+            ),
             mock.patch.object(daemon, "reconcile_manual_login_service_guard"),
             mock.patch.object(daemon, "load_config", return_value=dict(cfg)),
             mock.patch.object(
@@ -583,23 +604,84 @@ class DaemonStartupStateTests(unittest.TestCase):
         self.assertEqual(startup_extra["last_action_ts"], 1711111111)
 
 
+class DaemonSingleInstanceTests(unittest.TestCase):
+    def test_run_daemon_acquires_process_lock_before_entering_loop(self):
+        cfg = {"enabled": "1", "interval": "30", "school": "custom"}
+
+        class StopLoop(Exception):
+            pass
+
+        with (
+            mock.patch.object(
+                daemon, "_acquire_daemon_lock", create=True, return_value=object()
+            ) as acquire_lock,
+            mock.patch.object(daemon, "reconcile_manual_login_service_guard"),
+            mock.patch.object(daemon, "load_config", return_value=dict(cfg)),
+            mock.patch.object(
+                school_runtime, "resolve_runtime", return_value=FakeRuntime()
+            ),
+            mock.patch.object(
+                daemon, "_build_startup_status_payload", return_value=("startup", {})
+            ),
+            mock.patch.object(daemon, "build_runtime_snapshot", return_value={}),
+            mock.patch.object(daemon, "save_runtime_status"),
+            mock.patch.object(
+                daemon, "handle_runtime_action", side_effect=StopLoop("stop after lock")
+            ),
+        ):
+            with self.assertRaises(StopLoop):
+                daemon.run_daemon()
+
+        acquire_lock.assert_called_once_with()
+
+    def test_run_daemon_stops_immediately_when_process_lock_is_unavailable(self):
+        cfg = {"enabled": "1", "interval": "30", "school": "custom"}
+
+        with (
+            mock.patch.object(
+                daemon, "_acquire_daemon_lock", create=True, side_effect=SystemExit(1)
+            ),
+            mock.patch.object(daemon, "reconcile_manual_login_service_guard"),
+            mock.patch.object(daemon, "load_config", return_value=dict(cfg)),
+            mock.patch.object(
+                school_runtime, "resolve_runtime", return_value=FakeRuntime()
+            ),
+            mock.patch.object(
+                daemon, "_build_startup_status_payload", return_value=("startup", {})
+            ),
+            mock.patch.object(daemon, "build_runtime_snapshot", return_value={}),
+            mock.patch.object(daemon, "save_runtime_status"),
+            mock.patch.object(
+                daemon,
+                "handle_runtime_action",
+                side_effect=AssertionError("lock failure should stop before main loop"),
+            ),
+        ):
+            with self.assertRaises(SystemExit):
+                daemon.run_daemon()
+
+
 class ForceClosePluginSourceTests(unittest.TestCase):
     def test_switch_section_exposes_page_level_force_close_flow(self):
         lua_source = read_repo_text(
             "root", "usr", "lib", "lua", "luci", "model", "cbi", "smart_srun.lua"
         )
+        js_source = read_repo_text(
+            "root", "www", "luci-static", "resources", "smart_srun.js"
+        )
 
         self.assertIn("smart-srun-force-close", lua_source)
         self.assertIn("强制关闭插件", lua_source)
+        self.assertIn("/luci-static/resources/smart_srun.js", lua_source)
         self.assertIn(
-            "forceClose.addEventListener('click', enqueueForceClose)", lua_source
+            "forceClose.addEventListener('click', enqueueForceClose)", js_source
         )
         self.assertIn(
             "confirm('这会停止 SMART SRun 服务并终止插件进程，是否继续？')",
-            lua_source,
+            js_source,
         )
         self.assertIn(
-            "xhr.send('action=' + encodeURIComponent('force_stop'));", lua_source
+            "xhr.send('action=' + encodeURIComponent('force_stop'));", js_source
         )
 
     def test_shared_force_stop_controller_path_stays_smart_only(self):
@@ -616,6 +698,104 @@ class ForceClosePluginSourceTests(unittest.TestCase):
         self.assertIn("/usr/lib/smart_srun/client.py", controller_source)
         self.assertNotIn("jxnu_srun", controller_source)
 
+
+class LuciSourceHardeningTests(unittest.TestCase):
+    def test_cbi_model_uses_escaped_hidden_json_payloads_and_static_js_asset(self):
+        source = read_repo_text(
+            "root", "usr", "lib", "lua", "luci", "model", "cbi", "smart_srun.lua"
+        )
+
+        self.assertIn("/luci-static/resources/smart_srun.js", source)
+        self.assertIn('id="smart-campus-data"', source)
+        self.assertIn('id="smart-hotspot-data"', source)
+        self.assertIn("util.pcdata(campus_json)", source)
+        self.assertIn("util.pcdata(hotspot_json)", source)
+        self.assertNotIn("safe_json_for_script", source)
+        self.assertNotIn('<script type="text/javascript">', source)
+
+    def test_cbi_model_renders_version_badge_from_schema_module(self):
+        source = read_repo_text(
+            "root", "usr", "lib", "lua", "luci", "model", "cbi", "smart_srun.lua"
+        )
+        js_source = read_repo_text(
+            "root", "www", "luci-static", "resources", "smart_srun.js"
+        )
+        schema_source = read_repo_text(
+            "root", "usr", "lib", "lua", "luci", "smart_srun", "schema.lua"
+        )
+
+        self.assertIn("schema.installed_package_display_text()", source)
+        self.assertIn("深澜校园网认证配置", source)
+        self.assertIn("当前版本：", source)
+        self.assertIn("smart-srun-version-info", source)
+        self.assertIn("smart-srun-update-dot", source)
+        self.assertIn("Bundle 版", schema_source)
+        self.assertIn("标准版", schema_source)
+        self.assertIn(
+            "https://api.github.com/repos/matthewlu070111/smart-srun/releases/latest",
+            js_source,
+        )
+        self.assertIn(
+            "https://github.com/matthewlu070111/smart-srun/releases",
+            js_source,
+        )
+        self.assertIn("smart-srun-update-dot", js_source)
+        self.assertIn("smart-srun-version-link", js_source)
+
+    def test_luci_model_and_controller_share_schema_module(self):
+        controller_source = read_repo_text(
+            "root", "usr", "lib", "lua", "luci", "controller", "smart_srun.lua"
+        )
+        model_source = read_repo_text(
+            "root", "usr", "lib", "lua", "luci", "model", "cbi", "smart_srun.lua"
+        )
+        schema_source = read_repo_text(
+            "root", "usr", "lib", "lua", "luci", "smart_srun", "schema.lua"
+        )
+
+        self.assertIn('require "luci.smart_srun.schema"', controller_source)
+        self.assertIn('require "luci.smart_srun.schema"', model_source)
+        self.assertIn("defaults.json", schema_source)
+        self.assertIn("GLOBAL_SCALAR_KEYS", schema_source)
+        self.assertIn("POINTER_KEYS", schema_source)
+        self.assertIn("LIST_KEYS", schema_source)
+        self.assertIn("global_scalar_key_set", schema_source)
+        self.assertNotIn("local GLOBAL_SCALAR_KEYS_SET = {}", controller_source)
+
+    def test_model_save_cfg_merges_latest_pointer_and_list_state(self):
+        model_source = read_repo_text(
+            "root", "usr", "lib", "lua", "luci", "model", "cbi", "smart_srun.lua"
+        )
+
+        self.assertIn("local dirty_scalar_keys = {}", model_source)
+        self.assertIn("local school_extra_dirty = false", model_source)
+        self.assertIn(
+            'local latest = jsonc.parse(fs.readfile(CONFIG_FILE) or "{}")', model_source
+        )
+        self.assertIn("dirty_scalar_keys[key]", model_source)
+        self.assertIn('out[key] = tostring(latest[key] or "")', model_source)
+        self.assertIn(
+            'out[key] = type(latest[key]) == "table" and latest[key] or {}',
+            model_source,
+        )
+
+    def test_luci_config_writes_use_temp_file_replace_flow(self):
+        controller_source = read_repo_text(
+            "root", "usr", "lib", "lua", "luci", "controller", "smart_srun.lua"
+        )
+        model_source = read_repo_text(
+            "root", "usr", "lib", "lua", "luci", "model", "cbi", "smart_srun.lua"
+        )
+
+        self.assertIn('local tmp = CONFIG_FILE .. ".tmp"', controller_source)
+        self.assertIn("os.rename(tmp, CONFIG_FILE)", controller_source)
+        self.assertIn('local tmp = CONFIG_FILE .. ".tmp"', model_source)
+        self.assertIn("os.rename(tmp, CONFIG_FILE)", model_source)
+        self.assertNotIn(
+            'fs.writefile(CONFIG_FILE, (jsonc.stringify(out) or "{}") .. "\\n")',
+            model_source,
+        )
+
     def test_hot_update_uploads_runtime_payload_dependency_closure(self):
         hot_update = load_hot_update_module(self)
 
@@ -623,6 +803,7 @@ class ForceClosePluginSourceTests(unittest.TestCase):
         expected_runtime_payload = {
             "root/usr/bin/srunnet",
             "root/usr/lib/smart_srun/client.py",
+            "root/usr/lib/smart_srun/cli.py",
             "root/usr/lib/smart_srun/config.py",
             "root/usr/lib/smart_srun/crypto.py",
             "root/usr/lib/smart_srun/network.py",
@@ -632,10 +813,13 @@ class ForceClosePluginSourceTests(unittest.TestCase):
             "root/usr/lib/smart_srun/daemon.py",
             "root/usr/lib/smart_srun/snapshot.py",
             "root/usr/lib/smart_srun/school_runtime.py",
+            "root/usr/lib/smart_srun/version_info.py",
             "root/usr/lib/smart_srun/defaults.json",
             "root/usr/lib/smart_srun/schools/__init__.py",
             "root/usr/lib/smart_srun/schools/_base.py",
             "root/usr/lib/smart_srun/schools/jxnu.py",
+            "root/usr/lib/lua/luci/smart_srun/schema.lua",
+            "root/www/luci-static/resources/smart_srun.js",
         }
 
         self.assertTrue(
@@ -695,7 +879,15 @@ class ForceClosePluginSourceTests(unittest.TestCase):
         )
         self.assertTrue(
             any(
-                "import school_runtime" in command and "import schools" in command
+                "/usr/lib/lua/luci/smart_srun/schema.lua" in command
+                for command in syntax_commands
+            )
+        )
+        self.assertTrue(
+            any(
+                "import school_runtime" in command
+                and "import schools" in command
+                and "import cli" in command
                 for command in sanity_commands
             ),
             "hot update sanity checks must smoke-test runtime loader imports",
@@ -725,6 +917,7 @@ class ForceClosePluginSourceTests(unittest.TestCase):
         hot_update = load_hot_update_module(self)
         page = """
         <html>
+            <script src="/luci-static/resources/smart_srun.js"></script>
             <input id="cbid.smart_srun.main.school" />
             <input id="cbid.smart_srun.main._school_extra_region" />
         </html>
@@ -735,9 +928,44 @@ class ForceClosePluginSourceTests(unittest.TestCase):
                 with mock.patch.object(
                     hot_update, "fetch_luci_page", return_value=page
                 ):
-                    verified = hot_update.verify_luci_page(expected_descriptor_count=1)
+                    with mock.patch.object(
+                        hot_update,
+                        "open_url",
+                        return_value=(
+                            200,
+                            "window.smartOpenBlockingFeedback = function() {};",
+                            "http://router/luci-static/resources/smart_srun.js",
+                        ),
+                    ) as open_url:
+                        verified = hot_update.verify_luci_page(
+                            expected_descriptor_count=1
+                        )
 
         self.assertEqual(verified, page)
+        open_url.assert_called()
+
+
+class CliSplitSourceTests(unittest.TestCase):
+    def test_client_entrypoint_uses_cli_main(self):
+        client_source = read_repo_text("root", "usr", "lib", "smart_srun", "client.py")
+        cli_source = read_repo_text("root", "usr", "lib", "smart_srun", "cli.py")
+        daemon_source = read_repo_text("root", "usr", "lib", "smart_srun", "daemon.py")
+
+        self.assertIn("from cli import main", client_source)
+        self.assertIn("import argparse", cli_source)
+        self.assertIn('prog="srunnet"', cli_source)
+        self.assertNotIn('prog="srunnet"', daemon_source)
+        self.assertNotIn("import argparse", daemon_source)
+
+
+class PackagingLayoutTests(unittest.TestCase):
+    def test_makefile_installs_new_luci_schema_and_static_asset(self):
+        makefile = read_repo_text("Makefile")
+
+        self.assertIn("/usr/lib/lua/luci/smart_srun", makefile)
+        self.assertIn("root/usr/lib/lua/luci/smart_srun/*.lua", makefile)
+        self.assertIn("/www/luci-static/resources", makefile)
+        self.assertIn("root/www/luci-static/resources/*.js", makefile)
 
 
 if __name__ == "__main__":

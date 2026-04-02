@@ -103,6 +103,9 @@
 srunnet
 srunnet status
 
+# 查看当前安装包类型与版本
+srunnet --version
+
 # 登录 / 登出 / 重新登录
 srunnet login
 srunnet logout
@@ -161,22 +164,36 @@ srunnet config hotspot default hotspot-1
 ```
 root/
 ├── etc/init.d/smart_srun          # procd 服务管理脚本
+├── scripts/
+│   └── hot_update.py              # 开发态热更新脚本（上传到路由器并做远端校验）
+├── tests/
+│   ├── test_school_runtime_cli.py # CLI / LuCI 源码与开发脚本回归测试
+│   └── ...                        # 其他运行时、配置与调度测试
 ├── usr/bin/srunnet                # CLI 入口脚本
-└── usr/lib/smart_srun/
-    ├── client.py                  # 入口（thin wrapper）
-    ├── daemon.py                  # 守护循环 + CLI 参数解析
-    ├── config.py                  # 配置读写 + 状态管理
-    ├── srun_auth.py               # SRun 认证协议实现
-    ├── crypto.py                  # 加密算法（自定义 Base64、HMAC、BX1）
-    ├── network.py                 # HTTP 客户端（urllib/wget/uclient-fetch）
-    ├── wireless.py                # WiFi STA 配置管理
-    ├── orchestrator.py            # 登录/登出编排逻辑
-    ├── snapshot.py                # 运行时快照
-    └── schools/
-        ├── __init__.py            # 学校配置自动发现
-        ├── _base.py               # SchoolProfile 基类
-        └── jxnu.py                # 江西师范大学(默认)配置
+├── usr/lib/smart_srun/
+│   ├── client.py                  # 入口（thin wrapper）
+│   ├── cli.py                     # CLI 参数解析与命令分发
+│   ├── daemon.py                  # 守护循环与 runtime action 执行
+│   ├── config.py                  # 配置读写 + 状态管理
+│   ├── srun_auth.py               # SRun 认证协议实现
+│   ├── crypto.py                  # 加密算法（自定义 Base64、HMAC、BX1）
+│   ├── network.py                 # HTTP 客户端（urllib/wget/uclient-fetch）
+│   ├── wireless.py                # WiFi STA 配置管理
+│   ├── orchestrator.py            # 登录/登出编排逻辑
+│   ├── snapshot.py                # 运行时快照
+│   └── schools/
+│       ├── __init__.py            # 学校配置自动发现
+│       ├── _base.py               # SchoolProfile 基类
+│       └── jxnu.py                # 江西师范大学(默认)配置
+├── usr/lib/lua/luci/
+│   ├── controller/smart_srun.lua  # LuCI 路由与接口
+│   ├── model/cbi/smart_srun.lua   # LuCI 配置页
+│   └── smart_srun/schema.lua      # LuCI 共享配置 schema / key 集合
+└── www/luci-static/resources/
+    └── smart_srun.js              # LuCI 页面交互脚本
 ```
+
+其中，LuCI 页面现在拆成了 "Lua 负责渲染与接口，`smart_srun.js` 负责前端交互" 的结构。打包时 `luci-app-smart-srun` 和 `luci-app-smart-srun-bundle` 都会一起包含 `schema.lua` 和静态 JS 资源。`scripts/` 与 `tests/` 属于开发态文件，不会进入最终 ipk 包。
 
 ### 适配其他学校
 

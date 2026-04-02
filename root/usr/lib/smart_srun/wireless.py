@@ -39,13 +39,21 @@ from network import (
 # WiFi helpers
 # ---------------------------------------------------------------------------
 
+
 def split_network_value(value):
     return [x for x in str(value or "").split() if x]
+
+
+def _sanitize_uci_value(value):
+    return (
+        str(value or "").strip().replace("\n", "").replace("\r", "").replace("\x00", "")
+    )
 
 
 # ---------------------------------------------------------------------------
 # UCI wireless data parsing
 # ---------------------------------------------------------------------------
+
 
 def parse_wireless_iface_data():
     ok, out = run_cmd(["uci", "show", "wireless"])
@@ -77,6 +85,7 @@ def parse_wireless_iface_data():
 # ---------------------------------------------------------------------------
 # STA section queries
 # ---------------------------------------------------------------------------
+
 
 def get_sta_sections(wireless_data=None):
     data = wireless_data if wireless_data is not None else parse_wireless_iface_data()
@@ -194,6 +203,7 @@ def get_sta_profile_from_section(section, wireless_data=None):
 # Radio helpers
 # ---------------------------------------------------------------------------
 
+
 def parse_radio_bands():
     ok, out = run_cmd(["uci", "show", "wireless"])
     if not ok or not out:
@@ -266,6 +276,7 @@ def find_sta_on_radio(radio, wireless_data=None):
 # ---------------------------------------------------------------------------
 # Managed STA sections
 # ---------------------------------------------------------------------------
+
 
 def get_managed_sta_sections(cfg, wireless_data=None):
     data = wireless_data if wireless_data is not None else parse_wireless_iface_data()
@@ -365,6 +376,7 @@ def ensure_named_managed_sta_sections(cfg, wireless_data=None):
 # Network interface creation
 # ---------------------------------------------------------------------------
 
+
 def ensure_network_interface(name="wwan"):
     iface = str(name or "wwan").strip() or "wwan"
     ok, out = run_cmd(["uci", "-q", "get", "network.%s" % iface])
@@ -399,6 +411,7 @@ def ensure_network_interface(name="wwan"):
 # STA creation
 # ---------------------------------------------------------------------------
 
+
 def create_sta_on_radio(radio, network_name, profile):
     ok, out = run_cmd(["uci", "add", "wireless", "wifi-iface"])
     if not ok or not out:
@@ -423,10 +436,10 @@ def create_sta_on_radio(radio, network_name, profile):
         else:
             return None, msg or ("重命名无线接口节 %s 失败" % section)
 
-    ssid = str(profile.get("ssid", "")).strip()
-    bssid = str(profile.get("bssid", "")).strip().lower()
+    ssid = _sanitize_uci_value(profile.get("ssid", ""))
+    bssid = _sanitize_uci_value(profile.get("bssid", "")).lower()
     encryption = normalize_wifi_encryption(profile.get("encryption", "none"))
-    key = str(profile.get("key", "")).strip()
+    key = _sanitize_uci_value(profile.get("key", ""))
 
     cmds = [
         ["uci", "set", "wireless.%s.device=%s" % (section, radio)],
@@ -461,6 +474,7 @@ def create_sta_on_radio(radio, network_name, profile):
 # ---------------------------------------------------------------------------
 # Profile matching and switching
 # ---------------------------------------------------------------------------
+
 
 def commit_reload_wireless():
     ok1, msg1 = run_cmd(["uci", "commit", "wireless"])
@@ -544,10 +558,10 @@ def _set_sta_profile_uci(section, profile):
     if not sec:
         return False, "未配置 STA 接口节。"
 
-    ssid = str(profile.get("ssid", "")).strip()
-    bssid = str(profile.get("bssid", "")).strip().lower()
+    ssid = _sanitize_uci_value(profile.get("ssid", ""))
+    bssid = _sanitize_uci_value(profile.get("bssid", "")).lower()
     encryption = normalize_wifi_encryption(profile.get("encryption", "none"))
-    key = str(profile.get("key", "")).strip()
+    key = _sanitize_uci_value(profile.get("key", ""))
 
     if not ssid:
         return False, "目标 SSID 为空。"
@@ -651,6 +665,7 @@ def disable_managed_sta_sections(cfg, wireless_data=None):
 # Radio selection helpers
 # ---------------------------------------------------------------------------
 
+
 def choose_fallback_radio(cfg, expect_hotspot, wireless_data=None):
     data = wireless_data if wireless_data is not None else parse_wireless_iface_data()
 
@@ -710,6 +725,7 @@ def get_preferred_hotspot_radio(cfg, wireless_data=None):
 # Wireless prerequisites
 # ---------------------------------------------------------------------------
 
+
 def ensure_runtime_wireless_prerequisites(cfg, expect_hotspot, wireless_data=None):
     if (not expect_hotspot) and campus_uses_wired(cfg):
         data = (
@@ -750,6 +766,7 @@ def ensure_runtime_wireless_prerequisites(cfg, expect_hotspot, wireless_data=Non
 # STA section selection
 # ---------------------------------------------------------------------------
 
+
 def select_sta_section(cfg, expect_hotspot, base_section, target, wireless_data):
     existing = _find_sta_by_profile(target, wireless_data)
     preferred_radio = get_preferred_profile_radio(cfg, expect_hotspot, wireless_data)
@@ -783,6 +800,7 @@ def select_sta_section(cfg, expect_hotspot, base_section, target, wireless_data)
 # Wait helpers
 # ---------------------------------------------------------------------------
 
+
 def wait_for_sta_ipv4(
     section, timeout_seconds=SSID_READY_TIMEOUT_SECONDS, interval_seconds=1
 ):
@@ -805,6 +823,7 @@ def wait_for_sta_ipv4(
 # ---------------------------------------------------------------------------
 # High-level switching
 # ---------------------------------------------------------------------------
+
 
 def switch_sta_profile(cfg, expect_hotspot):
     cfg, _, _ = apply_default_selection_for_runtime(expect_hotspot, "执行无线切换前")
@@ -840,9 +859,7 @@ def switch_sta_profile(cfg, expect_hotspot):
     if not ok:
         return False, "写入无线配置失败。"
 
-    settle_delay = min(
-        SWITCH_DELAY_SECONDS, get_switch_ready_timeout_seconds(cfg)
-    )
+    settle_delay = min(SWITCH_DELAY_SECONDS, get_switch_ready_timeout_seconds(cfg))
     if settle_delay > 0:
         time.sleep(settle_delay)
 
@@ -863,8 +880,14 @@ def switch_sta_profile(cfg, expect_hotspot):
                 conn_hint = "网关不可达"
                 if portal_detail:
                     conn_hint = conn_hint + ": " + portal_detail
-            log("INFO", "switch_campus_done", "campus switch complete",
-                radio=radio or "?", band=bl, portal=conn_hint)
+            log(
+                "INFO",
+                "switch_campus_done",
+                "campus switch complete",
+                radio=radio or "?",
+                band=bl,
+                portal=conn_hint,
+            )
             hint = "已切换为%s配置（%s %s, %s）" % (
                 target["label"],
                 radio or "?",
@@ -874,8 +897,13 @@ def switch_sta_profile(cfg, expect_hotspot):
             if select_msg:
                 hint = hint + "；" + select_msg
             return True, hint
-        log("WARN", "switch_campus_no_ip", "no IPv4 after campus switch",
-            radio=radio or "?", band=bl)
+        log(
+            "WARN",
+            "switch_campus_no_ip",
+            "no IPv4 after campus switch",
+            radio=radio or "?",
+            band=bl,
+        )
         return False, "已切换为%s配置但未获取到IPv4地址（%s %s）" % (
             target["label"],
             radio or "?",
@@ -889,7 +917,11 @@ def switch_sta_profile(cfg, expect_hotspot):
         dns_ok, _ = test_internet_connectivity()
         conn_hint = "连通" if dns_ok else "不通"
         if (not dns_ok) and hotspot_failback_enabled(cfg):
-            log("INFO", "hotspot_failback", "hotspot no internet, rolling back to campus")
+            log(
+                "INFO",
+                "hotspot_failback",
+                "hotspot no internet, rolling back to campus",
+            )
             rollback_ok, rollback_msg = switch_to_campus(cfg)
             if rollback_ok:
                 return False, "热点未确认连通，已自动回切校园网：%s" % (
@@ -951,6 +983,7 @@ def switch_to_campus(cfg):
 # ---------------------------------------------------------------------------
 # Failover: ensure expected profile
 # ---------------------------------------------------------------------------
+
 
 def ensure_expected_profile(cfg, expect_hotspot, last_switch_ts=0):
     if not failover_enabled(cfg):

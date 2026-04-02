@@ -8,6 +8,7 @@ import json
 import os
 import re
 import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 BEIJING_TZ = timezone(timedelta(hours=8))
@@ -170,7 +171,30 @@ def ensure_json_config_file():
         wf.write("{}\n")
 
 
-def load_json_file(path, allowed_keys=None):
+@contextmanager
+def _exclusive_file_lock(path):
+    lock_path = str(path) + ".lock"
+    ensure_parent_dir(lock_path)
+    lock_file = open(lock_path, "a+", encoding="utf-8")
+    fcntl_mod = None
+    try:
+        try:
+            import fcntl as fcntl_mod
+        except ImportError:
+            fcntl_mod = None
+        if fcntl_mod is not None:
+            fcntl_mod.flock(lock_file.fileno(), fcntl_mod.LOCK_EX)
+        yield lock_file
+    finally:
+        if fcntl_mod is not None:
+            try:
+                fcntl_mod.flock(lock_file.fileno(), fcntl_mod.LOCK_UN)
+            except OSError:
+                pass
+        lock_file.close()
+
+
+def _load_json_file_unlocked(path, allowed_keys=None):
     try:
         with open(path, "r", encoding="utf-8") as rf:
             data = json.load(rf)
@@ -183,13 +207,32 @@ def load_json_file(path, allowed_keys=None):
     return {}
 
 
-def save_json_file(path, payload):
-    ensure_parent_dir(path)
+def load_json_file(path, allowed_keys=None):
+    return _load_json_file_unlocked(path, allowed_keys=allowed_keys)
+
+
+def _atomic_save_json_unlocked(path, payload):
     tmp_path = str(path) + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as wf:
         json.dump(payload, wf, ensure_ascii=False, indent=2, sort_keys=True)
         wf.write("\n")
     os.replace(tmp_path, path)
+
+
+def save_json_file(path, payload):
+    ensure_parent_dir(path)
+    with _exclusive_file_lock(path):
+        _atomic_save_json_unlocked(path, payload)
+
+
+def update_json_file(path, updater, allowed_keys=None):
+    ensure_parent_dir(path)
+    with _exclusive_file_lock(path):
+        current = _load_json_file_unlocked(path, allowed_keys=allowed_keys)
+        result = updater(current)
+        payload = result if isinstance(result, dict) else current
+        _atomic_save_json_unlocked(path, payload)
+        return payload
 
 
 def load_json_raw_config():
@@ -204,7 +247,7 @@ def load_json_raw_config():
     return {}
 
 
-def save_json_raw_config(raw_cfg):
+def _normalize_json_raw_config(raw_cfg):
     payload = {}
     for key in GLOBAL_SCALAR_KEYS:
         default_val = DEFAULTS.get(key, "")
@@ -215,13 +258,22 @@ def save_json_raw_config(raw_cfg):
         val = raw_cfg.get(key)
         payload[key] = val if isinstance(val, list) else []
     payload[SCHOOL_EXTRA_KEY] = _normalize_declared_school_extra(raw_cfg)
+    return payload
 
-    ensure_parent_dir(JSON_CONFIG_FILE)
-    tmp_path = JSON_CONFIG_FILE + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as wf:
-        json.dump(payload, wf, ensure_ascii=False, indent=2, sort_keys=True)
-        wf.write("\n")
-    os.replace(tmp_path, JSON_CONFIG_FILE)
+
+def save_json_raw_config(raw_cfg):
+    save_json_file(JSON_CONFIG_FILE, _normalize_json_raw_config(raw_cfg))
+
+
+def update_json_raw_config(updater):
+    ensure_json_config_file()
+
+    def _apply(raw):
+        result = updater(raw)
+        next_raw = result if isinstance(result, dict) else raw
+        return _normalize_json_raw_config(next_raw)
+
+    return update_json_file(JSON_CONFIG_FILE, _apply)
 
 
 # ---------------------------------------------------------------------------
@@ -292,9 +344,10 @@ def get_json_scalar_config(key, default_value=""):
 
 
 def set_json_scalar_config(key, value):
-    raw = load_json_raw_config()
-    raw[str(key)] = str(value)
-    save_json_raw_config(raw)
+    def _apply(raw):
+        raw[str(key)] = str(value)
+
+    update_json_raw_config(_apply)
 
 
 def _state_flag_enabled(value):
@@ -739,8 +792,9 @@ def apply_default_selection_for_runtime(expect_hotspot, reason=""):
     if active_id == default_id:
         return load_config(), False, ""
 
-    raw[meta["active_key"]] = default_id
-    save_json_raw_config(raw)
+    update_json_raw_config(
+        lambda current: current.__setitem__(meta["active_key"], default_id)
+    )
 
     suffix = ""
     if reason:

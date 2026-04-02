@@ -71,10 +71,16 @@ endef
 define Package/luci-app-smart-srun/install
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/controller
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/model/cbi
+	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/smart_srun
+	$(INSTALL_DIR) $(1)/www/luci-static/resources
 	$(CP) $(CURDIR)/root/usr/lib/lua/luci/controller/*.lua \
 		$(1)/usr/lib/lua/luci/controller/
 	$(CP) $(CURDIR)/root/usr/lib/lua/luci/model/cbi/*.lua \
 		$(1)/usr/lib/lua/luci/model/cbi/
+	$(CP) $(CURDIR)/root/usr/lib/lua/luci/smart_srun/*.lua \
+		$(1)/usr/lib/lua/luci/smart_srun/
+	$(CP) $(CURDIR)/root/www/luci-static/resources/*.js \
+		$(1)/www/luci-static/resources/
 endef
 
 define Package/luci-app-smart-srun-bundle
@@ -113,10 +119,16 @@ define Package/luci-app-smart-srun-bundle/install
 		$(1)/usr/bin/srunnet
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/controller
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/model/cbi
+	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/smart_srun
+	$(INSTALL_DIR) $(1)/www/luci-static/resources
 	$(CP) $(CURDIR)/root/usr/lib/lua/luci/controller/*.lua \
 		$(1)/usr/lib/lua/luci/controller/
 	$(CP) $(CURDIR)/root/usr/lib/lua/luci/model/cbi/*.lua \
 		$(1)/usr/lib/lua/luci/model/cbi/
+	$(CP) $(CURDIR)/root/usr/lib/lua/luci/smart_srun/*.lua \
+		$(1)/usr/lib/lua/luci/smart_srun/
+	$(CP) $(CURDIR)/root/www/luci-static/resources/*.js \
+		$(1)/www/luci-static/resources/
 endef
 
 # ---------------------------------------------------------------------------

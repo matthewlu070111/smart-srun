@@ -8,6 +8,7 @@ import math
 import time
 
 from config import (
+    ACTION_FILE,
     append_log,
     log,
     apply_default_selection_for_runtime,
@@ -22,6 +23,7 @@ from config import (
     get_switch_ready_timeout_seconds,
     in_quiet_window,
     load_config,
+    load_json_file,
     localize_error,
     quiet_window_label,
     restore_manual_login_service_guard,
@@ -82,6 +84,24 @@ def calc_backoff_delay_seconds(cfg, failure_index):
 # ---------------------------------------------------------------------------
 
 
+def _pending_runtime_action():
+    payload = load_json_file(ACTION_FILE)
+    if not isinstance(payload, dict):
+        return ""
+    return str(payload.get("action", "")).strip()
+
+
+def _interruptible_sleep(total_seconds):
+    remaining = max(float(total_seconds), 0.0)
+    while remaining > 0:
+        chunk = min(remaining, 2.0)
+        time.sleep(chunk)
+        remaining -= chunk
+        if _pending_runtime_action():
+            return False
+    return True
+
+
 def run_once_with_retry(cfg, ignore_service_disabled=False):
     ok, message = srun_auth.run_once_safe(cfg)
     if ok:
@@ -120,11 +140,27 @@ def run_once_with_retry(cfg, ignore_service_disabled=False):
             return False, "进入夜间停用时段，停止重试"
         if max_retries > 0 and retries >= max_retries:
             return False, message
+        pending_action = _pending_runtime_action()
+        if pending_action:
+            log(
+                "INFO",
+                "retry_interrupted",
+                "pending action detected, aborting retry loop",
+                pending_action=pending_action,
+            )
+            return False, "检测到待处理操作，中断重试"
 
         delay = calc_backoff_delay_seconds(runtime_cfg, failures)
         log("INFO", "retry_scheduled", attempt=retries + 1, delay=round(delay, 1))
-        if delay > 0:
-            time.sleep(delay)
+        if delay > 0 and not _interruptible_sleep(delay):
+            pending_action = _pending_runtime_action()
+            log(
+                "INFO",
+                "retry_interrupted",
+                "pending action detected during retry wait",
+                pending_action=pending_action,
+            )
+            return False, "检测到待处理操作，中断重试"
 
         retry_ok, retry_message = srun_auth.run_once_safe(runtime_cfg)
         retries += 1

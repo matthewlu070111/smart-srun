@@ -286,6 +286,45 @@ class SchoolRuntimeConfigTests(unittest.TestCase):
 
         self.assertEqual("alice", loaded["username"])
 
+    def test_luci_contract_normalizes_bool_descriptor_defaults(self):
+        contract = config.build_school_runtime_luci_contract(
+            {"school": "jxnu", config.SCHOOL_EXTRA_KEY: {}},
+            {
+                "runtime_type": "runtime_class",
+                "runtime_api_version": 1,
+                "field_descriptors": [
+                    {
+                        "key": "auto_bind",
+                        "type": "bool",
+                        "label": "Auto Bind",
+                        "default": True,
+                    }
+                ],
+                "school_extra": [],
+            },
+        )
+
+        self.assertEqual("1", contract["field_descriptors"][0]["default"])
+
+    def test_luci_contract_keeps_int_descriptor_default_empty_when_missing(self):
+        contract = config.build_school_runtime_luci_contract(
+            {"school": "jxnu", config.SCHOOL_EXTRA_KEY: {}},
+            {
+                "runtime_type": "runtime_class",
+                "runtime_api_version": 1,
+                "field_descriptors": [
+                    {
+                        "key": "retry_limit",
+                        "type": "int",
+                        "label": "Retry Limit",
+                    }
+                ],
+                "school_extra": [],
+            },
+        )
+
+        self.assertEqual("", contract["field_descriptors"][0]["default"])
+
 
 if __name__ == "__main__":
     unittest.main()

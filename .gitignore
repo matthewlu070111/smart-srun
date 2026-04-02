@@ -5,7 +5,5 @@ __pycache__/
 .spec-workflow/
 .worktrees/
 docs/
-scripts/
-tests/
 AGENTS.md
 CLAUDE.md

@@ -121,7 +121,7 @@ def get_xencode(msg, key):
         pwdk = pwdk + [0] * (4 - len(pwdk))
 
     # TEA 常量 -- SRun JS 混淆器将 0x9E3779B9 拆为 OR 运算，0xFFFFFFFF 同理
-    DELTA = 0x86014019 | 0x183639A0    # = 0x9E3779B9 (golden ratio)
+    DELTA = 0x86014019 | 0x183639A0  # = 0x9E3779B9 (golden ratio)
     MASK_32 = 0x8CE0D9BF | 0x731F2640  # = 0xFFFFFFFF (32-bit mask)
 
     n_val = len(pwd) - 1
@@ -130,7 +130,7 @@ def get_xencode(msg, key):
     d_val = 0
 
     while 0 < q_val:
-        d_val = d_val + DELTA & MASK_32
+        d_val = (d_val + DELTA) & MASK_32
         e_val = d_val >> 2 & 3
         p_val = 0
         while p_val < n_val:
@@ -138,14 +138,14 @@ def get_xencode(msg, key):
             m_val = z_val >> 5 ^ y_val << 2
             m_val = m_val + ((y_val >> 3 ^ z_val << 4) ^ (d_val ^ y_val))
             m_val = m_val + (pwdk[(p_val & 3) ^ e_val] ^ z_val)
-            pwd[p_val] = pwd[p_val] + m_val & MASK_32
+            pwd[p_val] = (pwd[p_val] + m_val) & MASK_32
             z_val = pwd[p_val]
             p_val = p_val + 1
         y_val = pwd[0]
         m_val = z_val >> 5 ^ y_val << 2
         m_val = m_val + ((y_val >> 3 ^ z_val << 4) ^ (d_val ^ y_val))
         m_val = m_val + (pwdk[(p_val & 3) ^ e_val] ^ z_val)
-        pwd[n_val] = pwd[n_val] + m_val & MASK_32
+        pwd[n_val] = (pwd[n_val] + m_val) & MASK_32
         z_val = pwd[n_val]
         q_val = q_val - 1
     return lencode(pwd, False)

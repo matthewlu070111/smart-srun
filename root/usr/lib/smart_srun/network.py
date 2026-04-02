@@ -241,7 +241,7 @@ def http_get(url, params=None, timeout=5, bind_ip=None):
 
     errors = []
 
-    if HAVE_URLLIB:
+    if HAVE_URLLIB and not bind_ip:
         try:
             req = urllib_request.Request(url, headers=HEADER, method="GET")
             with urllib_request.urlopen(req, timeout=timeout) as resp:
@@ -261,10 +261,17 @@ def http_get(url, params=None, timeout=5, bind_ip=None):
     ]
 
     available = False
+    bind_capable = False
     for path, kind in candidates:
         if not os.path.exists(path):
             continue
         available = True
+        if kind == "wget":
+            bind_capable = True
+
+        if bind_ip and kind != "wget":
+            errors.append("%s: bind_ip requires wget --bind-address support" % kind)
+            continue
 
         if kind == "wget":
             cmd = [path, "-q", "-O", "-", "--timeout=%d" % int(timeout)]
@@ -287,6 +294,9 @@ def http_get(url, params=None, timeout=5, bind_ip=None):
 
     if not available:
         raise RuntimeError("未找到可用 HTTP 客户端（uclient-fetch/wget）")
+
+    if bind_ip and not bind_capable:
+        raise RuntimeError("bind_ip requires wget --bind-address support")
 
     raise RuntimeError(humanize_http_errors(url, [e for e in errors if e]))
 
