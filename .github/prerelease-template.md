@@ -19,4 +19,5 @@ OpenWrt SDK 版本：`${OPENWRT_VERSION}`
 
 说明：
 - 本软件包为纯脚本（Lua/Python/Shell），与 CPU 架构无关，所有 OpenWrt 设备均可直接安装。
-- 如果你不知道选择哪个版本，建议直接下载 `luci-app-smart-srun-bundle` 包。 
+- 如果你不知道选择哪个版本，建议直接下载 `luci-app-smart-srun-bundle` 包。
+- 如需分别安装基础包与 LuCI 包，请下载拆分包合集：${SPLIT_PACKAGES_URL}
