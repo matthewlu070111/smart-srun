@@ -255,6 +255,9 @@ class ReleaseAssetsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsafe"):
             release_assets.build_split_packages_url("example", "smart-srun", "..")
 
+        with self.assertRaisesRegex(ValueError, "unsafe"):
+            release_assets.build_split_packages_url("example", "smart-srun", "-v1.2.3")
+
     def test_render_release_notes_template_replaces_placeholders(self):
         release_assets = load_release_assets_module(self)
 

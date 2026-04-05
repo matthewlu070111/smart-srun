@@ -175,7 +175,7 @@ jobs:
       - name: Validate release asset version
         run: |
           VERSION='${{ github.event.inputs.version }}'
-          if [[ ! "$VERSION" =~ ^[A-Za-z0-9._-]+$ ]] || [[ "$VERSION" == "." ]] || [[ "$VERSION" == ".." ]]; then
+          if [[ ! "$VERSION" =~ ^[A-Za-z0-9._-]+$ ]] || [[ "$VERSION" == "." ]] || [[ "$VERSION" == ".." ]] || [[ "$VERSION" == -* ]]; then
             echo "unsafe version: $VERSION"
             exit 1
           fi
@@ -221,7 +221,7 @@ jobs:
           mkdir -p "$WORKTREE_DIR/${VERSION}"
           cp -f "split-downloads/${SPLIT_ZIP_NAME}" "$WORKTREE_DIR/${VERSION}/${SPLIT_ZIP_NAME}"
 
-          git -C "$WORKTREE_DIR" add "${VERSION}/"
+          git -C "$WORKTREE_DIR" add -- "${VERSION}/"
           if git -C "$WORKTREE_DIR" diff --cached --quiet; then
             echo "No downloads branch changes to publish"
           else

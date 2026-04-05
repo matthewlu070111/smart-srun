@@ -13,7 +13,12 @@ _SAFE_VERSION_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 def _validate_version(version):
-    if not version or version in (".", "..") or not _SAFE_VERSION_RE.match(version):
+    if (
+        not version
+        or version.startswith("-")
+        or version in (".", "..")
+        or not _SAFE_VERSION_RE.match(version)
+    ):
         raise ValueError("unsafe version: %s" % version)
     return version
 
