@@ -53,6 +53,32 @@ class VersionInfoTests(unittest.TestCase):
             version_info.get_luci_display_text(status_text=split_status),
         )
 
+    def test_parses_apk_db_format_single_letter_keys(self):
+        """OpenWrt 24.10+ uses /lib/apk/db/installed with P:/V: keys."""
+        apk_status = (
+            "C:Q1xxxxxxxx=\n"
+            "P:luci-app-smart-srun-bundle\n"
+            "V:1.3.0-r1\n"
+            "A:all\n"
+            "\n"
+            "P:some-other-pkg\n"
+            "V:2.0-r0\n"
+            "\n"
+        )
+        self.assertEqual(
+            "luci-app-smart-srun-bundle",
+            version_info.detect_installed_package_name(apk_status),
+        )
+        self.assertEqual(
+            "Bundle 版 v1.3.0-r1",
+            version_info.get_luci_display_text(status_text=apk_status),
+        )
+
+    def test_parses_apk_version_with_r_release_suffix(self):
+        self.assertEqual(
+            "v1.3.0-r5", version_info.normalize_version_string("1.3.0-r5")
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

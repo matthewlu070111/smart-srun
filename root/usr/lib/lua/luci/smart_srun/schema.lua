@@ -4,6 +4,7 @@ local nixio = require "nixio"
 
 local DEFAULTS_FILE = "/usr/lib/smart_srun/defaults.json"
 local OPKG_STATUS_FILE = "/usr/lib/opkg/status"
+local APK_STATUS_FILE = "/lib/apk/db/installed"
 local DEFAULT_VERSION = "v0.0.0-r1"
 
 local M = {}
@@ -89,13 +90,29 @@ local function normalize_version_string(raw)
     return DEFAULT_VERSION
 end
 
+local function read_package_status()
+    local text = fs.readfile(OPKG_STATUS_FILE)
+    if text and text ~= "" then
+        return text
+    end
+    return fs.readfile(APK_STATUS_FILE) or ""
+end
+
 local function package_versions()
     local versions = {}
-    local text = (fs.readfile(OPKG_STATUS_FILE) or "") .. "\n\n"
+    local text = read_package_status() .. "\n\n"
     for block in text:gmatch("(.-)\n\n") do
         local package_name = block:match("\n?Package:%s*([^\r\n]+)")
+            or block:match("\n?P:%s*([^\r\n]+)")
+            or block:match("^Package:%s*([^\r\n]+)")
+            or block:match("^P:%s*([^\r\n]+)")
         if package_name then
-            versions[package_name] = block:match("\n?Version:%s*([^\r\n]+)") or ""
+            versions[package_name] =
+                block:match("\n?Version:%s*([^\r\n]+)")
+                or block:match("\n?V:%s*([^\r\n]+)")
+                or block:match("^Version:%s*([^\r\n]+)")
+                or block:match("^V:%s*([^\r\n]+)")
+                or ""
         end
     end
     return versions

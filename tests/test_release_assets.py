@@ -473,5 +473,319 @@ class ReleaseAssetsTests(unittest.TestCase):
         )
 
 
+class ReleaseAssetsApkTests(unittest.TestCase):
+    """apk SDK produces files like smart-srun-1.2.3-r1.apk (no arch suffix)."""
+
+    def test_prepare_release_outputs_keeps_bundle_separate_for_apk_format(self):
+        release_assets = load_release_assets_module(self)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            artifacts_dir = temp_path / "artifacts"
+            release_dir = temp_path / "release"
+            split_dir = temp_path / "split"
+            artifacts_dir.mkdir()
+
+            bundle_name = "luci-app-smart-srun-bundle-1.2.3-r1.apk"
+            core_name = "smart-srun-1.2.3-r1.apk"
+            luci_name = "luci-app-smart-srun-1.2.3-r1.apk"
+            extra_name = "unrelated-package-1.2.3-r1.apk"
+
+            for name in [bundle_name, core_name, luci_name, extra_name]:
+                (artifacts_dir / name).write_text(name, encoding="utf-8")
+
+            metadata = release_assets.prepare_release_outputs(
+                artifacts_dir,
+                release_dir,
+                split_dir,
+                "v1.2.3",
+                package_format="apk",
+            )
+
+            self.assertEqual(
+                sorted(path.name for path in release_dir.iterdir()), [bundle_name]
+            )
+            self.assertEqual(
+                metadata["split_zip_name"],
+                "smart-srun-split-packages-v1.2.3-apk.zip",
+            )
+            with zipfile.ZipFile(metadata["split_zip_path"]) as archive:
+                self.assertEqual(
+                    sorted(archive.namelist()), sorted([core_name, luci_name])
+                )
+
+    def test_prepare_release_outputs_luci_apk_glob_excludes_bundle(self):
+        """luci-app-smart-srun-*.apk would also match bundle-*.apk; must exclude it."""
+        release_assets = load_release_assets_module(self)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            artifacts_dir = temp_path / "artifacts"
+            release_dir = temp_path / "release"
+            split_dir = temp_path / "split"
+            artifacts_dir.mkdir()
+
+            (artifacts_dir / "luci-app-smart-srun-bundle-1.2.3-r1.apk").write_text(
+                "bundle", encoding="utf-8"
+            )
+            (artifacts_dir / "smart-srun-1.2.3-r1.apk").write_text(
+                "core", encoding="utf-8"
+            )
+            (artifacts_dir / "luci-app-smart-srun-1.2.3-r1.apk").write_text(
+                "luci", encoding="utf-8"
+            )
+
+            metadata = release_assets.prepare_release_outputs(
+                artifacts_dir,
+                release_dir,
+                split_dir,
+                "v1.2.3",
+                package_format="apk",
+            )
+
+            with zipfile.ZipFile(metadata["split_zip_path"]) as archive:
+                names = sorted(archive.namelist())
+            self.assertIn("luci-app-smart-srun-1.2.3-r1.apk", names)
+            self.assertNotIn("luci-app-smart-srun-bundle-1.2.3-r1.apk", names)
+
+    def test_prepare_release_outputs_rejects_unknown_format(self):
+        release_assets = load_release_assets_module(self)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            artifacts_dir = temp_path / "artifacts"
+            artifacts_dir.mkdir()
+
+            with self.assertRaisesRegex(ValueError, "package_format"):
+                release_assets.prepare_release_outputs(
+                    artifacts_dir,
+                    temp_path / "release",
+                    temp_path / "split",
+                    "v1.2.3",
+                    package_format="deb",
+                )
+
+    def test_main_prepare_accepts_format_flag(self):
+        release_assets = load_release_assets_module(self)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            artifacts_dir = temp_path / "artifacts"
+            artifacts_dir.mkdir()
+
+            (artifacts_dir / "luci-app-smart-srun-bundle-1.2.3-r1.apk").write_text(
+                "bundle", encoding="utf-8"
+            )
+            (artifacts_dir / "smart-srun-1.2.3-r1.apk").write_text(
+                "core", encoding="utf-8"
+            )
+            (artifacts_dir / "luci-app-smart-srun-1.2.3-r1.apk").write_text(
+                "luci", encoding="utf-8"
+            )
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = release_assets.main(
+                    [
+                        "prepare",
+                        "--format",
+                        "apk",
+                        str(artifacts_dir),
+                        str(temp_path / "release"),
+                        str(temp_path / "split"),
+                        "v1.2.3",
+                    ]
+                )
+            metadata = json.loads(stdout.getvalue())
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(
+                metadata["split_zip_name"],
+                "smart-srun-split-packages-v1.2.3-apk.zip",
+            )
+
+    def test_build_split_url_honors_apk_format(self):
+        release_assets = load_release_assets_module(self)
+
+        self.assertEqual(
+            release_assets.build_split_packages_url(
+                "example", "smart-srun", "v1.2.3", package_format="apk"
+            ),
+            "https://raw.githubusercontent.com/example/smart-srun/downloads/v1.2.3/smart-srun-split-packages-v1.2.3-apk.zip",
+        )
+
+
+class ReleaseAssetsUnifiedTests(unittest.TestCase):
+    """Unified pre-release: both ipk + apk bundles as assets; one combined split zip."""
+
+    def _populate_both_formats(self, artifacts_dir):
+        ipk_names = [
+            "luci-app-smart-srun-bundle_1.2.3_all.ipk",
+            "smart-srun_1.2.3_all.ipk",
+            "luci-app-smart-srun_1.2.3_all.ipk",
+        ]
+        apk_names = [
+            "luci-app-smart-srun-bundle-1.2.3-r1.apk",
+            "smart-srun-1.2.3-r1.apk",
+            "luci-app-smart-srun-1.2.3-r1.apk",
+        ]
+        for name in ipk_names + apk_names:
+            (artifacts_dir / name).write_text(name, encoding="utf-8")
+        return ipk_names, apk_names
+
+    def test_unified_prepare_puts_both_bundles_in_release_dir(self):
+        release_assets = load_release_assets_module(self)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            artifacts_dir = temp_path / "artifacts"
+            release_dir = temp_path / "release"
+            split_dir = temp_path / "split"
+            artifacts_dir.mkdir()
+
+            self._populate_both_formats(artifacts_dir)
+
+            metadata = release_assets.prepare_unified_release_outputs(
+                artifacts_dir, release_dir, split_dir, "v1.2.3"
+            )
+
+            self.assertEqual(
+                sorted(path.name for path in release_dir.iterdir()),
+                sorted([
+                    "luci-app-smart-srun-bundle_1.2.3_all.ipk",
+                    "luci-app-smart-srun-bundle-1.2.3-r1.apk",
+                ]),
+            )
+            self.assertEqual(
+                metadata["split_zip_name"],
+                "smart-srun-split-packages-v1.2.3.zip",
+            )
+
+    def test_unified_prepare_zip_contains_all_four_split_packages(self):
+        release_assets = load_release_assets_module(self)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            artifacts_dir = temp_path / "artifacts"
+            release_dir = temp_path / "release"
+            split_dir = temp_path / "split"
+            artifacts_dir.mkdir()
+
+            self._populate_both_formats(artifacts_dir)
+
+            metadata = release_assets.prepare_unified_release_outputs(
+                artifacts_dir, release_dir, split_dir, "v1.2.3"
+            )
+
+            with zipfile.ZipFile(metadata["split_zip_path"]) as archive:
+                names = sorted(archive.namelist())
+
+            self.assertEqual(
+                names,
+                sorted([
+                    "smart-srun_1.2.3_all.ipk",
+                    "luci-app-smart-srun_1.2.3_all.ipk",
+                    "smart-srun-1.2.3-r1.apk",
+                    "luci-app-smart-srun-1.2.3-r1.apk",
+                ]),
+            )
+
+    def test_unified_prepare_requires_both_formats(self):
+        release_assets = load_release_assets_module(self)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            artifacts_dir = temp_path / "artifacts"
+            artifacts_dir.mkdir()
+
+            (artifacts_dir / "luci-app-smart-srun-bundle_1.2.3_all.ipk").write_text(
+                "bundle-ipk", encoding="utf-8"
+            )
+            (artifacts_dir / "smart-srun_1.2.3_all.ipk").write_text(
+                "core", encoding="utf-8"
+            )
+            (artifacts_dir / "luci-app-smart-srun_1.2.3_all.ipk").write_text(
+                "luci", encoding="utf-8"
+            )
+
+            with self.assertRaisesRegex(ValueError, "bundle"):
+                release_assets.prepare_unified_release_outputs(
+                    artifacts_dir,
+                    temp_path / "release",
+                    temp_path / "split",
+                    "v1.2.3",
+                )
+
+    def test_unified_prepare_clears_stale_bundles_and_zips(self):
+        release_assets = load_release_assets_module(self)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            artifacts_dir = temp_path / "artifacts"
+            release_dir = temp_path / "release"
+            split_dir = temp_path / "split"
+            artifacts_dir.mkdir()
+            release_dir.mkdir()
+            split_dir.mkdir()
+
+            (release_dir / "luci-app-smart-srun-bundle_0.9.0_all.ipk").write_text(
+                "stale-ipk", encoding="utf-8"
+            )
+            (release_dir / "luci-app-smart-srun-bundle-0.9.0-r1.apk").write_text(
+                "stale-apk", encoding="utf-8"
+            )
+            (split_dir / "smart-srun-split-packages-v0.9.0.zip").write_text(
+                "stale-zip", encoding="utf-8"
+            )
+            (split_dir / "smart-srun-split-packages-v0.9.0-apk.zip").write_text(
+                "stale-apk-zip", encoding="utf-8"
+            )
+
+            self._populate_both_formats(artifacts_dir)
+
+            release_assets.prepare_unified_release_outputs(
+                artifacts_dir, release_dir, split_dir, "v1.2.3"
+            )
+
+            self.assertEqual(
+                sorted(path.name for path in release_dir.iterdir()),
+                sorted([
+                    "luci-app-smart-srun-bundle_1.2.3_all.ipk",
+                    "luci-app-smart-srun-bundle-1.2.3-r1.apk",
+                ]),
+            )
+            self.assertEqual(
+                [path.name for path in split_dir.iterdir()],
+                ["smart-srun-split-packages-v1.2.3.zip"],
+            )
+
+    def test_main_prepare_unified_subcommand(self):
+        release_assets = load_release_assets_module(self)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            artifacts_dir = temp_path / "artifacts"
+            artifacts_dir.mkdir()
+            self._populate_both_formats(artifacts_dir)
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = release_assets.main(
+                    [
+                        "prepare-unified",
+                        str(artifacts_dir),
+                        str(temp_path / "release"),
+                        str(temp_path / "split"),
+                        "v1.2.3",
+                    ]
+                )
+            metadata = json.loads(stdout.getvalue())
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(
+                metadata["split_zip_name"], "smart-srun-split-packages-v1.2.3.zip"
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

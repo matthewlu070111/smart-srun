@@ -7,6 +7,8 @@ import re
 
 
 PACKAGE_STATUS_FILE = "/usr/lib/opkg/status"
+APK_STATUS_FILE = "/lib/apk/db/installed"
+PACKAGE_STATUS_CANDIDATES = (PACKAGE_STATUS_FILE, APK_STATUS_FILE)
 PACKAGE_PRIORITY = [
     "luci-app-smart-srun-bundle",
     "luci-app-smart-srun",
@@ -21,6 +23,14 @@ def _read_text(path):
             return handle.read()
     except OSError:
         return ""
+
+
+def _read_package_status():
+    for candidate in PACKAGE_STATUS_CANDIDATES:
+        text = _read_text(candidate)
+        if text:
+            return text
+    return ""
 
 
 def _find_repo_makefile():
@@ -48,6 +58,7 @@ def normalize_version_string(raw_version):
 
 
 def _package_versions_from_status(status_text):
+    """Parse either opkg (`Package:`/`Version:`) or apk (`P:`/`V:`) status text."""
     versions = {}
     package_name = ""
     version = ""
@@ -62,6 +73,10 @@ def _package_versions_from_status(status_text):
             package_name = line.split(":", 1)[1].strip()
         elif line.startswith("Version:"):
             version = line.split(":", 1)[1].strip()
+        elif line.startswith("P:"):
+            package_name = line.split(":", 1)[1].strip()
+        elif line.startswith("V:"):
+            version = line.split(":", 1)[1].strip()
     if package_name:
         versions[package_name] = version
     return versions
@@ -69,7 +84,7 @@ def _package_versions_from_status(status_text):
 
 def detect_installed_package_name(status_text=None):
     versions = _package_versions_from_status(
-        _read_text(PACKAGE_STATUS_FILE) if status_text is None else status_text
+        _read_package_status() if status_text is None else status_text
     )
     for package_name in PACKAGE_PRIORITY:
         if package_name in versions:
@@ -93,7 +108,7 @@ def _makefile_version():
 
 def get_display_version(status_text=None, package_name=None):
     versions = _package_versions_from_status(
-        _read_text(PACKAGE_STATUS_FILE) if status_text is None else status_text
+        _read_package_status() if status_text is None else status_text
     )
     selected = package_name or detect_installed_package_name(status_text=status_text)
     if selected in versions:

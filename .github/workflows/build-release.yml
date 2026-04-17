@@ -1,12 +1,23 @@
 name: Version Release Build
 
+# Builds both .ipk (opkg, OpenWrt 23.05/older) and .apk (apk, OpenWrt 24.10+
+# / 25.12+) and publishes them as a single formal release with two bundle
+# assets and one combined split-packages zip.
+#
+# Mirrors build-prerelease.yml; the only differences are that `version` is
+# required, and the published release is `draft: true, prerelease: false`.
+
 on:
   workflow_dispatch:
     inputs:
-      openwrt_version:
-        description: "OpenWrt release version"
+      openwrt_ipk_version:
+        description: "OpenWrt release version for ipk build (opkg, e.g. 23.05.x)"
         required: true
         default: "23.05.5"
+      openwrt_apk_version:
+        description: "OpenWrt release version for apk build (24.10.x / 25.12.x)"
+        required: true
+        default: "25.12.2"
       version:
         description: "Version of this release build."
         required: true
@@ -18,6 +29,14 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - format: ipk
+            default_openwrt_version: "23.05.5"
+          - format: apk
+            default_openwrt_version: "25.12.2"
 
     steps:
       - name: Checkout plugin repo
@@ -38,11 +57,15 @@ jobs:
       - name: Resolve SDK URL
         id: sdk
         run: |
-          VER="${{ github.event.inputs.openwrt_version }}"
-          if [ -z "$VER" ]; then VER="23.05.5"; fi
+          if [ "${{ matrix.format }}" = "ipk" ]; then
+            VER="${{ github.event.inputs.openwrt_ipk_version }}"
+          else
+            VER="${{ github.event.inputs.openwrt_apk_version }}"
+          fi
+          if [ -z "$VER" ]; then VER="${{ matrix.default_openwrt_version }}"; fi
 
           BASE_URL="https://downloads.openwrt.org/releases/${VER}/targets/x86/64"
-          SDK_NAME="$(curl -fsSL "${BASE_URL}/" | grep -oE 'openwrt-sdk-[^" ]+Linux-x86_64\.tar\.(xz|zst)' | head -n1)"
+          SDK_NAME="$(curl -fsSL "${BASE_URL}/" | grep -oE 'openwrt-sdk-[^" ]+Linux-x86_64\.tar\.(zst|xz)' | head -n1)"
           if [ -z "$SDK_NAME" ]; then
             echo "Cannot find SDK from: ${BASE_URL}"
             exit 1
@@ -50,6 +73,7 @@ jobs:
 
           echo "sdk_url=${BASE_URL}/${SDK_NAME}" >> "$GITHUB_OUTPUT"
           echo "sdk_name=${SDK_NAME}" >> "$GITHUB_OUTPUT"
+          echo "openwrt_version=${VER}" >> "$GITHUB_OUTPUT"
 
       - name: Apply version to Makefile
         run: |
@@ -84,7 +108,7 @@ jobs:
         with:
           path: |
             openwrt/dl
-          key: ${{ runner.os }}-openwrt-dl-${{ github.event.inputs.openwrt_version || '23.05.5' }}-x86-64-v2
+          key: ${{ runner.os }}-openwrt-dl-${{ steps.sdk.outputs.openwrt_version }}-x86-64-${{ matrix.format }}-v1
 
       - name: Update and install required feeds
         working-directory: openwrt
@@ -121,17 +145,40 @@ jobs:
       - name: Collect artifact
         run: |
           mkdir -p artifacts
-          echo "=== All ipk files ==="
-          find openwrt/bin -type f -name '*.ipk' | sort
-          echo "====================="
-          for pattern in 'smart-srun_*.ipk' 'luci-app-smart-srun_*.ipk' 'luci-app-smart-srun-bundle_*.ipk'; do
-            IPK="$(find openwrt/bin -type f -name "$pattern" | head -n1)"
-            if [ -n "$IPK" ]; then
-              cp -v "$IPK" "artifacts/$(basename "$IPK")"
+          EXT="${{ matrix.format }}"
+          echo "=== All ${EXT} files ==="
+          find openwrt/bin -type f -name "*.${EXT}" | sort
+          echo "========================"
+
+          # apk-SDK filenames use `-` as the separator (no arch suffix) so the
+          # luci-app-smart-srun-*.apk glob also matches bundle-*.apk — filter
+          # explicitly. ipk uses `_` so its globs are already disjoint.
+          collect_one() {
+            local pattern="$1"
+            local exclude_prefix="$2"
+            local match
+            if [ -n "$exclude_prefix" ]; then
+              match="$(find openwrt/bin -type f -name "$pattern" ! -name "${exclude_prefix}*" | head -n1)"
+            else
+              match="$(find openwrt/bin -type f -name "$pattern" | head -n1)"
             fi
-          done
-          if [ -z "$(ls artifacts/*.ipk 2>/dev/null)" ]; then
-            echo "Failed: no ipk found."
+            if [ -n "$match" ]; then
+              cp -v "$match" "artifacts/$(basename "$match")"
+            fi
+          }
+
+          if [ "${EXT}" = "ipk" ]; then
+            collect_one 'smart-srun_*.ipk' ''
+            collect_one 'luci-app-smart-srun_*.ipk' ''
+            collect_one 'luci-app-smart-srun-bundle_*.ipk' ''
+          else
+            collect_one 'smart-srun-*.apk' ''
+            collect_one 'luci-app-smart-srun-*.apk' 'luci-app-smart-srun-bundle-'
+            collect_one 'luci-app-smart-srun-bundle-*.apk' ''
+          fi
+
+          if [ -z "$(ls artifacts/*.${EXT} 2>/dev/null)" ]; then
+            echo "Failed: no ${EXT} found."
             exit 1
           fi
           ls -lh artifacts/
@@ -139,8 +186,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: smart-srun-ipk
-          path: artifacts/*.ipk
+          name: smart-srun-${{ matrix.format }}
+          path: artifacts/*.${{ matrix.format }}
 
   publish:
     needs: build
@@ -152,29 +199,38 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
 
-      - name: Download built artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          pattern: smart-srun-ipk*
-          merge-multiple: true
-
-      - name: Prepare release assets
+      - name: Validate release version
         run: |
           VERSION='${{ github.event.inputs.version }}'
           if [[ ! "$VERSION" =~ ^[A-Za-z0-9._-]+$ ]] || [[ "$VERSION" == "." ]] || [[ "$VERSION" == ".." ]] || [[ "$VERSION" == -* ]]; then
             echo "unsafe version: $VERSION"
             exit 1
           fi
-          python scripts/release_assets.py prepare artifacts release-assets split-downloads "$VERSION" > release-assets-metadata.json
+
+      - name: Download all built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: smart-srun-*
+          merge-multiple: true
+
+      - name: Prepare unified release assets
+        run: |
+          VERSION='${{ github.event.inputs.version }}'
+          python scripts/release_assets.py prepare-unified \
+            artifacts release-assets split-downloads "$VERSION" \
+            > release-assets-metadata.json
 
       - name: Render release notes from template
         run: |
           VERSION='${{ github.event.inputs.version }}'
           OWNER="${GITHUB_REPOSITORY%/*}"
           REPO="${GITHUB_REPOSITORY#*/}"
-          OPENWRT_VERSION='${{ github.event.inputs.openwrt_version }}'
-          if [ -z "$OPENWRT_VERSION" ]; then OPENWRT_VERSION='23.05.5'; fi
+          OPENWRT_IPK='${{ github.event.inputs.openwrt_ipk_version }}'
+          OPENWRT_APK='${{ github.event.inputs.openwrt_apk_version }}'
+          if [ -z "$OPENWRT_IPK" ]; then OPENWRT_IPK='23.05.5'; fi
+          if [ -z "$OPENWRT_APK" ]; then OPENWRT_APK='25.12.2'; fi
+          OPENWRT_VERSION="ipk: ${OPENWRT_IPK} / apk: ${OPENWRT_APK}"
           SPLIT_PACKAGES_URL="$(python scripts/release_assets.py build-split-url "$OWNER" "$REPO" "$VERSION")"
 
           python scripts/release_assets.py render-notes \
@@ -221,7 +277,9 @@ jobs:
         with:
           tag_name: ${{ github.event.inputs.version }}
           name: ${{ github.event.inputs.version }}
-          files: release-assets/*.ipk
+          files: |
+            release-assets/*.ipk
+            release-assets/*.apk
           body_path: release-notes.md
           draft: true
           prerelease: false
