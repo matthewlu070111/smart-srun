@@ -47,9 +47,15 @@ class LuciLogViewRefactorTests(unittest.TestCase):
         self.assertIn('channel = channel == "network" and "network" or "plugin"', self.controller_text)
         self.assertIn('local lines = tonumber(http.formvalue("lines")) or 1000', self.controller_text)
         self.assertIn('[信息]', self.controller_text)
-        self.assertNotIn('if not zh then return line', self.controller_text)
+        self.assertIn('if not zh then', self.controller_text)
+        self.assertIn('local suffix = extract_structured_suffix(rest, level, event)', self.controller_text)
+        self.assertIn('parts[#parts + 1] = " " .. suffix', self.controller_text)
         self.assertIn('channel = channel,', self.controller_text)
         self.assertIn('return read_plugin_full_log_text()', self.controller_text)
+        self.assertIn('local function resolve_network_source_lines(lines, download_mode)', self.controller_text)
+        self.assertIn('local source_lines = requested * 4', self.controller_text)
+        self.assertIn('local plugin_text = read_plugin_log_text(source_lines)', self.controller_text)
+        self.assertIn('local system_text = read_system_log_text(source_lines)', self.controller_text)
 
     def test_cbi_log_panel_renders_channel_switcher_and_toolbar(self):
         self.assertIn('tail -n 100 /var/log/smart_srun.log', self.cbi_text)

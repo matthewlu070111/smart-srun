@@ -82,6 +82,47 @@ class NetworkBindIpTests(unittest.TestCase):
 
         check_output.assert_not_called()
 
+    def test_http_get_logs_redacted_url_when_query_contains_sensitive_params(self):
+        with (
+            mock.patch.object(network, "HAVE_URLLIB", False),
+            mock.patch.object(
+                network.os,
+                "path",
+                wraps=network.os.path,
+            ) as mock_path,
+            mock.patch.object(
+                network.subprocess,
+                "check_output",
+                return_value=b"ok",
+            ) as check_output,
+            mock.patch.object(network, "log") as log_fn,
+        ):
+            mock_path.exists.side_effect = lambda path: path == "/usr/bin/wget"
+
+            body = network.http_get(
+                "http://portal.example.edu/cgi-bin/srun_portal",
+                params={
+                    "username": "alice",
+                    "password": "{MD5}secret",
+                    "info": "opaque-info",
+                    "chksum": "deadbeef",
+                },
+                timeout=7,
+            )
+
+        self.assertEqual(body, "ok")
+        request_url = check_output.call_args[0][0][-1]
+        self.assertIn("password=", request_url)
+        self.assertIn("info=", request_url)
+        self.assertIn("chksum=", request_url)
+
+        logged_urls = [call.kwargs.get("url", "") for call in log_fn.call_args_list]
+        self.assertIn("http://portal.example.edu/cgi-bin/srun_portal", logged_urls)
+        for value in logged_urls:
+            self.assertNotIn("password=", value)
+            self.assertNotIn("info=", value)
+            self.assertNotIn("chksum=", value)
+
 
 class ConfigLockingTests(unittest.TestCase):
     def setUp(self):

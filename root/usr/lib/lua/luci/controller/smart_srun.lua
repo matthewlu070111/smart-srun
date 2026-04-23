@@ -630,6 +630,15 @@ local function extract_kv(rest, key)
     return rest:match(key .. "=(%S+)")
 end
 
+local function extract_structured_suffix(rest, level, event)
+    local prefix = tostring(level or "") .. " " .. tostring(event or "")
+    local text = tostring(rest or "")
+    if text:sub(1, #prefix) ~= prefix then
+        return ""
+    end
+    return util.trim(text:sub(#prefix + 1))
+end
+
 local switch_stage_zh = {
     applying = "应用无线配置",
     wait_ip  = "等待获取 IPv4",
@@ -655,6 +664,14 @@ function friendly_line(line)
         parts[#parts + 1] = "[信息] "
     end
     parts[#parts + 1] = zh or event
+
+    if not zh then
+        local suffix = extract_structured_suffix(rest, level, event)
+        if suffix ~= "" then
+            parts[#parts + 1] = " " .. suffix
+        end
+        return table.concat(parts)
+    end
 
     if event == "switch_progress" then
         local stage = extract_kv(rest, "stage")
@@ -741,12 +758,12 @@ local function filter_text_since(text, since)
     return table.concat(kept, "\n")
 end
 
-local function read_system_log_text()
-    local ok, text = pcall(sys.exec, "logread -l " .. LOG_TAIL_SOURCE_LINES .. " 2>/dev/null")
+local function read_system_log_text(lines)
+    local ok, text = pcall(sys.exec, "logread -l " .. lines .. " 2>/dev/null")
     if ok and text and text ~= "" then
         return text
     end
-    ok, text = pcall(sys.exec, "logread 2>/dev/null | tail -n " .. LOG_TAIL_SOURCE_LINES)
+    ok, text = pcall(sys.exec, "logread 2>/dev/null | tail -n " .. lines)
     if ok and text then
         return text
     end
@@ -896,10 +913,29 @@ local function trim_entries(entries, lines)
     return trimmed
 end
 
-local function build_network_log_text(lines, since)
+local function resolve_network_source_lines(lines, download_mode)
+    if download_mode then
+        return LOG_TAIL_SOURCE_LINES
+    end
+
+    local requested = tonumber(lines) or 0
+    if requested < 10 then
+        requested = 10
+    end
+
+    local source_lines = requested * 4
+    if source_lines < 200 then
+        source_lines = 200
+    elseif source_lines > LOG_TAIL_SOURCE_LINES then
+        source_lines = LOG_TAIL_SOURCE_LINES
+    end
+    return source_lines
+end
+
+local function build_network_log_text(lines, since, source_lines)
     local entries = {}
     local order_counter = 0
-    local plugin_text = read_plugin_log_text(LOG_TAIL_SOURCE_LINES)
+    local plugin_text = read_plugin_log_text(source_lines)
     for line in plugin_text:gmatch("[^\n]+") do
         local _, _, event = parse_structured(line)
         if event and NETWORK_EVENTS[event] then
@@ -914,7 +950,7 @@ local function build_network_log_text(lines, since)
     end
 
     local state = read_json_file(STATE_FILE)
-    local system_text = read_system_log_text()
+    local system_text = read_system_log_text(source_lines)
     for line in system_text:gmatch("[^\n]+") do
         order_counter = order_counter + 1
         local entry = build_system_log_entry(line, state, order_counter)
@@ -955,13 +991,21 @@ end
 local function build_log_text(channel, lines, since, download_mode)
     if download_mode then
         if channel == "network" then
-            return build_network_log_text(LOG_TAIL_SOURCE_LINES, since)
+            return build_network_log_text(
+                LOG_TAIL_SOURCE_LINES,
+                since,
+                resolve_network_source_lines(lines, download_mode)
+            )
         end
         return read_plugin_full_log_text()
     end
 
     if channel == "network" then
-        return build_network_log_text(lines, since)
+        return build_network_log_text(
+            lines,
+            since,
+            resolve_network_source_lines(lines, download_mode)
+        )
     end
     return filter_text_since(read_plugin_log_text(lines), since)
 end

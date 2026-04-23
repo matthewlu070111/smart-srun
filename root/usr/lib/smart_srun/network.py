@@ -83,6 +83,19 @@ def extract_host_from_url(url):
     return match.group(1) if match else ""
 
 
+def redact_url_for_log(url):
+    text = str(url or "").strip()
+    if not text:
+        return ""
+
+    match = re.match(r"^([a-zA-Z][a-zA-Z0-9+.-]*://[^/?#]+(?:/[^?#]*)?)", text)
+    if match:
+        return match.group(1)
+
+    text = text.split("#", 1)[0]
+    return text.split("?", 1)[0]
+
+
 def compact_http_error_detail(detail, max_len=180):
     text = re.sub(r"\s+", " ", str(detail or "")).strip()
     if not text:
@@ -249,11 +262,12 @@ def http_get(url, params=None, timeout=5, bind_ip=None):
         url = url + ("&" if "?" in url else "?") + query
 
     host = extract_host_from_url(url)
+    log_url = redact_url_for_log(url)
     log(
         "DEBUG",
         "http_fetch",
         method="GET",
-        url=url,
+        url=log_url,
         host=host,
         timeout=timeout,
         bind_ip=bind_ip or "",
@@ -272,7 +286,7 @@ def http_get(url, params=None, timeout=5, bind_ip=None):
                     log(
                         "DEBUG",
                         "http_fetch_result",
-                        url=url,
+                        url=log_url,
                         host=host,
                         client="urllib",
                         status_code=status_code,
@@ -327,7 +341,7 @@ def http_get(url, params=None, timeout=5, bind_ip=None):
                 log(
                     "DEBUG",
                     "http_fetch_result",
-                    url=url,
+                    url=log_url,
                     host=host,
                     client=kind,
                     bytes_received=len(body),
@@ -343,12 +357,12 @@ def http_get(url, params=None, timeout=5, bind_ip=None):
                 errors.append("%s: %s" % (kind, str(exc)))
 
     if dns_failure_host:
-        log("WARN", "dns_probe_failed", host=dns_failure_host, url=url)
+        log("WARN", "dns_probe_failed", host=dns_failure_host, url=log_url)
 
     log(
         "WARN",
         "http_fetch_result",
-        url=url,
+        url=log_url,
         host=host,
         outcome="error",
         duration_ms=t.ms,
@@ -361,7 +375,7 @@ def http_get(url, params=None, timeout=5, bind_ip=None):
     if bind_ip and not bind_capable:
         raise RuntimeError("bind_ip requires wget --bind-address support")
 
-    raise RuntimeError(humanize_http_errors(url, [e for e in errors if e]))
+    raise RuntimeError(humanize_http_errors(log_url, [e for e in errors if e]))
 
 
 def parse_jsonp(text):
