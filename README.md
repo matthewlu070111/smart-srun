@@ -10,7 +10,7 @@
 
 ### LuCI Web 界面
 <p align="center">
-    <img src="https://r2.guiguisocute.cloud/PicGo/2026/03/25/aaa7b014a8a2db7fcc05edb9f81c242b.png">
+    <img src="doc\img\PixPin_2026-04-24_18-32-26.png">
 </p>
 
 ## 功能

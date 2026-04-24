@@ -267,75 +267,27 @@ end
 
 local RADIO_CHOICES = load_radio_choices()
 
-local function is_github_username(value)
-    local username = tostring(value or "")
-    if #username < 2 or #username > 39 then
-        return false
-    end
-    if username:find("%-%-", 1, true) then
-        return false
-    end
-    return username:match("^@[A-Za-z0-9][A-Za-z0-9%-]*[A-Za-z0-9]$") ~= nil
-        or username:match("^@[A-Za-z0-9]$") ~= nil
-end
-
 local function render_school_info_html(schools, current_school)
-    local cur_desc = ""
-    local cur_contributors = {}
     local helper_prefix = "如果该配置无法在您的学校使用，请直接前往"
     local helper_suffix = "提交 Issue 或 PR"
     local helper_link = "https://github.com/matthewlu070111/luci-app-smart-srun"
-
-    for _, sch in ipairs(schools or {}) do
-        if sch.short_name == current_school then
-            cur_desc = tostring(sch.description or "")
-            if type(sch.contributors) == "table" then
-                cur_contributors = sch.contributors
-            end
-            break
-        end
-    end
-
-    local show_desc = cur_desc ~= ""
-    local show_contrib = #cur_contributors > 0
-    local contrib_spacing = "4px"
-    local helper_spacing = "4px"
-    local cur_contrib_html = {}
+    local doc_base = "https://github.com/matthewlu070111/smart-srun/blob/main/doc/"
+    local short = tostring(current_school or "")
+    local doc_url = doc_base .. util.pcdata(short) .. ".md"
     local js_data = jsonc.stringify(schools or {}) or "[]"
-
-    for _, contributor in ipairs(cur_contributors) do
-        local text = tostring(contributor or "")
-        if is_github_username(text) then
-            cur_contrib_html[#cur_contrib_html + 1] = string.format(
-                '<a href="https://github.com/%s" target="_blank" rel="noopener noreferrer">%s</a>',
-                util.pcdata(text:sub(2)),
-                util.pcdata(text)
-            )
-        else
-            cur_contrib_html[#cur_contrib_html + 1] = string.format('<span>%s</span>', util.pcdata(text))
-        end
-    end
 
     return string.format([[
 <div id="smart-school-info" class="cbi-value-description" style="color:#14532d;opacity:0.9;display:block;line-height:1.6;">
-  <div id="smart-school-desc" style="display:%s;">
-    <strong>该配置在以下学校已得到验证：</strong> <span id="smart-school-desc-text">%s</span>
+  <div id="smart-school-doclink" style="display:block;">
+    <a id="smart-school-doc-link" href="%s" target="_blank" rel="noopener noreferrer">点击查看该配置已验证学校列表</a>
   </div>
-  <div id="smart-school-contrib" style="display:%s;margin-top:%s;">
-    <strong>贡献者:</strong> <span id="smart-school-contrib-text">%s</span>
-  </div>
-  <div id="smart-school-helper" style="display:block;margin-top:%s;color:#6b7280;font-size:0.92em;">
+  <div id="smart-school-helper" style="display:block;margin-top:4px;color:#6b7280;font-size:0.92em;">
     %s<a id="smart-school-repo-link" href="%s" target="_blank" rel="noopener noreferrer">插件仓库</a>%s
   </div>
   <textarea id="smart-school-data" style="display:none;">%s</textarea>
 </div>
 ]],
-        "block",
-        util.pcdata(cur_desc),
-        show_contrib and "block" or "none",
-        contrib_spacing,
-        table.concat(cur_contrib_html, ", "),
-        (show_desc or show_contrib) and helper_spacing or "0",
+        doc_url,
         helper_prefix,
         helper_link,
         helper_suffix,
