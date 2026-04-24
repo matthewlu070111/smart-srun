@@ -1,9 +1,11 @@
 # luci-app-smart-srun
 
-智慧深澜，OpenWrt 深澜校园网（SRun 4000）自动认证客户端，提供 CLI / LuCI 两种使用方式。
+智慧深澜，OpenWrt 深澜校园网Web自动认证客户端，提供 CLI / LuCI 两种使用方式。
 
-感谢 [@guiguisocute](https://github.com/guiguisocute) 的协助！
+## 鸣谢
+- [@guiguisocute](https://github.com/guiguisocute) 的协助
 
+- [LINUX DO](https://linux.do/)
 ## 预览
 
 ### LuCI Web 界面
@@ -38,73 +40,73 @@
 | `luci-app-smart-srun` | 标准 LuCI Web 界面包（用于 opkg / LuCI 软件包管理升级） | `smart-srun`、LuCI 运行环境 |
 | `luci-app-smart-srun-bundle` | 自包含安装包：CLI + LuCI 一起打包，适合手动下载安装 | `python3-light`、LuCI 运行环境 |
 
-- 只需要 CLI：安装 `smart-srun` 即可
-- 通过 LuCI / opkg 正常升级：安装 `smart-srun` + `luci-app-smart-srun`
-- 手动下载安装、想少折腾：直接安装 `luci-app-smart-srun-bundle`
+- 最少安装步骤：直接安装 `luci-app-smart-srun-bundle`
+- 仅CLI：安装 `smart-srun` 即可
+- 需要Luci界面且需要依赖分离：安装 `smart-srun` + `luci-app-smart-srun`
 
-## 安装与使用
-
-### 安装
+## 安装
 **以下操作请在路由器连上互联网的情况进行！**
 
 1. 下载最新安装包：[Releases](https://github.com/matthewlu070111/luci-app-smart-srun/releases)
    - OpenWrt 23.05 及更早（opkg 系统）→ 下载 `*.ipk`
    - OpenWrt 24.10+ / 25.12+（apk 系统）→ 下载 `*.apk`
 2. 安装：
-   #### 使用 LuCI 网页面板安装：
-   1. 登录 LuCI 界面，进入 **系统**——**软件包** 页面。
-   2. 点击 **更新列表** 按钮，等待`opkg update` / `apk update`完成。
-   3. 点击 **上传软件包...** 按钮，选择自己下载的安装包。
-    - 如果需要LuCI Web界面，请**先**安装 `smart-srun`， **再**安装 `luci-app-smart-srun`。
-    - 如果你想直接安装一个包完成部署，直接上传 `luci-app-smart-srun-bundle`。（推荐）
-   4. 点击 **安装** 按钮，等待安装完成。
-   5. 出现安装成功的弹窗后，退出 LuCI 界面，重新登录，使新软件包生效。
+#### 使用 LuCI 网页面板安装：
+1. 登录 LuCI 界面，进入 **系统**——**软件包** 页面。
+2. 点击 **更新列表** 按钮，等待`opkg update` / `apk update`完成。
+3. 点击 **上传软件包...** 按钮，选择自己下载的安装包。
+- 如果需要LuCI Web界面，请**先**安装 `smart-srun`， **再**安装 `luci-app-smart-srun`。
+- 如果你想直接安装一个包完成部署，直接上传 `luci-app-smart-srun-bundle`。（推荐）
+4. 点击 **安装** 按钮，等待安装完成。
+5. 出现安装成功的弹窗后，退出 LuCI 界面，重新登录，使新软件包生效。
 
-   > [!WARNING]
-   > **如果你使用的包管理器为apk**
-   > 因为OpenWrt 25.12+的LuCI 的「上传软件包」按钮目前对**未签名的第三方 apk 包拒绝安装**（[openwrt/luci#8482](https://github.com/openwrt/luci/issues/8482)）。
-   >
-   > 所以如果上传失败出现 `UNTRUSTED signature`，请SSH进你的设备，改用下面的命令行方式，加 `--allow-untrusted` 参数。
+> [!WARNING]
+> **如果你使用的包管理器为apk**
+> 
+> 因为OpenWrt 25.12+的LuCI 的「上传软件包」按钮目前对**未签名的第三方 apk 包拒绝安装**（[openwrt/luci#8482](https://github.com/openwrt/luci/issues/8482)）。
+>
+> 所以如果上传失败出现 `UNTRUSTED signature`，请SSH进你的设备，改用下面的命令行方式，加 `--allow-untrusted` 参数。
+---
+#### 使用命令行界面安装：
+1. 将安装包上传到 OpenWrt 设备，切换到该目录，执行：
 
-   #### 使用命令行界面安装：
-   6. 将安装包上传到 OpenWrt 设备，切换到该目录，执行：
+**opkg 系统（OpenWrt 23.05 及更早）：**
+```sh
+# 仅 CLI
+opkg install smart-srun_*.ipk
 
-   **opkg 系统（OpenWrt 23.05 及更早）：**
-   ```sh
-    # 仅 CLI
-    opkg install smart-srun_*.ipk
+# 标准 split 安装
+opkg install smart-srun_*.ipk
+opkg install luci-app-smart-srun_*.ipk
 
-    # 标准 split 安装
-    opkg install smart-srun_*.ipk
-    opkg install luci-app-smart-srun_*.ipk
+# bundle 单包安装
+opkg install luci-app-smart-srun-bundle_*.ipk
+```
 
-    # bundle 单包安装
-    opkg install luci-app-smart-srun-bundle_*.ipk
-    ```
+**apk 系统（OpenWrt 24.10+ / 25.12+）：**
+> 因为本项目是自签的第三方包，apk 默认会因 `UNTRUSTED signature` 拒绝安装，
+> 所以下面命令统一加 `--allow-untrusted`。这是 apk 的强制安全检查，
+```sh
+# 仅 CLI
+apk add --allow-untrusted ./smart-srun-*.apk
 
-   **apk 系统（OpenWrt 24.10+ / 25.12+）：**
-   > 因为本项目是自签的第三方包，apk 默认会因 `UNTRUSTED signature` 拒绝安装，
-   > 所以下面命令统一加 `--allow-untrusted`。这是 apk 的强制安全检查，
-   ```sh
-    # 仅 CLI
-    apk add --allow-untrusted ./smart-srun-*.apk
+# 标准 split 安装
+apk add --allow-untrusted ./smart-srun-*.apk
+apk add --allow-untrusted ./luci-app-smart-srun-*.apk
 
-    # 标准 split 安装
-    apk add --allow-untrusted ./smart-srun-*.apk
-    apk add --allow-untrusted ./luci-app-smart-srun-*.apk
-
-    # bundle 单包安装
-    apk add --allow-untrusted ./luci-app-smart-srun-bundle-*.apk
-    ```
-   7. 启用服务：
-   ```sh
-    /etc/init.d/smart_srun enable
-    /etc/init.d/smart_srun restart
-    ```
+# bundle 单包安装
+apk add --allow-untrusted ./luci-app-smart-srun-bundle-*.apk
+```
+2. 启用服务：
+```sh
+/etc/init.d/smart_srun enable
+/etc/init.d/smart_srun restart
+```
 
 安装建议：
 - **不要把 `luci-app-smart-srun-bundle` 和标准 split 包混装**
 
+## 使用
 ### LuCI 使用
 
 在 LuCI 页面进入 **服务 → SMART SRun**，在「基础设置」标签页中：
