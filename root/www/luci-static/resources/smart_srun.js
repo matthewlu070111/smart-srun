@@ -500,69 +500,18 @@
   };
 
   function initSchoolInfo() {
-    var schools = readJson('smart-school-data', []);
     var infoBox = document.getElementById('smart-school-info');
-    var descEl = document.getElementById('smart-school-desc');
-    var descTextEl = document.getElementById('smart-school-desc-text');
-    var contribEl = document.getElementById('smart-school-contrib');
-    var contribTextEl = document.getElementById('smart-school-contrib-text');
-    var helperEl = document.getElementById('smart-school-helper');
-    var outerDescEl = null;
-    if (!infoBox || !descEl || !descTextEl || !contribEl || !contribTextEl || !helperEl || window.__smartSchoolInfoInit) return;
+    var docLinkEl = document.getElementById('smart-school-doc-link');
+    if (!infoBox || !docLinkEl || window.__smartSchoolInfoInit) return;
     window.__smartSchoolInfoInit = true;
 
+    var DOC_BASE = 'https://github.com/matthewlu070111/smart-srun/blob/main/doc/';
+    var outerDescEl = null;
     for (var parent = infoBox.parentNode; parent; parent = parent.parentNode) {
       if (parent.className && String(parent.className).indexOf('cbi-value-description') >= 0) {
         outerDescEl = parent;
         break;
       }
-    }
-
-    function lookup(shortName) {
-      for (var i = 0; i < schools.length; i++) {
-        if (schools[i].short_name === shortName) return schools[i];
-      }
-      return null;
-    }
-
-    function isGithubUsername(value) {
-      return /^@[A-Za-z0-9](?:[A-Za-z0-9-]{0,37})$/.test(value || '') && !/--/.test(value || '') && !/-$/.test(value || '');
-    }
-
-    function clearNode(node) {
-      while (node.firstChild) node.removeChild(node.firstChild);
-    }
-
-    function renderContributors(contributors) {
-      clearNode(contribTextEl);
-      for (var i = 0; i < contributors.length; i++) {
-        var text = String(contributors[i] == null ? '' : contributors[i]);
-        if (i > 0) contribTextEl.appendChild(document.createTextNode(', '));
-        if (isGithubUsername(text)) {
-          var link = document.createElement('a');
-          link.href = 'https://github.com/' + text.substring(1);
-          link.target = '_blank';
-          link.rel = 'noopener noreferrer';
-          link.textContent = text;
-          contribTextEl.appendChild(link);
-        } else {
-          var span = document.createElement('span');
-          span.textContent = text;
-          contribTextEl.appendChild(span);
-        }
-      }
-    }
-
-    function sync(desc, contributors) {
-      var hasContrib = contributors && contributors.length;
-      infoBox.style.display = 'block';
-      if (outerDescEl) outerDescEl.style.display = 'block';
-      descEl.style.display = desc ? 'block' : 'none';
-      contribEl.style.display = hasContrib ? 'block' : 'none';
-      contribEl.style.marginTop = '4px';
-      helperEl.style.marginTop = (desc || hasContrib) ? '4px' : '0';
-      descTextEl.textContent = desc || '';
-      renderContributors(hasContrib ? contributors : []);
     }
 
     function findSchoolSelect() {
@@ -584,12 +533,9 @@
     if (!sel) return;
 
     function update(value) {
-      var school = lookup(value);
-      if (!school) {
-        sync('', []);
-        return;
-      }
-      sync(school.description || '', (school.contributors && school.contributors.length) ? school.contributors : []);
+      infoBox.style.display = 'block';
+      if (outerDescEl) outerDescEl.style.display = 'block';
+      docLinkEl.href = DOC_BASE + encodeURIComponent(String(value || '')) + '.md';
     }
 
     update(sel.value);
