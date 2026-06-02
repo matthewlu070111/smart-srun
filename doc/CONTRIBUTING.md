@@ -40,11 +40,21 @@ root/
 
 ## 提交前先这样验证
 
+建议本机准备这些开发工具：
+
+```sh
+python -m pip install pytest ruff paramiko
+```
+
+Lua / LuCI 相关改动还需要本机能找到 `lua` 和 `luac`。Windows 上可以用 Scoop 安装 Lua 5.1；Linux / WSL 上用发行版包管理器安装即可。
+
 先跑完整测试：
 
 ```sh
 python -m pytest tests/ -v
 ```
+
+`pytest.ini` 已把缓存目录改到 `.cache/pytest`，避免旧 `.pytest_cache` 权限异常反复污染测试输出。
 
 只想验证某一块时，可以直接跑：
 
@@ -53,6 +63,8 @@ python -m pytest tests/test_school_runtime_loader.py -v
 python -m pytest tests/ -k runtime -v
 ruff check root/usr/lib/smart_srun/
 ```
+
+测试里包含 OpenWrt / Lua 冒烟检查：`luac -p` 会解析 shipped LuCI Lua 文件，本机 `lua` 会用 stub LuCI 模块执行 `friendly_line()`。如果本机缺少 `luac` 或 `lua`，相关测试会失败，应该先安装工具而不是跳过。
 
 这个仓库很常见的一类改动，是只改了 Lua / JS / 打包脚本，没有很好地做路由器侧自动化。遇到这种情况，补一个 source-level 的 Python 回归测试是正常做法，比如直接断言某个 Lua 端点、按钮 ID、命令字符串或打包规则仍然存在。
 
@@ -69,7 +81,16 @@ python scripts/hot_update.py
 
 `SMARTSRUN_ROUTER_USER` 和 `SMARTSRUN_LUCI_BASE_URL` 是可选的。
 
-这个脚本会上传文件、跑远端语法检查、清 LuCI / Python 缓存、重启 `smart_srun` 和 `uwsgi`，然后再做 `srunnet status`、`srunnet schools`、`srunnet schools inspect --selected` 这些冒烟检查。
+生产热更新前，建议先跑两个低风险检查：
+
+```sh
+python scripts/hot_update.py --dry-run
+python scripts/hot_update.py --probe
+```
+
+`--dry-run` 只打印上传目标和远端命令，不连接路由器，也不需要密码。`--probe` 会把同一批文件上传到 `/tmp/smart_srun_probe_*`，在临时目录里跑 Python 编译 / import、logger、LuCI Lua、init 脚本和 CLI 版本冒烟检查，最后清理探针文件；它不会覆盖生产路径，也不会重启生产服务。
+
+不带参数的 `python scripts/hot_update.py` 是生产热更新：会上传文件到真实路径、跑远端语法检查、清 LuCI / Python 缓存、重启 `smart_srun` 和 `uwsgi`，然后再做 `srunnet status`、`srunnet schools`、`srunnet schools inspect --selected` 和 LuCI 页面验证。这个命令会覆盖路由器文件，只在已经明确确认要部署时执行。
 
 注意：`scripts/hot_update.py` 维护的是一份显式上传列表，不会自动扫描新文件。如果你新增了 shipped Python / Lua / JS 文件，记得把它加进去，不然本地改了、路由器上却没有。
 

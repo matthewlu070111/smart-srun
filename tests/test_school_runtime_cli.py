@@ -621,6 +621,140 @@ class HotUpdateScriptTests(unittest.TestCase):
 
         self.assertIn("SMARTSRUN_ROUTER_PASSWORD", str(exc.exception))
 
+    def test_hot_update_probe_arg_is_explicit(self):
+        hot_update = load_hot_update_module(self)
+
+        self.assertFalse(hot_update.build_arg_parser().parse_args([]).probe)
+        self.assertTrue(hot_update.build_arg_parser().parse_args(["--probe"]).probe)
+        self.assertTrue(hot_update.build_arg_parser().parse_args(["--dry-run"]).dry_run)
+        parsed = hot_update.build_arg_parser().parse_args(["--probe", "--dry-run"])
+        self.assertTrue(parsed.probe)
+        self.assertTrue(parsed.dry_run)
+
+    def test_hot_update_probe_remote_paths_are_rebased_to_tmp(self):
+        hot_update = load_hot_update_module(self)
+
+        self.assertEqual(
+            hot_update.remote_path_for("/usr/bin/srunnet", "/tmp/probe"),
+            "/tmp/probe/usr/bin/srunnet",
+        )
+        targets = hot_update.remote_target_paths("/tmp/probe")
+        self.assertTrue(targets)
+        self.assertTrue(
+            all(item["remote"].startswith("/tmp/probe/") for item in targets)
+        )
+        self.assertIn(
+            {
+                "local": "root/usr/bin/srunnet",
+                "remote": "/tmp/probe/usr/bin/srunnet",
+                "original_remote": "/usr/bin/srunnet",
+            },
+            targets,
+        )
+
+    def test_hot_update_probe_commands_do_not_restart_production_services(self):
+        hot_update = load_hot_update_module(self)
+
+        commands = hot_update.build_probe_commands("/tmp/probe")
+        probe_text = "\n".join(commands["probe_checks"])
+        cleanup_text = "\n".join(commands["cleanup"])
+
+        self.assertIn("/tmp/probe/usr/lib/smart_srun/school_runtime.py", probe_text)
+        self.assertIn(
+            "/tmp/probe/usr/lib/lua/luci/controller/smart_srun.lua", probe_text
+        )
+        self.assertIn("logger_probe.py", probe_text)
+        self.assertIn("luci_friendly_probe.lua", probe_text)
+        self.assertIn("client.py --version", probe_text)
+        self.assertIn("rm -rf /tmp/probe", cleanup_text)
+        self.assertNotIn("/etc/init.d/smart_srun restart", probe_text)
+        self.assertNotIn("/etc/init.d/uwsgi restart", probe_text)
+
+    def test_hot_update_main_probe_dispatches_without_hot_update(self):
+        hot_update = load_hot_update_module(self)
+
+        class FakeSftp(object):
+            def __init__(self):
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        class FakeSsh(object):
+            def __init__(self):
+                self.sftp = FakeSftp()
+                self.closed = False
+
+            def open_sftp(self):
+                return self.sftp
+
+            def close(self):
+                self.closed = True
+
+        fake_ssh = FakeSsh()
+        fake_paramiko = object()
+
+        with (
+            mock.patch.object(hot_update, "ensure_local_files") as ensure_files,
+            mock.patch.object(
+                hot_update, "require_router_password", return_value="secret"
+            ) as require_password,
+            mock.patch.object(
+                hot_update, "load_paramiko", return_value=fake_paramiko
+            ) as load_paramiko,
+            mock.patch.object(
+                hot_update, "connect_ssh", return_value=fake_ssh
+            ) as connect_ssh,
+            mock.patch.object(hot_update, "run_probe", return_value=0) as run_probe,
+            mock.patch.object(hot_update, "run_hot_update") as run_hot_update,
+        ):
+            code = hot_update.main(["--probe"])
+
+        self.assertEqual(code, 0)
+        ensure_files.assert_called_once_with()
+        require_password.assert_called_once_with()
+        load_paramiko.assert_called_once_with()
+        connect_ssh.assert_called_once_with(fake_paramiko, "secret")
+        run_probe.assert_called_once_with(fake_ssh, fake_ssh.sftp)
+        run_hot_update.assert_not_called()
+        self.assertTrue(fake_ssh.sftp.closed)
+        self.assertTrue(fake_ssh.closed)
+
+    def test_hot_update_main_dry_run_does_not_connect_or_require_password(self):
+        hot_update = load_hot_update_module(self)
+
+        with (
+            mock.patch.object(hot_update, "ensure_local_files") as ensure_files,
+            mock.patch.object(hot_update, "require_router_password") as require_password,
+            mock.patch.object(hot_update, "load_paramiko") as load_paramiko,
+            mock.patch.object(hot_update, "connect_ssh") as connect_ssh,
+            mock.patch.object(hot_update, "run_dry_run", return_value=0) as run_dry_run,
+        ):
+            code = hot_update.main(["--probe", "--dry-run"])
+
+        self.assertEqual(code, 0)
+        ensure_files.assert_called_once_with()
+        run_dry_run.assert_called_once_with(probe=True)
+        require_password.assert_not_called()
+        load_paramiko.assert_not_called()
+        connect_ssh.assert_not_called()
+
+    def test_hot_update_probe_dry_run_prints_tmp_plan_without_restarts(self):
+        hot_update = load_hot_update_module(self)
+        stdout = io.StringIO()
+
+        with redirect_stdout(stdout):
+            code = hot_update.run_dry_run(probe=True)
+
+        text = stdout.getvalue()
+        self.assertEqual(code, 0)
+        self.assertIn("DRY RUN: probe upload and smoke checks", text)
+        self.assertIn("/tmp/smart_srun_probe_DRY_RUN/usr/bin/srunnet", text)
+        self.assertIn("logger_probe.py", text)
+        self.assertIn("luci_friendly_probe.lua", text)
+        self.assertNotIn("/etc/init.d/smart_srun restart", text)
+        self.assertNotIn("/etc/init.d/uwsgi restart", text)
+
 
 class DaemonStartupStateTests(unittest.TestCase):
     def test_run_daemon_preserves_pending_action_context_on_startup(self):

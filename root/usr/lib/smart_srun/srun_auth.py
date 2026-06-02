@@ -7,7 +7,7 @@ SRun 认证 API -- challenge、login、logout、在线查询。
 
 import time
 
-from config import append_log, localize_error, log, timed
+from config import localize_error, log, timed
 from network import (
     HTTP_EXCEPTIONS,
     extract_ip_from_text,

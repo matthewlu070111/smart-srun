@@ -286,6 +286,26 @@ class SchoolRuntimeConfigTests(unittest.TestCase):
 
         self.assertEqual("alice", loaded["username"])
 
+    def test_school_metadata_lookup_error_falls_back_to_minimal_metadata(self):
+        with mock.patch(
+            "schools.get_school_metadata",
+            side_effect=LookupError("missing runtime-school"),
+        ):
+            metadata = config._get_school_metadata({"school": "runtime-school"})
+
+        self.assertEqual(
+            {"short_name": "runtime-school", "no_suffix_operators": ["xn"]},
+            metadata,
+        )
+
+    def test_school_metadata_does_not_swallow_unexpected_runtime_errors(self):
+        with mock.patch(
+            "schools.get_school_metadata",
+            side_effect=RuntimeError("unexpected metadata failure"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "unexpected metadata failure"):
+                config._get_school_metadata({"school": "runtime-school"})
+
     def test_luci_contract_normalizes_bool_descriptor_defaults(self):
         contract = config.build_school_runtime_luci_contract(
             {"school": "jxnu", config.SCHOOL_EXTRA_KEY: {}},

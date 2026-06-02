@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import tempfile
 import unittest
 
 
@@ -88,10 +89,72 @@ class LoggerTests(unittest.TestCase):
         self.assertIn('msg_key="has spaces"', line)
         self.assertIn('empty=""', line)
 
+    def test_control_characters_are_kept_on_one_log_line(self):
+        logger.log("INFO", "e", "first\nsecond", detail="a\tb", raw="x\\y")
+        line = self._emitted[0]
+        self.assertIn("first\\nsecond", line)
+        self.assertIn("detail=a\\tb", line)
+        self.assertIn("raw=x\\\\y", line)
+        self.assertNotIn("\n", line)
+        self.assertNotIn("\t", line)
+
+    def test_append_log_keeps_legacy_lines_single_line(self):
+        logger.append_log("legacy\nmessage\twith controls")
+        line = self._emitted[0]
+        self.assertIn("legacy\\nmessage\\twith controls", line)
+        self.assertNotIn("\n", line)
+        self.assertNotIn("\t", line)
+
+    def test_sensitive_structured_fields_are_redacted(self):
+        logger.set_log_context(session_token="context-secret")
+        logger.log(
+            "INFO",
+            "e",
+            password="plain-secret",
+            chksum="deadbeef",
+            campus_key="wifi-secret",
+            username="alice",
+        )
+        line = self._emitted[0]
+        self.assertIn("password=***", line)
+        self.assertIn("chksum=***", line)
+        self.assertIn("campus_key=***", line)
+        self.assertIn("session_token=***", line)
+        self.assertIn("username=alice", line)
+        self.assertNotIn("plain-secret", line)
+        self.assertNotIn("deadbeef", line)
+        self.assertNotIn("wifi-secret", line)
+        self.assertNotIn("context-secret", line)
+
     def test_timed_context_manager_reports_milliseconds(self):
         with logger.timed() as t:
             time.sleep(0.01)
         self.assertGreaterEqual(t.ms, 5)
+
+    def test_rotate_log_tail_keeps_recent_complete_lines(self):
+        original_file = logger.LOG_FILE
+        original_max = logger.LOG_MAX_BYTES
+        self.addCleanup(setattr, logger, "LOG_FILE", original_file)
+        self.addCleanup(setattr, logger, "LOG_MAX_BYTES", original_max)
+
+        with tempfile.NamedTemporaryFile(delete=False) as tmp:
+            path = tmp.name
+        self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
+
+        logger.LOG_FILE = path
+        logger.LOG_MAX_BYTES = 80
+        with open(path, "wb") as f:
+            for idx in range(10):
+                f.write(("line-%02d payload\n" % idx).encode("utf-8"))
+
+        logger._rotate_log_tail()
+
+        with open(path, "rb") as f:
+            data = f.read().decode("utf-8")
+        self.assertTrue(data.startswith("line-"))
+        self.assertIn("line-09 payload\n", data)
+        self.assertNotIn("line-00 payload\n", data)
+        self.assertLessEqual(len(data.encode("utf-8")), logger.LOG_MAX_BYTES // 2)
 
 
 if __name__ == "__main__":

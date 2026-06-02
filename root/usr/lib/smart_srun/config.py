@@ -9,23 +9,23 @@ import os
 import re
 import time
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
-from logger import (
-    BEIJING_TZ,
-    LOG_FILE,
-    LOG_MAX_BYTES,
-    LOG_LEVEL_NAMES,
-    DEFAULT_LOG_LEVEL,
-    append_log,
-    clear_log_context,
-    get_log_threshold,
-    log,
-    normalize_level as normalize_log_level,
-    set_log_context,
-    set_log_threshold,
-    timed,
-)
+import logger as _logger
+
+BEIJING_TZ = _logger.BEIJING_TZ
+LOG_FILE = _logger.LOG_FILE
+LOG_MAX_BYTES = _logger.LOG_MAX_BYTES
+LOG_LEVEL_NAMES = _logger.LOG_LEVEL_NAMES
+DEFAULT_LOG_LEVEL = _logger.DEFAULT_LOG_LEVEL
+append_log = _logger.append_log
+clear_log_context = _logger.clear_log_context
+get_log_threshold = _logger.get_log_threshold
+log = _logger.log
+normalize_log_level = _logger.normalize_level
+set_log_context = _logger.set_log_context
+set_log_threshold = _logger.set_log_threshold
+timed = _logger.timed
 
 JSON_CONFIG_FILE = "/usr/lib/smart_srun/config.json"
 STATE_FILE = "/var/run/smart_srun/state.json"
@@ -124,7 +124,7 @@ def _load_defaults():
                 else:
                     out[k] = str(v)
             return out
-    except Exception:
+    except (OSError, TypeError, ValueError):
         pass
     return {
         "enabled": "0",
@@ -217,7 +217,7 @@ def _load_json_file_unlocked(path, allowed_keys=None):
             if allowed_keys is None:
                 return data
             return {k: data[k] for k in data if k in allowed_keys}
-    except Exception:
+    except (OSError, TypeError, ValueError):
         pass
     return {}
 
@@ -257,7 +257,7 @@ def load_json_raw_config():
             data = json.load(rf)
         if isinstance(data, dict):
             return data
-    except Exception:
+    except (OSError, TypeError, ValueError):
         pass
     return {}
 
@@ -296,7 +296,7 @@ def update_json_raw_config(updater):
 # ---------------------------------------------------------------------------
 
 
-# log() / append_log() are imported from logger.py at module top.
+# logger helpers are re-exported for existing modules that import them from config.py.
 
 
 # ---------------------------------------------------------------------------
@@ -434,12 +434,12 @@ def validate_school_extra(raw_cfg, descriptors):
         if value_type == "int":
             try:
                 int(text)
-            except Exception:
+            except (TypeError, ValueError):
                 errors.append({"key": key, "message": "%s must be an integer." % label})
         elif value_type == "float":
             try:
                 float(text)
-            except Exception:
+            except (TypeError, ValueError):
                 errors.append({"key": key, "message": "%s must be a number." % label})
         elif value_type == "bool":
             if text.lower() not in (
@@ -475,7 +475,7 @@ def normalize_school_extra(raw_cfg, descriptors):
             continue
         try:
             value = _coerce_school_extra_value(payload.get(key), descriptor)
-        except Exception:
+        except (TypeError, ValueError):
             return {}
         if value != "":
             normalized[key] = value
@@ -539,7 +539,7 @@ def _get_school_metadata(cfg):
         if metadata:
             return metadata
         return schools.get_default_school_metadata()
-    except Exception:
+    except (AttributeError, ImportError, LookupError, ValueError):
         return {"short_name": school_key, "no_suffix_operators": ["xn"]}
 
 
@@ -670,7 +670,7 @@ def parse_non_negative_int(value, default_value):
     try:
         parsed = int(str(value).strip())
         return parsed if parsed >= 0 else int(default_value)
-    except Exception:
+    except (TypeError, ValueError):
         return int(default_value)
 
 
@@ -678,7 +678,7 @@ def parse_non_negative_float(value, default_value):
     try:
         parsed = float(str(value).strip())
         return parsed if parsed >= 0 else float(default_value)
-    except Exception:
+    except (TypeError, ValueError):
         return float(default_value)
 
 
@@ -781,9 +781,6 @@ def apply_default_selection_for_runtime(expect_hotspot, reason=""):
         lambda current: current.__setitem__(meta["active_key"], default_id)
     )
 
-    suffix = ""
-    if reason:
-        suffix = "（%s）" % str(reason).strip()
     log(
         "INFO",
         "config_default_applied",
@@ -971,7 +968,7 @@ def load_config():
         try:
             save_json_raw_config(raw)
             log("INFO", "config_migrated", "legacy config migrated to new format")
-        except Exception:
+        except OSError:
             pass
 
     cfg = {}
@@ -1177,7 +1174,7 @@ def get_manual_terminal_check_attempts(cfg):
     try:
         attempts = int(str(cfg.get("manual_terminal_check_max_attempts", "5")).strip())
         return attempts if attempts > 0 else 5
-    except Exception:
+    except (TypeError, ValueError):
         return 5
 
 

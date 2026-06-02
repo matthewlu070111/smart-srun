@@ -10,7 +10,6 @@ import time
 from config import (
     ACTION_FILE,
     LOG_FILE,
-    append_log,
     build_school_runtime_luci_contract,
     log,
     campus_uses_wired,
@@ -438,7 +437,7 @@ def _acquire_daemon_lock():
 
 
 def run_daemon(runtime=None):
-    daemon_lock = _acquire_daemon_lock()
+    _daemon_lock = _acquire_daemon_lock()
     reconcile_manual_login_service_guard()
     state = _make_daemon_state()
     startup_cfg = load_config()

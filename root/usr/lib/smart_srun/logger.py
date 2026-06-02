@@ -36,6 +36,26 @@ _EMIT_WEIGHTS = {k: v for k, v in LOG_LEVEL_WEIGHTS.items() if k != "ALL"}
 _threshold = LOG_LEVEL_WEIGHTS[DEFAULT_LOG_LEVEL]
 _context = {}
 
+_REDACTED_VALUE = "***"
+_SENSITIVE_KEY_PARTS = (
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "chksum",
+    "checksum",
+    "hmd5",
+    "credential",
+    "authorization",
+    "cookie",
+    "session",
+    "private_key",
+    "campus_key",
+    "hotspot_key",
+    "wifi_key",
+    "psk",
+)
+
 
 def normalize_level(level):
     name = str(level or "").strip().upper()
@@ -98,8 +118,20 @@ class timed(object):
         return False
 
 
-def _format_value(value):
+def _format_text(value):
     sv = str(value)
+    sv = sv.replace("\\", "\\\\")
+    sv = sv.replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t")
+    return sv
+
+
+def _is_sensitive_key(key):
+    name = str(key or "").strip().lower()
+    return any(part in name for part in _SENSITIVE_KEY_PARTS)
+
+
+def _format_value(value, key=None):
+    sv = _REDACTED_VALUE if _is_sensitive_key(key) else _format_text(value)
     if " " in sv or not sv or '"' in sv:
         sv = '"%s"' % sv.replace('"', '\\"')
     return sv
@@ -122,12 +154,12 @@ def log(level, event, msg="", **ctx):
         for k, v in _context.items():
             if k in ctx:
                 continue
-            parts.append("%s=%s" % (k, _format_value(v)))
+            parts.append("%s=%s" % (k, _format_value(v, k)))
     for k, v in ctx.items():
-        parts.append("%s=%s" % (k, _format_value(v)))
+        parts.append("%s=%s" % (k, _format_value(v, k)))
 
     if msg:
-        parts.append("| %s" % msg)
+        parts.append("| %s" % _format_text(msg))
 
     _write_log("[%s] %s" % (timestamp, " ".join(parts)))
 
@@ -138,7 +170,7 @@ def append_log(line):
         "[%s] %s"
         % (
             datetime.now(BEIJING_TZ).strftime("%Y-%m-%d %H:%M:%S"),
-            str(line).strip(),
+            _format_text(str(line).strip()),
         )
     )
 
@@ -148,13 +180,23 @@ def _write_log(log_line):
     print(log_line, flush=True)
     try:
         if os.path.exists(LOG_FILE) and os.path.getsize(LOG_FILE) > LOG_MAX_BYTES:
-            with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as rf:
-                content = rf.read()
-            keep = content[-(LOG_MAX_BYTES // 2):]
-            with open(LOG_FILE, "w", encoding="utf-8") as wf:
-                wf.write(keep)
+            _rotate_log_tail()
 
         with open(LOG_FILE, "a", encoding="utf-8") as af:
             af.write(log_line + "\n")
     except OSError:
         pass
+
+
+def _rotate_log_tail():
+    keep_bytes = LOG_MAX_BYTES // 2
+    with open(LOG_FILE, "rb") as rf:
+        rf.seek(0, os.SEEK_END)
+        size = rf.tell()
+        rf.seek(max(0, size - keep_bytes), os.SEEK_SET)
+        if size > keep_bytes:
+            rf.readline()
+        keep = rf.read()
+
+    with open(LOG_FILE, "wb") as wf:
+        wf.write(keep)

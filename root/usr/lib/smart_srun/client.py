@@ -24,7 +24,7 @@ _here = os.path.dirname(os.path.abspath(__file__))
 if _here not in sys.path:
     sys.path.insert(0, _here)
 
-from cli import main
+from cli import main  # noqa: E402
 
 if __name__ == "__main__":
     main()

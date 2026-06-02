@@ -178,31 +178,32 @@ def get_local_ip_for_target(target_host):
         return None
 
 
+def _parse_network_interface_status(text):
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def get_ipv4_from_network_interface(iface_name):
     if not iface_name:
         return None
 
     ok, out = run_cmd(["ubus", "call", "network.interface.%s" % iface_name, "status"])
+    data = _parse_network_interface_status(out) if ok and out else {}
     if ok and out:
-        try:
-            data = json.loads(out)
-            ipv4_list = data.get("ipv4-address") or data.get("ipv4_address") or []
-            if isinstance(ipv4_list, list):
-                for item in ipv4_list:
-                    if isinstance(item, dict):
-                        addr = pick_valid_ip(item.get("address"))
-                        if addr:
-                            return addr
-        except Exception:
-            pass
+        ipv4_list = data.get("ipv4-address") or data.get("ipv4_address") or []
+        if isinstance(ipv4_list, list):
+            for item in ipv4_list:
+                if isinstance(item, dict):
+                    addr = pick_valid_ip(item.get("address"))
+                    if addr:
+                        return addr
 
     dev = iface_name
-    if ok and out:
-        try:
-            data = json.loads(out)
-            dev = data.get("l3_device") or data.get("device") or dev
-        except Exception:
-            pass
+    if data:
+        dev = data.get("l3_device") or data.get("device") or dev
 
     ok2, out2 = run_cmd(["ip", "-4", "-o", "addr", "show", "dev", dev])
     if ok2 and out2:

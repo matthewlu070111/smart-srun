@@ -21,6 +21,38 @@ import wireless
 
 
 class NetworkBindIpTests(unittest.TestCase):
+    def test_get_ipv4_falls_back_to_ip_addr_when_ubus_json_is_invalid(self):
+        calls = []
+
+        def fake_run(cmd):
+            calls.append(cmd)
+            if cmd[:3] == ["ubus", "call", "network.interface.wan"]:
+                return True, "{not-json"
+            return True, "2: eth0    inet 10.0.0.9/24 brd 10.0.0.255 scope global eth0"
+
+        with mock.patch.object(network, "run_cmd", side_effect=fake_run):
+            ip = network.get_ipv4_from_network_interface("wan")
+
+        self.assertEqual(ip, "10.0.0.9")
+        self.assertEqual(
+            calls[-1],
+            ["ip", "-4", "-o", "addr", "show", "dev", "wan"],
+        )
+
+    def test_get_ipv4_does_not_swallow_unexpected_parse_errors(self):
+        with (
+            mock.patch.object(
+                network, "run_cmd", return_value=(True, '{"ipv4-address": []}')
+            ),
+            mock.patch.object(
+                network,
+                "_parse_network_interface_status",
+                side_effect=RuntimeError("unexpected"),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "unexpected"):
+                network.get_ipv4_from_network_interface("wan")
+
     def test_http_get_skips_urllib_when_bind_ip_is_explicit(self):
         with (
             mock.patch.object(
@@ -164,6 +196,18 @@ class ConfigLockingTests(unittest.TestCase):
             daemon._config_set(["enabled=1"])
 
         updater.assert_called_once()
+
+    def test_invalid_json_config_still_falls_back_to_empty_payload(self):
+        with open(self.config_path, "w", encoding="utf-8") as wf:
+            wf.write("{not-json")
+
+        self.assertEqual(config.load_json_raw_config(), {})
+        self.assertEqual(config.load_json_file(self.config_path), {})
+
+    def test_json_config_read_does_not_swallow_unexpected_open_errors(self):
+        with mock.patch("builtins.open", side_effect=RuntimeError("unexpected")):
+            with self.assertRaisesRegex(RuntimeError, "unexpected"):
+                config.load_json_raw_config()
 
 
 class WirelessSanitizationTests(unittest.TestCase):

@@ -1,5 +1,8 @@
 __pycache__/
 *.pyc
+.cache/
+.pytest_cache/
+.ruff_cache/
 .claude/
 .codex/
 .spec-workflow/

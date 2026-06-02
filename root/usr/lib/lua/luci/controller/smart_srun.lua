@@ -179,12 +179,13 @@ local function current_pending_runtime_action()
     return ""
 end
 
+local read_file_tail
+
 function action_status()
     local data = read_json_file(STATE_FILE)
-    local action = read_json_file(ACTION_FILE)
     local text = tostring(data.message or "未知")
     local pending = current_pending_runtime_action()
-    local last_log = util.trim(sys.exec("tail -n 1 " .. LOG_FILE .. " 2>/dev/null") or "")
+    local last_log = util.trim(read_file_tail(LOG_FILE, 1))
     local enabled = true
     if data.enabled == false or tostring(data.enabled or "") == "0" then
         enabled = false
@@ -639,6 +640,257 @@ local function extract_structured_suffix(rest, level, event)
     return util.trim(text:sub(#prefix + 1))
 end
 
+local function parse_quoted_log_value(text, idx)
+    local out = {}
+    idx = idx + 1
+    while idx <= #text do
+        local ch = text:sub(idx, idx)
+        if ch == "\\" and idx < #text then
+            local next_ch = text:sub(idx + 1, idx + 1)
+            if next_ch == '"' or next_ch == "\\" then
+                out[#out + 1] = next_ch
+            elseif next_ch == "n" or next_ch == "r" or next_ch == "t" then
+                out[#out + 1] = "\\" .. next_ch
+            else
+                out[#out + 1] = next_ch
+            end
+            idx = idx + 2
+        elseif ch == '"' then
+            return table.concat(out), idx + 1
+        else
+            out[#out + 1] = ch
+            idx = idx + 1
+        end
+    end
+    return table.concat(out), idx
+end
+
+local function parse_structured_fields(rest, level, event)
+    local text = extract_structured_suffix(rest, level, event)
+    local pipe_pos = text:find("%s|%s*")
+    if pipe_pos then
+        text = text:sub(1, pipe_pos - 1)
+    end
+
+    local fields = {}
+    local by_key = {}
+    local idx = 1
+    while idx <= #text do
+        while idx <= #text and text:sub(idx, idx):match("%s") do
+            idx = idx + 1
+        end
+        if idx > #text or text:sub(idx, idx) == "|" then
+            break
+        end
+
+        local remaining = text:sub(idx)
+        local key = remaining:match("^([%w_]+)=")
+        if not key then
+            local next_space = text:find("%s+", idx)
+            if not next_space then
+                break
+            end
+            idx = next_space + 1
+        else
+            idx = idx + #key + 1
+            local value = ""
+            if text:sub(idx, idx) == '"' then
+                value, idx = parse_quoted_log_value(text, idx)
+            else
+                value = text:match("^(%S+)", idx) or ""
+                idx = idx + #value
+            end
+            fields[#fields + 1] = { key = key, value = value }
+            if by_key[key] == nil then
+                by_key[key] = value
+            end
+        end
+    end
+    return fields, by_key
+end
+
+local friendly_field_order = {
+    "action",
+    "result",
+    "ok",
+    "duration_ms",
+    "queue_lag_ms",
+    "username",
+    "expected_username",
+    "username_reported",
+    "ip",
+    "resolved_ip",
+    "bind_ip",
+    "host",
+    "url",
+    "method",
+    "status_code",
+    "outcome",
+    "bytes_received",
+    "errors",
+    "error",
+    "error_code",
+    "attempts",
+    "delay",
+    "failures",
+    "target",
+    "ssid",
+    "radio",
+    "band",
+    "portal",
+    "section",
+    "network",
+    "iface",
+    "source",
+    "runtime_type",
+    "hook",
+    "school",
+    "mode",
+    "pid",
+    "interval",
+    "log_level",
+}
+
+local friendly_field_labels = {
+    action = "动作",
+    result = "结果",
+    ok = "成功",
+    duration_ms = "耗时",
+    queue_lag_ms = "排队",
+    username = "账号",
+    expected_username = "期望账号",
+    username_reported = "在线账号",
+    ip = "IP",
+    resolved_ip = "客户端IP",
+    bind_ip = "绑定IP",
+    host = "主机",
+    url = "URL",
+    method = "方法",
+    status_code = "状态码",
+    outcome = "结果",
+    bytes_received = "字节",
+    errors = "错误数",
+    error = "错误",
+    error_code = "错误码",
+    attempts = "次数",
+    delay = "延迟",
+    failures = "失败数",
+    target = "目标",
+    ssid = "SSID",
+    radio = "频段",
+    band = "频段",
+    portal = "认证页",
+    section = "配置段",
+    network = "网络",
+    iface = "接口",
+    source = "来源",
+    runtime_type = "运行时",
+    hook = "钩子",
+    school = "学校",
+    mode = "模式",
+    pid = "PID",
+    interval = "间隔",
+    log_level = "日志等级",
+}
+
+local hidden_friendly_fields = {
+    op_id = true,
+    cycle_id = true,
+}
+
+local sensitive_friendly_key_parts = {
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "chksum",
+    "checksum",
+    "hmd5",
+    "credential",
+    "authorization",
+    "cookie",
+    "session",
+    "private_key",
+    "campus_key",
+    "hotspot_key",
+    "wifi_key",
+    "psk",
+}
+
+local function is_hidden_friendly_field(key)
+    local name = tostring(key or ""):lower()
+    if hidden_friendly_fields[name] then
+        return true
+    end
+    for _, part in ipairs(sensitive_friendly_key_parts) do
+        if name:find(part, 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
+local function friendly_field_value(key, value)
+    local text = tostring(value or "")
+    if key == "reason" or key == "error_code" then
+        text = reason_zh[text] or text
+    elseif text == "True" or text == "true" then
+        text = "是"
+    elseif text == "False" or text == "false" then
+        text = "否"
+    end
+
+    if key == "duration_ms" or key == "queue_lag_ms" then
+        text = text .. "ms"
+    end
+    return text
+end
+
+local function append_friendly_fields(parts, field_list, field_map, skipped)
+    local rendered = {}
+    local used = {}
+    skipped = skipped or {}
+
+    local function add_field(key, value)
+        if used[key] or skipped[key] or is_hidden_friendly_field(key) then
+            return
+        end
+        if value == nil or tostring(value) == "" then
+            return
+        end
+        used[key] = true
+        rendered[#rendered + 1] = (friendly_field_labels[key] or key) .. "=" .. friendly_field_value(key, value)
+    end
+
+    for _, key in ipairs(friendly_field_order) do
+        add_field(key, field_map[key])
+    end
+    for _, item in ipairs(field_list) do
+        add_field(item.key, item.value)
+    end
+
+    if #rendered > 0 then
+        parts[#parts + 1] = "（" .. table.concat(rendered, "，") .. "）"
+    end
+end
+
+local function append_message_detail(parts, rest, has_prior_detail)
+    local detail = rest:match("|%s*(.+)$")
+    if detail and detail ~= "" then
+        parts[#parts + 1] = (has_prior_detail and " · " or ": ") .. detail
+        return true
+    end
+    return has_prior_detail
+end
+
+local function skip_fields(...)
+    local skipped = {}
+    for i = 1, select("#", ...) do
+        skipped[tostring(select(i, ...))] = true
+    end
+    return skipped
+end
+
 local switch_stage_zh = {
     applying = "应用无线配置",
     wait_ip  = "等待获取 IPv4",
@@ -673,37 +925,43 @@ function friendly_line(line)
         return table.concat(parts)
     end
 
+    local field_list, field_map = parse_structured_fields(rest, level, event)
+
     if event == "switch_progress" then
-        local stage = extract_kv(rest, "stage")
+        local stage = field_map.stage or extract_kv(rest, "stage")
         local stage_zh = stage and switch_stage_zh[stage]
         if stage_zh then parts[#parts + 1] = " · " .. stage_zh end
-        local target = extract_kv(rest, "target")
+        local target = field_map.target or extract_kv(rest, "target")
         if target then parts[#parts + 1] = "（" .. target .. "）" end
+        append_message_detail(parts, rest, false)
+        append_friendly_fields(parts, field_list, field_map, skip_fields("stage", "target"))
         return table.concat(parts)
     end
 
     if event == "action_started" then
-        local action = extract_kv(rest, "action")
+        local action = field_map.action or extract_kv(rest, "action")
         if action then parts[#parts + 1] = "：" .. action end
+        append_message_detail(parts, rest, false)
+        append_friendly_fields(parts, field_list, field_map, skip_fields("action"))
         return table.concat(parts)
     end
 
-    local account = extract_kv(rest, "account")
+    local account = field_map.account or extract_kv(rest, "account")
     if account then parts[#parts + 1] = " [" .. account .. "]" end
 
-    local reason = extract_kv(rest, "reason")
+    local reason = field_map.reason or extract_kv(rest, "reason")
+    local has_detail = false
     if reason then
         local rzh = reason_zh[reason]
         parts[#parts + 1] = ": " .. (rzh or reason)
+        has_detail = true
     end
 
-    local attempt = rest:match("attempt=(%d+)")
+    local attempt = field_map.attempt or rest:match("attempt=(%d+)")
     if attempt then parts[#parts + 1] = " (第" .. attempt .. "次)" end
 
-    local detail = rest:match("|%s*(.+)$")
-    if detail and not reason and not account then
-        parts[#parts + 1] = ": " .. detail
-    end
+    append_message_detail(parts, rest, has_detail)
+    append_friendly_fields(parts, field_list, field_map, skip_fields("account", "reason", "attempt"))
 
     return table.concat(parts)
 end
@@ -735,8 +993,33 @@ local function structured_unix_ts(line)
     })
 end
 
+local function tail_text(text, lines)
+    lines = tonumber(lines) or 0
+    if lines <= 0 or text == "" then
+        return text
+    end
+
+    local entries = {}
+    for line in text:gmatch("[^\n]+") do
+        entries[#entries + 1] = line
+    end
+    if #entries <= lines then
+        return table.concat(entries, "\n")
+    end
+
+    local kept = {}
+    for idx = #entries - lines + 1, #entries do
+        kept[#kept + 1] = entries[idx]
+    end
+    return table.concat(kept, "\n")
+end
+
+read_file_tail = function(path, lines)
+    return tail_text(fs.readfile(path) or "", lines)
+end
+
 local function read_plugin_log_text(lines)
-    return sys.exec("tail -n " .. lines .. " " .. LOG_FILE .. " 2>/dev/null") or ""
+    return read_file_tail(LOG_FILE, lines)
 end
 
 local function read_plugin_full_log_text()
@@ -759,13 +1042,14 @@ local function filter_text_since(text, since)
 end
 
 local function read_system_log_text(lines)
+    lines = tonumber(lines) or LOG_TAIL_SOURCE_LINES
     local ok, text = pcall(sys.exec, "logread -l " .. lines .. " 2>/dev/null")
     if ok and text and text ~= "" then
         return text
     end
-    ok, text = pcall(sys.exec, "logread 2>/dev/null | tail -n " .. lines)
+    ok, text = pcall(sys.exec, "logread 2>/dev/null")
     if ok and text then
-        return text
+        return tail_text(text, lines)
     end
     return ""
 end

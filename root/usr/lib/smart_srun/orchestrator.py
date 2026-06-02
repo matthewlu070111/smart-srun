@@ -9,7 +9,6 @@ import time
 
 from config import (
     ACTION_FILE,
-    append_log,
     log,
     apply_default_selection_for_runtime,
     backoff_enabled,
@@ -26,15 +25,12 @@ from config import (
     load_config,
     load_json_file,
     localize_error,
-    quiet_window_label,
     restore_manual_login_service_guard,
     set_log_context,
     timed,
 )
 from network import (
-    HTTP_EXCEPTIONS,
     resolve_bind_ip,
-    test_internet_connectivity,
 )
 from wireless import (
     detect_runtime_mode,

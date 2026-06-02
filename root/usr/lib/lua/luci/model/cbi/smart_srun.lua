@@ -7,6 +7,7 @@ local schema = require "luci.smart_srun.schema"
 
 local CONFIG_FILE = "/usr/lib/smart_srun/config.json"
 local STATE_FILE = "/var/run/smart_srun/state.json"
+local LOG_FILE = "/var/log/smart_srun.log"
 local JS_ASSET_PATH = "/luci-static/resources/smart_srun.js"
 local GLOBAL_SCALAR_KEYS = schema.GLOBAL_SCALAR_KEYS
 local POINTER_KEYS = schema.POINTER_KEYS
@@ -50,6 +51,28 @@ end
 
 local function render_js_asset_tag()
     return '<script src="' .. util.pcdata(JS_ASSET_PATH) .. '"></script>'
+end
+
+local function read_file_tail(path, lines)
+    lines = tonumber(lines) or 0
+    local text = fs.readfile(path) or ""
+    if lines <= 0 or text == "" then
+        return text
+    end
+
+    local entries = {}
+    for line in text:gmatch("[^\n]+") do
+        entries[#entries + 1] = line
+    end
+    if #entries <= lines then
+        return table.concat(entries, "\n")
+    end
+
+    local kept = {}
+    for idx = #entries - lines + 1, #entries do
+        kept[#kept + 1] = entries[idx]
+    end
+    return table.concat(kept, "\n")
 end
 
 local function is_legacy_config(parsed)
@@ -928,7 +951,7 @@ bind_text(log_level, "log_level")
 log_text = s:taboption("log", DummyValue, "_log_text", "运行日志")
 log_text.rawhtml = true
 function log_text.cfgvalue(self, section)
-    local t = sys.exec("tail -n 100 /var/log/smart_srun.log 2>/dev/null") or ""
+    local t = read_file_tail(LOG_FILE, 100)
     if t ~= "" then
         t = log_controller.friendly_log_text(t)
     end

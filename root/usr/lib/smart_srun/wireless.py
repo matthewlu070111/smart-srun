@@ -9,7 +9,6 @@ import re
 import time
 
 from config import (
-    append_log,
     log,
     timed,
     campus_uses_wired,
@@ -26,8 +25,6 @@ from config import (
 )
 from network import (
     get_ipv4_from_network_interface,
-    get_local_ip_for_target,
-    http_get,
     parse_uci_value,
     run_cmd,
     test_internet_connectivity,
