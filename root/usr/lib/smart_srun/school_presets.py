@@ -27,9 +27,8 @@ DEFAULT_OPERATORS = [
     {"id": "cmcc", "label": "中国移动"},
     {"id": "ctcc", "label": "中国电信"},
     {"id": "cucc", "label": "中国联通"},
-    {"id": "xn", "label": "校内网"},
+    {"id": "", "label": "校园网"},
 ]
-DEFAULT_NO_SUFFIX_OPERATORS = ["xn"]
 
 
 def _read_json(path):
@@ -84,21 +83,57 @@ def _normalize_operator(item):
     if not isinstance(item, dict):
         return None
     op_id = str(item.get("id", "")).strip().lower()
-    if not op_id:
+    if not op_id and "id" not in item:
         return None
-    return {
+    operator = {
         "id": op_id,
-        "label": str(item.get("label") or op_id).strip() or op_id,
+        "label": str(item.get("label") or op_id or "校园网").strip()
+        or "校园网",
     }
+    return operator
 
 
-def _normalize_operators(value):
+def _canonical_operator_id(value):
+    text = str(value or "").strip().lower()
+    return "" if text == "xn" else text
+
+
+def _legacy_default_operator(defaults):
+    if not isinstance(defaults, dict):
+        return None
+    if "operator_suffix" in defaults:
+        return _canonical_operator_id(defaults.get("operator_suffix"))
+    if "operator" in defaults:
+        return _canonical_operator_id(defaults.get("operator"))
+    return None
+
+
+def _operator_label_from_id(operator_id):
+    op_id = str(operator_id or "").strip().lower()
+    for item in DEFAULT_OPERATORS:
+        if item["id"] == op_id:
+            return item["label"]
+    return op_id or "校园网"
+
+
+def _normalize_operators(value, legacy_defaults=None):
     operators = []
     if isinstance(value, list):
         for raw in value:
             operator = _normalize_operator(raw)
             if operator:
                 operators.append(operator)
+    legacy_operator = _legacy_default_operator(legacy_defaults)
+    if legacy_operator is not None and not any(
+        item["id"] == legacy_operator for item in operators
+    ):
+        operators.insert(
+            0,
+            {
+                "id": legacy_operator,
+                "label": _operator_label_from_id(legacy_operator),
+            },
+        )
     return operators or [dict(item) for item in DEFAULT_OPERATORS]
 
 
@@ -110,8 +145,6 @@ def _normalize_defaults(value):
         "base_url",
         "ac_id",
         "ssid",
-        "operator",
-        "operator_suffix",
         "access_mode",
     ):
         text = str(value.get(key, "")).strip()
@@ -120,6 +153,32 @@ def _normalize_defaults(value):
         out[key] = normalize_base_url(text) if key == "base_url" else text
     if out.get("access_mode") not in ("wifi", "wired", None):
         out.pop("access_mode", None)
+    return out
+
+
+def _normalize_observed_login_shape(value):
+    if not isinstance(value, dict):
+        return {}
+    out = {}
+    for key in ("n", "type", "enc", "double_stack"):
+        text = str(value.get(key, "")).strip()
+        if text:
+            out[key] = text
+    info_prefix = str(value.get("info_prefix", "")).strip()
+    if (
+        info_prefix.startswith("{")
+        and info_prefix.endswith("}")
+        and len(info_prefix) > 2
+    ):
+        info_prefix = info_prefix[1:-1].strip()
+    if info_prefix:
+        out["info_prefix"] = info_prefix
+    login_os = str(value.get("os", value.get("login_os", ""))).strip()
+    login_name = str(value.get("name", value.get("login_name", ""))).strip()
+    if login_os:
+        out["os"] = login_os
+    if login_name:
+        out["name"] = login_name
     return out
 
 
@@ -157,10 +216,11 @@ def normalize_school(item):
         "name": name,
         "description": description,
         "contributors": _copy_string_list(item.get("contributors")),
-        "operators": _normalize_operators(item.get("operators")),
-        "no_suffix_operators": _copy_string_list(item.get("no_suffix_operators"))
-        or list(DEFAULT_NO_SUFFIX_OPERATORS),
+        "operators": _normalize_operators(item.get("operators"), item.get("defaults")),
         "defaults": defaults,
+        "observed_login_shape": _normalize_observed_login_shape(
+            item.get("observed_login_shape")
+        ),
         "status": status,
         "source_issue": str(item.get("source_issue") or "").strip(),
         "doc_url": str(item.get("doc_url") or "").strip(),

@@ -26,7 +26,6 @@ class SchoolProfile:
 
     # -- 运营商 --
     OPERATORS = ()
-    NO_SUFFIX_OPERATORS = ()
 
     # -- 协议参数 --
     ALPHA = crypto.ALPHA
@@ -35,6 +34,10 @@ class SchoolProfile:
     DEFAULT_N = "200"
     DEFAULT_TYPE = "1"
     DEFAULT_ENC = "srun_bx1"
+    DEFAULT_INFO_PREFIX = "SRBX1"
+    DEFAULT_DOUBLE_STACK = "0"
+    DEFAULT_LOGIN_OS = "Windows 10"
+    DEFAULT_LOGIN_NAME = "Windows"
 
     # -- API 路径 --
     API_CHALLENGE = "/cgi-bin/get_challenge"
@@ -47,7 +50,8 @@ class SchoolProfile:
     # -----------------------------------------------------------------
 
     def build_username(self, user_id, operator):
-        if operator in self.NO_SUFFIX_OPERATORS:
+        operator = str(operator or "").strip()
+        if not operator:
             return user_id
         return user_id + "@" + operator
 
@@ -87,7 +91,13 @@ class SchoolProfile:
         i_value = self.get_info(
             cfg["username"], cfg["password"], ip, cfg["ac_id"], cfg["enc"]
         )
-        i_value = "{SRBX1}" + self.get_base64(self.get_xencode(i_value, token))
+        info_prefix = str(cfg.get("info_prefix") or self.DEFAULT_INFO_PREFIX).strip()
+        if info_prefix.startswith("{") and info_prefix.endswith("}"):
+            info_prefix = info_prefix[1:-1].strip()
+        info_prefix = info_prefix or self.DEFAULT_INFO_PREFIX
+        i_value = "{%s}" % info_prefix + self.get_base64(
+            self.get_xencode(i_value, token)
+        )
         hmd5 = self.get_md5(cfg["password"], token)
         chkstr = crypto.get_chksum(
             token,
@@ -119,9 +129,14 @@ class SchoolProfile:
             "info": i_value,
             "n": cfg["n"],
             "type": cfg["type"],
-            "os": "openwrt",
-            "name": "openwrt",
-            "double_stack": "0",
+            "os": str(cfg.get("login_os") or self.DEFAULT_LOGIN_OS).strip()
+            or self.DEFAULT_LOGIN_OS,
+            "name": str(cfg.get("login_name") or self.DEFAULT_LOGIN_NAME).strip()
+            or self.DEFAULT_LOGIN_NAME,
+            "double_stack": str(
+                cfg.get("double_stack") or self.DEFAULT_DOUBLE_STACK
+            ).strip()
+            or self.DEFAULT_DOUBLE_STACK,
             "_": now,
         }
 

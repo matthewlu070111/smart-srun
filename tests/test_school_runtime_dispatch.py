@@ -11,10 +11,12 @@ if MODULE_ROOT not in sys.path:
     sys.path.insert(0, MODULE_ROOT)
 
 
+from _portal_urls import CLIENT_IP, PORTAL_HTTPS_ORIGIN
 import orchestrator
 import school_runtime
 import snapshot
 import srun_auth
+from schools._base import SchoolProfile
 
 
 def unexpected_low_level(name):
@@ -66,7 +68,7 @@ class SchoolRuntimeDispatchTests(unittest.TestCase):
     def setUp(self):
         self.cfg = {
             "school": "custom",
-            "base_url": "https://portal.example.edu",
+            "base_url": PORTAL_HTTPS_ORIGIN,
             "username": "20230001@cmcc",
             "password": "secret",
             "ac_id": "1",
@@ -116,6 +118,50 @@ class SchoolRuntimeDispatchTests(unittest.TestCase):
 
         self.assertEqual((ok, message), (True, "runtime-login"))
         self.assertIn(("login_once", self.cfg["username"]), self.runtime.calls)
+
+    def test_default_profile_uses_configured_login_shape(self):
+        profile = SchoolProfile()
+        cfg = {
+            "username": "alice@cmcc",
+            "password": "secret",
+            "ac_id": "9",
+            "enc": "custom_enc",
+            "n": "128",
+            "type": "3",
+            "info_prefix": "CUSTOM",
+            "double_stack": "1",
+            "login_os": "windows",
+            "login_name": "Windows",
+        }
+
+        i_value, hmd5, chksum = profile.do_complex_work(cfg, CLIENT_IP, "token")
+        params = profile.build_login_params(cfg, CLIENT_IP, i_value, hmd5, chksum)
+
+        self.assertTrue(i_value.startswith("{CUSTOM}"))
+        self.assertEqual("128", params["n"])
+        self.assertEqual("3", params["type"])
+        self.assertEqual("1", params["double_stack"])
+        self.assertEqual("windows", params["os"])
+        self.assertEqual("Windows", params["name"])
+
+    def test_default_profile_keeps_current_login_shape_by_default(self):
+        profile = SchoolProfile()
+        cfg = {
+            "username": "alice@cmcc",
+            "password": "secret",
+            "ac_id": "1",
+            "enc": "srun_bx1",
+            "n": "200",
+            "type": "1",
+        }
+
+        i_value, hmd5, chksum = profile.do_complex_work(cfg, CLIENT_IP, "token")
+        params = profile.build_login_params(cfg, CLIENT_IP, i_value, hmd5, chksum)
+
+        self.assertTrue(i_value.startswith("{SRBX1}"))
+        self.assertEqual("0", params["double_stack"])
+        self.assertEqual("Windows 10", params["os"])
+        self.assertEqual("Windows", params["name"])
 
     def test_run_once_safe_preserves_readable_error_when_runtime_build_fails(self):
         with mock.patch.object(
@@ -292,7 +338,7 @@ class SchoolRuntimeDispatchTests(unittest.TestCase):
                 snapshot, "get_network_interface_from_sta_section", return_value="wlan0"
             ),
             mock.patch.object(
-                snapshot, "get_ipv4_from_network_interface", return_value="10.0.0.8"
+                snapshot, "get_ipv4_from_network_interface", return_value=CLIENT_IP
             ),
             mock.patch.object(snapshot, "load_runtime_state", return_value={}),
             mock.patch.object(snapshot, "campus_uses_wired", return_value=False),

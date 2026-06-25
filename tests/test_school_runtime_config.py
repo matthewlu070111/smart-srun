@@ -13,6 +13,7 @@ MODULE_DIR = os.path.join(WORKTREE_ROOT, "root", "usr", "lib", "smart_srun")
 if MODULE_DIR not in sys.path:
     sys.path.insert(0, MODULE_DIR)
 
+from _portal_urls import PORTAL_ORIGIN
 import config
 
 
@@ -27,12 +28,26 @@ class SchoolRuntimeConfigTests(unittest.TestCase):
         config.JSON_CONFIG_FILE = self.original_json_config_file
         shutil.rmtree(self.tmp_dir)
 
-    def _school_metadata(self, descriptors=None, no_suffix_operators=None):
+    def _school_metadata(self, descriptors=None):
         return {
             "short_name": "runtime-school",
-            "no_suffix_operators": list(no_suffix_operators or ["xn"]),
             "school_extra": list(descriptors or []),
         }
+
+    def test_legacy_config_migration_materializes_implicit_operator_suffix(self):
+        migrated = config._migrate_legacy_config(
+            {
+                "user_id": "alice",
+                "operator": "cmcc",
+                "password": "pw",
+                "base_url": PORTAL_ORIGIN,
+                "ac_id": "1",
+                "campus_ssid": "jxnu_stu",
+            }
+        )
+
+        self.assertEqual("cmcc", migrated["campus_accounts"][0]["operator"])
+        self.assertEqual("cmcc", migrated["campus_accounts"][0]["operator_suffix"])
 
     def test_save_and_load_school_extra_contract(self):
         descriptors = [
@@ -250,7 +265,7 @@ class SchoolRuntimeConfigTests(unittest.TestCase):
         self.assertEqual({}, persisted.get("school_extra"))
         self.assertEqual({}, loaded.get("school_extra"))
 
-    def test_load_config_uses_school_metadata_for_no_suffix_operators(self):
+    def test_blank_operator_suffix_keeps_plain_username(self):
         raw_cfg = {
             "school": "runtime-school",
             "active_campus_id": "campus-1",
@@ -261,7 +276,7 @@ class SchoolRuntimeConfigTests(unittest.TestCase):
                     "user_id": "alice",
                     "operator": "cucc",
                     "password": "pw",
-                    "base_url": "http://172.17.1.2",
+                    "base_url": PORTAL_ORIGIN,
                     "ac_id": "1",
                     "access_mode": "wifi",
                     "ssid": "jxnu_stu",
@@ -275,7 +290,7 @@ class SchoolRuntimeConfigTests(unittest.TestCase):
             mock.patch.object(config, "load_json_raw_config", return_value=raw_cfg),
             mock.patch(
                 "schools.get_school_metadata",
-                return_value=self._school_metadata(no_suffix_operators=["cucc"]),
+                return_value=self._school_metadata(),
             ),
             mock.patch(
                 "schools.get_profile",
@@ -286,6 +301,125 @@ class SchoolRuntimeConfigTests(unittest.TestCase):
 
         self.assertEqual("alice", loaded["username"])
 
+    def test_explicit_operator_suffix_is_appended_to_username(self):
+        raw_cfg = {
+            "school": "runtime-school",
+            "active_campus_id": "campus-1",
+            "default_campus_id": "campus-1",
+            "campus_accounts": [
+                {
+                    "id": "campus-1",
+                    "user_id": "alice",
+                    "operator": "hcmcc",
+                    "operator_suffix": "hcmcc",
+                    "password": "pw",
+                    "base_url": PORTAL_ORIGIN,
+                    "ac_id": "1",
+                    "access_mode": "wifi",
+                    "ssid": "jxnu_stu",
+                    "encryption": "none",
+                }
+            ],
+            "hotspot_profiles": [],
+        }
+
+        with (
+            mock.patch.object(config, "load_json_raw_config", return_value=raw_cfg),
+            mock.patch(
+                "schools.get_school_metadata",
+                return_value=self._school_metadata(),
+            ),
+        ):
+            loaded = config.load_config()
+
+        self.assertEqual("alice@hcmcc", loaded["username"])
+        self.assertEqual("hcmcc", loaded["operator"])
+
+    def test_account_login_shape_overrides_legacy_global_values(self):
+        raw_cfg = {
+            "school": "runtime-school",
+            "n": "199",
+            "type": "2",
+            "enc": "global_enc",
+            "active_campus_id": "campus-1",
+            "default_campus_id": "campus-1",
+            "campus_accounts": [
+                {
+                    "id": "campus-1",
+                    "user_id": "alice",
+                    "operator": "cucc",
+                    "password": "pw",
+                    "base_url": PORTAL_ORIGIN,
+                    "ac_id": "1",
+                    "n": "128",
+                    "type": "3",
+                    "enc": "custom_enc",
+                    "info_prefix": "{CUSTOM}",
+                    "double_stack": "1",
+                    "login_os": "windows",
+                    "login_name": "Windows",
+                }
+            ],
+            "hotspot_profiles": [],
+        }
+
+        with (
+            mock.patch.object(config, "load_json_raw_config", return_value=raw_cfg),
+            mock.patch(
+                "schools.get_school_metadata",
+                return_value=self._school_metadata(),
+            ),
+        ):
+            loaded = config.load_config()
+
+        self.assertEqual("128", loaded["n"])
+        self.assertEqual("3", loaded["type"])
+        self.assertEqual("custom_enc", loaded["enc"])
+        self.assertEqual("CUSTOM", loaded["info_prefix"])
+        self.assertEqual("1", loaded["double_stack"])
+        self.assertEqual("windows", loaded["login_os"])
+        self.assertEqual("Windows", loaded["login_name"])
+
+    def test_invalid_login_shape_numbers_fall_back_to_safe_defaults(self):
+        raw_cfg = {
+            "school": "runtime-school",
+            "n": "bad",
+            "type": "-1",
+            "enc": "",
+            "active_campus_id": "campus-1",
+            "default_campus_id": "campus-1",
+            "campus_accounts": [
+                {
+                    "id": "campus-1",
+                    "user_id": "alice",
+                    "operator": "cucc",
+                    "password": "pw",
+                    "base_url": PORTAL_ORIGIN,
+                    "ac_id": "1",
+                    "n": "oops",
+                    "type": "nope",
+                }
+            ],
+            "hotspot_profiles": [],
+        }
+
+        with (
+            mock.patch.object(config, "load_json_raw_config", return_value=raw_cfg),
+            mock.patch(
+                "schools.get_school_metadata",
+                return_value=self._school_metadata(),
+            ),
+        ):
+            loaded = config.load_config()
+
+        self.assertEqual("200", loaded["n"])
+        self.assertEqual("1", loaded["type"])
+        self.assertEqual("srun_bx1", loaded["enc"])
+        self.assertEqual("SRBX1", loaded["info_prefix"])
+        self.assertEqual("0", loaded["double_stack"])
+        self.assertEqual("Windows 10", loaded["login_os"])
+        self.assertEqual("Windows", loaded["login_name"])
+
     def test_school_metadata_lookup_error_falls_back_to_minimal_metadata(self):
         with mock.patch(
             "schools.get_school_metadata",
@@ -294,7 +428,7 @@ class SchoolRuntimeConfigTests(unittest.TestCase):
             metadata = config._get_school_metadata({"school": "runtime-school"})
 
         self.assertEqual(
-            {"short_name": "runtime-school", "no_suffix_operators": ["xn"]},
+            {"short_name": "runtime-school"},
             metadata,
         )
 

@@ -68,8 +68,6 @@ class SchoolRuntimeLoaderTests(unittest.TestCase):
         self.assertIn("description", jxnu)
         self.assertIn("contributors", jxnu)
         self.assertIn("operators", jxnu)
-        self.assertIn("no_suffix_operators", jxnu)
-        self.assertEqual(jxnu["no_suffix_operators"], ["xn"])
 
     def test_list_schools_uses_school_metadata_without_building_runtime(self):
         with TemporarySchoolModule(
@@ -80,8 +78,7 @@ class SchoolRuntimeLoaderTests(unittest.TestCase):
                 "name": "Runtime Metadata",
                 "description": "metadata only",
                 "contributors": ["@loader"],
-                "operators": [{"id": "xn", "label": "Campus"}],
-                "no_suffix_operators": ["xn"],
+                "operators": [{"id": "", "label": "Campus"}],
                 "capabilities": ["healthcheck"],
             }
 
@@ -98,7 +95,6 @@ class SchoolRuntimeLoaderTests(unittest.TestCase):
 
         self.assertIsNotNone(runtime_meta)
         self.assertEqual(runtime_meta["name"], "Runtime Metadata")
-        self.assertEqual(runtime_meta["no_suffix_operators"], ["xn"])
         self.assertEqual(runtime_meta["capabilities"], ["healthcheck"])
 
     def test_resolve_runtime_prefers_build_runtime_then_runtime_then_profile(self):
@@ -116,7 +112,6 @@ class SchoolRuntimeLoaderTests(unittest.TestCase):
                 "description": "builder wins",
                 "contributors": [],
                 "operators": [],
-                "no_suffix_operators": [],
                 "capabilities": ["builder"],
             }
 
@@ -146,7 +141,6 @@ class SchoolRuntimeLoaderTests(unittest.TestCase):
                 "description": "runtime class wins",
                 "contributors": [],
                 "operators": [],
-                "no_suffix_operators": [],
             }
 
             class Runtime(object):
@@ -168,7 +162,6 @@ class SchoolRuntimeLoaderTests(unittest.TestCase):
                 DESCRIPTION = "profile fallback"
                 CONTRIBUTORS = ()
                 OPERATORS = ()
-                NO_SUFFIX_OPERATORS = ()
             """,
             ),
         ):
@@ -197,7 +190,6 @@ class SchoolRuntimeLoaderTests(unittest.TestCase):
                 "description": "metadata bridge",
                 "contributors": ["@bridge"],
                 "operators": [{"id": "cucc", "label": "CUCC"}],
-                "no_suffix_operators": ["xn"],
             }
 
             class Runtime(object):
@@ -215,7 +207,6 @@ class SchoolRuntimeLoaderTests(unittest.TestCase):
         self.assertEqual(
             runtime.OPERATORS, ({"id": "cucc", "label": "CUCC"},)
         )
-        self.assertEqual(runtime.NO_SUFFIX_OPERATORS, ("xn",))
 
     def test_resolve_runtime_rejects_unknown_school_but_allows_default_paths(self):
         school_runtime = load_school_runtime_module(self)
@@ -256,7 +247,6 @@ class SchoolRuntimeLoaderTests(unittest.TestCase):
                 "description": "inspect me",
                 "contributors": ["@inspect"],
                 "operators": [{"id": "cucc", "label": "CUCC"}],
-                "no_suffix_operators": ["xn"],
                 "capabilities": ["inspect", "status"],
             }
 

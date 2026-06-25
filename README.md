@@ -23,7 +23,7 @@
 - 支持多学校配置文件，可扩展适配其他深澜校园网环境
 
 ### 未来功能
-- 加入TLS支持以应对HTTPS认证页面的环境
+- 完善 HTTPS 认证环境下的依赖提示和排障指引
 - 适配 UA3F应对多设备检查的环境
 - 支持多号多拨负载均衡网络叠加
 - 适配更多高校的深澜校园网环境
@@ -119,6 +119,31 @@ apk add --allow-untrusted ./luci-app-smart-srun-bundle-*.apk
 
 保存并应用后守护进程自动启动。
 
+## 获取学校预设与运营商后缀
+
+如果浏览器网页登录可用，但插件不确定认证地址、`AC_ID`、运营商后缀或高级登录参数，可以用仓库里的油猴脚本采集一次真实网页登录请求：
+
+```text
+scripts/srun_school_preset_capture.user.js
+```
+
+使用方式：
+
+1. 安装 Tampermonkey（油猴）浏览器扩展。
+2. 新建脚本，粘贴 `scripts/srun_school_preset_capture.user.js` 的全部内容并启用。
+3. 打开学校的深澜认证页，像平时一样手动输入账号密码登录。
+4. 如果网页登录成功，脚本会显示“登录成功，已获取配置数据”，并提供“提交信息，协助开发者”入口。
+5. 如果网页登录失败，脚本会显示失败原因和已捕获字段；请先检查账号密码或网络状态后重试，也可以复制诊断信息给维护者排查。
+
+脚本只记录真实请求里出现的字段，不会猜默认值；明文账号、密码、challenge 和加密 `info` 原文不会导出。空运营商后缀就保持空字符串，不再使用 `xn` 或额外的 `no_suffix_operators` 字段表示。学校预设 JSON 中，运营商后缀统一维护在 `operators[].id`，`defaults` 不再写 `operator` 或 `operator_suffix`。
+
+如果只是不确定 `AC_ID`，也可以在 LuCI 校园网账号弹窗里点击 `AC_ID` 旁的“嗅探”，或通过 SSH 执行：
+
+```sh
+srunnet detect acid
+srunnet detect acid 'http://<portal-host>/srun_portal_pc?ac_id=<id>'
+```
+
 ### CLI 使用
 
 安装后可直接使用 `srunnet` 命令（无参数等同 `srunnet status`）：
@@ -204,4 +229,4 @@ WTFPL
 
 ****
 ## 参与贡献
-如果你愿意参与开发：请参阅 [贡献指南](/doc/CONTRIBUTING.md)
+如果你愿意参与开发：请参阅 [贡献指南](CONTRIBUTING.md)

@@ -124,6 +124,10 @@ def humanize_http_errors(url, errors):
         reasons.append("网关拒绝连接")
     if not reasons:
         reasons.append("与网关通信失败")
+    if str(url or "").lower().startswith("https://"):
+        reasons.append(
+            "如果该认证网关必须使用 HTTPS，请确认已安装 python3-openssl 后重试"
+        )
 
     details = []
     for e in errors:
@@ -277,6 +281,8 @@ def _http_get_via_stdlib(url, timeout, bind_ip):
 
     source = (bind_ip, 0) if bind_ip else None
     if scheme == "https":
+        if not hasattr(http_client, "HTTPSConnection"):
+            raise RuntimeError("当前 Python 缺少 HTTPS 支持，请安装 python3-openssl 后重试")
         conn = http_client.HTTPSConnection(
             host, port, timeout=timeout, source_address=source
         )

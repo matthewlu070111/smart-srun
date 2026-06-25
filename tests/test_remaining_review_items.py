@@ -14,6 +14,7 @@ if MODULE_DIR not in sys.path:
     sys.path.insert(0, MODULE_DIR)
 
 
+from _portal_urls import BIND_IP, PORTAL_HOST, PORTAL_LOGIN_URL, PORTAL_PING_URL
 import config
 import daemon
 import network
@@ -77,16 +78,16 @@ class NetworkBindIpTests(unittest.TestCase):
             ) as check_output,
         ):
             body = network.http_get(
-                "http://portal.example.edu/ping", timeout=7, bind_ip="192.0.2.9"
+                PORTAL_PING_URL, timeout=7, bind_ip=BIND_IP
             )
 
         self.assertEqual(body, "bound-response")
         urlopen.assert_not_called()
         check_output.assert_not_called()
-        self.assertEqual(http_conn.call_args.args[0], "portal.example.edu")
+        self.assertEqual(http_conn.call_args.args[0], PORTAL_HOST)
         self.assertEqual(http_conn.call_args.kwargs.get("timeout"), 7)
         self.assertEqual(
-            http_conn.call_args.kwargs.get("source_address"), ("192.0.2.9", 0)
+            http_conn.call_args.kwargs.get("source_address"), (BIND_IP, 0)
         )
         fake_conn.request.assert_called_once_with(
             "GET", "/ping", headers=network.HEADER
@@ -114,7 +115,7 @@ class NetworkBindIpTests(unittest.TestCase):
             mock_path.exists.side_effect = lambda path: path == "/usr/bin/wget"
 
             body = network.http_get(
-                "http://portal.example.edu/ping", timeout=7, bind_ip="192.0.2.9"
+                PORTAL_PING_URL, timeout=7, bind_ip=BIND_IP
             )
 
         self.assertEqual(body, "wget-response")
@@ -126,8 +127,8 @@ class NetworkBindIpTests(unittest.TestCase):
                 "-O",
                 "-",
                 "--timeout=7",
-                "--bind-address=192.0.2.9",
-                "http://portal.example.edu/ping",
+                "--bind-address=" + BIND_IP,
+                PORTAL_PING_URL,
             ],
         )
 
@@ -145,9 +146,9 @@ class NetworkBindIpTests(unittest.TestCase):
 
             with self.assertRaisesRegex(RuntimeError, "bind_ip"):
                 network.http_get(
-                    "http://portal.example.edu/ping",
+                    PORTAL_PING_URL,
                     timeout=7,
-                    bind_ip="192.0.2.9",
+                    bind_ip=BIND_IP,
                 )
 
         check_output.assert_not_called()
@@ -170,7 +171,7 @@ class NetworkBindIpTests(unittest.TestCase):
             mock_path.exists.side_effect = lambda path: path == "/usr/bin/wget"
 
             body = network.http_get(
-                "http://portal.example.edu/cgi-bin/srun_portal",
+                PORTAL_LOGIN_URL,
                 params={
                     "username": "alice",
                     "password": "{MD5}secret",
@@ -187,7 +188,7 @@ class NetworkBindIpTests(unittest.TestCase):
         self.assertIn("chksum=", request_url)
 
         logged_urls = [call.kwargs.get("url", "") for call in log_fn.call_args_list]
-        self.assertIn("http://portal.example.edu/cgi-bin/srun_portal", logged_urls)
+        self.assertIn(PORTAL_LOGIN_URL, logged_urls)
         for value in logged_urls:
             self.assertNotIn("password=", value)
             self.assertNotIn("info=", value)

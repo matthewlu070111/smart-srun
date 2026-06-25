@@ -81,6 +81,7 @@ function index()
     entry({"admin", "services", "smart_srun", "update_check"}, call("action_update_check")).leaf = true
     entry({"admin", "services", "smart_srun", "update_start"}, call("action_update_start")).leaf = true
     entry({"admin", "services", "smart_srun", "update_status"}, call("action_update_status")).leaf = true
+    entry({"admin", "services", "smart_srun", "detect_acid"}, call("action_detect_acid")).leaf = true
 end
 
 local function write_json_response(payload)
@@ -342,6 +343,11 @@ local function fv(name)
     return tostring(http.formvalue(name) or ""):match("^%s*(.-)%s*$")
 end
 
+function action_detect_acid()
+    local base_url = fv("base_url")
+    write_json_response(run_srunnet_json("detect acid " .. util.shellquote(base_url)))
+end
+
 local function normalize_base_url(value)
     local text = tostring(value or ""):match("^%s*(.-)%s*$")
     if text == "" then return "" end
@@ -432,6 +438,10 @@ function action_enqueue()
                 access_mode = fv("access_mode"),
                 base_url = normalize_base_url(fv("base_url")), ac_id = fv("ac_id"),
                 ssid = fv("ssid"), bssid = fv("bssid"), radio = fv("radio"),
+                n = fv("n"), type = fv("type"), enc = fv("enc"),
+                info_prefix = fv("info_prefix"),
+                double_stack = fv("double_stack"),
+                login_os = fv("login_os"), login_name = fv("login_name"),
             }
             if item.access_mode ~= "wired" then
                 item.access_mode = "wifi"
@@ -443,11 +453,8 @@ function action_enqueue()
             end
             if item.label == "" then
                 local suffix = item.operator_suffix or ""
-                local op = item.operator or ""
                 if suffix ~= "" and item.user_id ~= "" then
                     item.label = item.user_id .. "@" .. suffix
-                elseif item.user_id ~= "" and op ~= "" and op ~= "xn" then
-                    item.label = item.user_id .. "@" .. op
                 elseif item.user_id ~= "" then
                     item.label = item.user_id
                 else

@@ -38,6 +38,7 @@ TOP_EPILOG = (
     "            config hotspot [add|edit|rm|default] [ID]\n"
     "  学校      schools / schools inspect --selected\n"
     "  预设      presets list / presets refresh\n"
+    "  探测      detect acid [BASE_URL]\n"
     "  更新      update check / update run / update status\n"
     "  帮助      help [COMMAND] / man / --version\n"
     "\n"
@@ -156,6 +157,30 @@ def _build_parser():
         "refresh",
         help_text="刷新远端学校预设缓存",
         description="从 raw GitHub 拉取 doc/school-presets.json 并写入本地缓存。",
+    )
+
+    p_detect = _make_subparser(
+        sub,
+        "detect",
+        help_text="探测认证网关参数",
+        description="从认证地址、跳转链或 Portal 页面中探测 AC_ID 等登录参数。",
+    )
+    detect_sub = p_detect.add_subparsers(dest="detect_command", metavar="SUBCOMMAND")
+    p_detect_acid = _make_subparser(
+        detect_sub,
+        "acid",
+        help_text="嗅探 AC_ID",
+        description="非侵入式读取 URL、跳转和 Portal 页面中的 ac_id，不做登录枚举测试。",
+    )
+    p_detect_acid.add_argument(
+        "base_url",
+        nargs="?",
+        help="认证地址；留空则使用当前默认校园网账号的认证地址",
+    )
+    p_detect_acid.add_argument(
+        "--reality-url",
+        default="",
+        help="可选：先访问一个会被校园网劫持的 HTTP 地址并从跳转中提取 ac_id",
     )
 
     p_update = _make_subparser(
@@ -408,6 +433,9 @@ SMART SRun (srunnet)(1) -- OpenWrt 智慧深澜校园网认证客户端
     schools                          列出可用学校 (JSON)
     schools inspect --selected       打印当前学校 runtime 元数据 (JSON)
 
+  ▸ 探测
+    detect acid [BASE_URL]            从认证地址 / Portal 页面嗅探 AC_ID
+
   ▸ 帮助与版本
     help [COMMAND]       显示子命令帮助（等价 --help）
     man                  显示本手册
@@ -474,13 +502,14 @@ SMART SRun (srunnet)(1) -- OpenWrt 智慧深澜校园网认证客户端
     srunnet config get interval
     srunnet config set interval=30 log_level=DEBUG
     srunnet config account default campus-1
+    srunnet detect acid http://<portal-host>/srun_portal_pc?ac_id=<id>
     srunnet switch hotspot
     srunnet schools inspect --selected
 
 相关链接
     LuCI 页面    服务 -> SMART SRun
     项目主页    https://github.com/matthewlu070111/smart-srun
-    贡献指南    doc/CONTRIBUTING.md
+    贡献指南    CONTRIBUTING.md
     开发者文档  CLAUDE.md / AGENTS.md（仓库根目录）
 
 许可
@@ -619,6 +648,20 @@ def main():
             print(json.dumps(payload, ensure_ascii=False, indent=2))
             return
         parser.parse_args(["presets", "--help"])
+        return
+
+    if args.command == "detect":
+        import portal_detect
+
+        if getattr(args, "detect_command", "") == "acid":
+            base_url = getattr(args, "base_url", "") or cfg.get("base_url", "")
+            payload = portal_detect.detect_acid(
+                base_url,
+                reality_url=getattr(args, "reality_url", "") or "",
+            )
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return
+        parser.parse_args(["detect", "--help"])
         return
 
     if args.command == "update":

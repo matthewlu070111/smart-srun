@@ -41,7 +41,6 @@ def _normalize_school_metadata(metadata):
     item["description"] = str(item.get("description") or "")
     item["contributors"] = _copy_list(item.get("contributors"))
     item["operators"] = _copy_operators(item.get("operators"))
-    item["no_suffix_operators"] = _copy_list(item.get("no_suffix_operators"))
     if "capabilities" in item:
         item["capabilities"] = _copy_list(item.get("capabilities"))
     return item
@@ -55,7 +54,6 @@ def _metadata_from_profile_class(profile_class):
             "description": getattr(profile_class, "DESCRIPTION", ""),
             "contributors": getattr(profile_class, "CONTRIBUTORS", ()),
             "operators": getattr(profile_class, "OPERATORS", ()),
-            "no_suffix_operators": getattr(profile_class, "NO_SUFFIX_OPERATORS", ()),
         }
     )
 

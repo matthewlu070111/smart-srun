@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 import sys
+import tempfile
 import unittest
 from contextlib import ExitStack, redirect_stdout
 from urllib.error import HTTPError
@@ -16,6 +17,7 @@ if MODULE_ROOT not in sys.path:
     sys.path.insert(0, MODULE_ROOT)
 
 
+from _portal_urls import PORTAL_ACID4_THEME_URL, PORTAL_HTTPS_ORIGIN, PORTAL_ORIGIN
 import daemon
 import version_info
 import school_runtime
@@ -146,8 +148,7 @@ class SchoolRuntimeCliTests(unittest.TestCase):
                 "name": "JXNU",
                 "description": "desc",
                 "contributors": ["a"],
-                "operators": [{"id": "xn", "label": "校园网"}],
-                "no_suffix_operators": ["xn"],
+                "operators": [{"id": "", "label": "校园网"}],
             }
         ]
         stdout = io.StringIO()
@@ -549,6 +550,55 @@ class SchoolRuntimeCliTests(unittest.TestCase):
 
         self.assertEqual(json.loads(stdout.getvalue()), payload)
 
+    def test_detect_acid_command_prints_json_result(self):
+        import portal_detect
+
+        payload = {
+            "ok": True,
+            "acid": "4",
+            "base_url": PORTAL_ORIGIN,
+            "source": "input_url",
+        }
+        stdout = io.StringIO()
+        with (
+            mock.patch.object(
+                sys,
+                "argv",
+                ["srunnet", "detect", "acid", PORTAL_ACID4_THEME_URL],
+            ),
+            mock.patch.object(daemon, "load_config", return_value=dict(self.cfg)),
+            mock.patch.object(portal_detect, "detect_acid", return_value=payload) as detect_acid,
+            redirect_stdout(stdout),
+        ):
+            daemon.main()
+
+        detect_acid.assert_called_once_with(
+            PORTAL_ACID4_THEME_URL,
+            reality_url="",
+        )
+        self.assertEqual(json.loads(stdout.getvalue()), payload)
+
+    def test_detect_acid_command_uses_current_base_url_when_omitted(self):
+        import portal_detect
+
+        cfg = dict(self.cfg)
+        cfg["base_url"] = PORTAL_HTTPS_ORIGIN
+        stdout = io.StringIO()
+        with (
+            mock.patch.object(sys, "argv", ["srunnet", "detect", "acid"]),
+            mock.patch.object(daemon, "load_config", return_value=cfg),
+            mock.patch.object(
+                portal_detect, "detect_acid", return_value={"ok": False}
+            ) as detect_acid,
+            redirect_stdout(stdout),
+        ):
+            daemon.main()
+
+        detect_acid.assert_called_once_with(
+            PORTAL_HTTPS_ORIGIN,
+            reality_url="",
+        )
+
     def test_presets_list_command_prints_active_presets(self):
         import school_presets
 
@@ -564,6 +614,105 @@ class SchoolRuntimeCliTests(unittest.TestCase):
 
         list_presets.assert_called_once_with(include_draft=False)
         self.assertEqual(json.loads(stdout.getvalue()), payload)
+
+    def test_presets_list_command_keeps_operator_suffixes_in_operators(self):
+        import school_presets
+
+        stdout = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_path = os.path.join(tmp, "missing-presets-cache.json")
+            with (
+                mock.patch.object(sys, "argv", ["srunnet", "presets", "list"]),
+                mock.patch.object(daemon, "load_config", return_value=dict(self.cfg)),
+                mock.patch.object(school_presets, "CACHE_PRESETS_FILE", cache_path),
+                redirect_stdout(stdout),
+            ):
+                daemon.main()
+
+        payload = json.loads(stdout.getvalue())
+        lnut = next(item for item in payload if item["short_name"] == "lnut-hld")
+        jxnu = next(item for item in payload if item["short_name"] == "jxnu")
+        self.assertNotIn("operator", lnut["defaults"])
+        self.assertNotIn("operator_suffix", lnut["defaults"])
+        self.assertNotIn("operator", jxnu["defaults"])
+        self.assertNotIn("operator_suffix", jxnu["defaults"])
+        self.assertEqual(lnut["operators"][0]["id"], "hcmcc")
+        for preset in (lnut, jxnu):
+            for operator in preset["operators"]:
+                self.assertNotIn("operator_suffix", operator)
+
+    def test_config_account_table_labels_follow_explicit_suffix_only(self):
+        stdout = io.StringIO()
+        raw = {
+            "default_campus_id": "campus-1",
+            "campus_accounts": [
+                {
+                    "id": "campus-1",
+                    "user_id": "alice",
+                    "operator": "cucc",
+                    "operator_suffix": "",
+                    "access_mode": "wifi",
+                    "ssid": "campus",
+                },
+                {
+                    "id": "campus-2",
+                    "user_id": "bob",
+                    "operator": "hcmcc",
+                    "operator_suffix": "hcmcc",
+                    "access_mode": "wired",
+                    "n": "128",
+                    "type": "3",
+                    "enc": "custom_enc",
+                    "info_prefix": "CUSTOM",
+                },
+            ],
+        }
+
+        with redirect_stdout(stdout):
+            daemon._print_account_table(raw)
+
+        text = stdout.getvalue()
+        self.assertIn("alice", text)
+        self.assertNotIn("alice@cucc", text)
+        self.assertIn("bob@hcmcc", text)
+        self.assertIn("128/3/custom_enc/C", text)
+
+    def test_interactive_account_allows_custom_operator_id(self):
+        with (
+            mock.patch.object(daemon, "_get_current_profile", return_value=None),
+            mock.patch(
+                "builtins.input",
+                side_effect=[
+                    "",
+                    "alice",
+                    "hcmcc",
+                    "hcmcc",
+                    "wired",
+                    PORTAL_ORIGIN,
+                    "4",
+                    "128",
+                    "3",
+                    "custom_enc",
+                    "CUSTOM",
+                    "1",
+                    "windows",
+                    "Windows",
+                ],
+            ),
+            mock.patch("getpass.getpass", return_value="pw"),
+        ):
+            fields = daemon._interactive_campus()
+
+        self.assertEqual(fields["operator"], "hcmcc")
+        self.assertEqual(fields["operator_suffix"], "hcmcc")
+        self.assertEqual(fields["n"], "128")
+        self.assertEqual(fields["type"], "3")
+        self.assertEqual(fields["enc"], "custom_enc")
+        self.assertEqual(fields["info_prefix"], "CUSTOM")
+        self.assertEqual(fields["double_stack"], "1")
+        self.assertEqual(fields["login_os"], "windows")
+        self.assertEqual(fields["login_name"], "Windows")
+        self.assertEqual(fields["label"], "alice@hcmcc")
 
     def test_config_show_works_when_runtime_resolution_is_broken(self):
         with (
@@ -1082,6 +1231,7 @@ class LuciSourceHardeningTests(unittest.TestCase):
             "root/usr/lib/smart_srun/school_runtime.py",
             "root/usr/lib/smart_srun/version_info.py",
             "root/usr/lib/smart_srun/school_presets.py",
+            "root/usr/lib/smart_srun/portal_detect.py",
             "root/usr/lib/smart_srun/updater.py",
             "root/usr/lib/smart_srun/defaults.json",
             "root/usr/lib/smart_srun/school_presets_fallback.json",

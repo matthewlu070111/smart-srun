@@ -90,16 +90,17 @@ local function migrate_legacy_config(parsed)
     end
     local uid = tostring(parsed.user_id or ""):match("^%s*(.-)%s*$")
     local op = tostring(parsed.operator or "cucc"):match("^%s*(.-)%s*$"):lower()
+    local suffix = op ~= "xn" and op or ""
     local ca = {
         id = "campus-1", label = "",
         base_url = tostring(parsed.base_url or "http://172.17.1.2"):match("^%s*(.-)%s*$"),
         ac_id = tostring(parsed.ac_id or "1"):match("^%s*(.-)%s*$"),
         user_id = uid, password = tostring(parsed.password or ""):match("^%s*(.-)%s*$"),
-        operator = op, operator_suffix = "",
+        operator = op, operator_suffix = suffix,
         ssid = tostring(parsed.campus_ssid or "jxnu_stu"):match("^%s*(.-)%s*$"),
         bssid = tostring(parsed.campus_bssid or ""):match("^%s*(.-)%s*$"),
     }
-    ca.label = (uid ~= "" and op ~= "" and op ~= "xn") and (uid .. "@" .. op) or (uid ~= "" and uid or "未命名账号")
+    ca.label = (uid ~= "" and suffix ~= "") and (uid .. "@" .. suffix) or (uid ~= "" and uid or "未命名账号")
     migrated.campus_accounts = uid ~= "" and { ca } or {}
     migrated.active_campus_id = uid ~= "" and "campus-1" or ""
     migrated.default_campus_id = migrated.active_campus_id
@@ -854,6 +855,8 @@ function tables_html.cfgvalue()
 .smart-native-row{margin-bottom:.75rem;}
 .smart-native-row label{display:block;margin-bottom:.25rem;font-weight:600;}
 .smart-native-row input,.smart-native-row select{width:100%;box-sizing:border-box;}
+.smart-native-advanced{margin:.75rem 0;padding:.75rem;border:1px solid rgba(127,127,127,.25);border-radius:4px;}
+.smart-native-advanced summary{cursor:pointer;font-weight:600;margin:-.25rem 0 .5rem 0;}
 </style>
 
 <div class="cbi-section cbi-tblsection smart-native-box">

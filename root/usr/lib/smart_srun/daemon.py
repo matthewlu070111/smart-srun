@@ -9,6 +9,10 @@ import time
 
 from config import (
     ACTION_FILE,
+    DEFAULT_INFO_PREFIX,
+    DEFAULT_LOGIN_ENC,
+    DEFAULT_LOGIN_N,
+    DEFAULT_LOGIN_TYPE,
     LOG_FILE,
     build_school_runtime_luci_contract,
     log,
@@ -815,10 +819,10 @@ def _print_account_table(raw):
         return
     # Header
     print(
-        "  %-12s %-20s %-16s %-10s %-6s %-14s"
-        % ("ID", "Label", "User", "Op", "Mode", "SSID")
+        "  %-12s %-20s %-16s %-10s %-6s %-14s %-18s"
+        % ("ID", "Label", "User", "Op", "Mode", "SSID", "Login")
     )
-    print("  " + "-" * 80)
+    print("  " + "-" * 100)
     for acc in accounts:
         aid = str(acc.get("id", ""))
         is_default = aid == default_campus
@@ -829,12 +833,29 @@ def _print_account_table(raw):
         if suffix and suffix != op:
             op_display = "%s(%s)" % (op, suffix)
         mode = "wired" if acc.get("access_mode") == "wired" else "wifi"
-        label = acc.get("label", "") or ("%s@%s" % (user_id, op) if op else user_id)
+        label = acc.get("label", "") or (
+            "%s@%s" % (user_id, suffix) if suffix else user_id
+        )
         ssid = acc.get("ssid", "") if mode != "wired" else "-"
+        login_shape = "%s/%s/%s/%s" % (
+            str(acc.get("n", "") or DEFAULT_LOGIN_N),
+            str(acc.get("type", "") or DEFAULT_LOGIN_TYPE),
+            str(acc.get("enc", "") or DEFAULT_LOGIN_ENC),
+            str(acc.get("info_prefix", "") or DEFAULT_INFO_PREFIX),
+        )
         marker = " *" if is_default else ""
         print(
-            "  %-12s %-20s %-16s %-10s %-6s %-14s%s"
-            % (aid, label[:20], user_id[:16], op_display[:10], mode, ssid[:14], marker)
+            "  %-12s %-20s %-16s %-10s %-6s %-14s %-18s%s"
+            % (
+                aid,
+                label[:20],
+                user_id[:16],
+                op_display[:10],
+                mode,
+                ssid[:14],
+                login_shape[:18],
+                marker,
+            )
         )
     print("  (* = default)")
 
@@ -932,7 +953,7 @@ OPERATOR_LABELS_FALLBACK = {
     "cmcc": "移动",
     "ctcc": "电信",
     "cucc": "联通",
-    "xn": "校内网",
+    "": "校园网",
 }
 
 
@@ -951,12 +972,10 @@ def _get_operator_choices(profile=None):
     if profile and profile.OPERATORS:
         ids = [o["id"] for o in profile.OPERATORS]
         labels = {o["id"]: o["label"] for o in profile.OPERATORS}
-        no_suffix = set(profile.NO_SUFFIX_OPERATORS)
-        return ids, labels, no_suffix
+        return ids, labels
     return (
-        ["cmcc", "ctcc", "cucc", "xn"],
+        ["cmcc", "ctcc", "cucc", ""],
         OPERATOR_LABELS_FALLBACK,
-        {"xn"},
     )
 
 
@@ -1006,7 +1025,7 @@ def _interactive_campus(existing=None):
     item = existing or {}
     fields = {}
     profile = _get_current_profile()
-    op_ids, op_labels, no_suffix_ops = _get_operator_choices(profile)
+    op_ids, _op_labels = _get_operator_choices(profile)
 
     fields["label"] = _prompt("标签（选填）", item.get("label", ""))
     fields["user_id"] = _prompt("学工号", item.get("user_id", ""))
@@ -1014,14 +1033,12 @@ def _interactive_campus(existing=None):
         print("学工号不能为空")
         return None
     fields["operator"] = _prompt(
-        "运营商", item.get("operator", op_ids[0]), choices=op_ids
+        "运营商（常见：%s；可填特殊后缀 ID）" % "/".join(op_ids),
+        item.get("operator", op_ids[0]),
     )
 
-    default_suffix_hint = (
-        "(无后缀)" if fields["operator"] in no_suffix_ops else fields["operator"]
-    )
     fields["operator_suffix"] = _prompt(
-        "运营商后缀（留空使用默认: %s）" % default_suffix_hint,
+        "运营商后缀（不知道请看文档“如何获取”）",
         item.get("operator_suffix", ""),
     )
 
@@ -1031,6 +1048,17 @@ def _interactive_campus(existing=None):
     )
     fields["base_url"] = _prompt("认证地址", item.get("base_url", "http://172.17.1.2"))
     fields["ac_id"] = _prompt("AC_ID", item.get("ac_id", "1"))
+    fields["n"] = _prompt("高级登录参数 n", item.get("n", ""))
+    fields["type"] = _prompt("高级登录参数 type", item.get("type", ""))
+    fields["enc"] = _prompt("高级登录参数 enc", item.get("enc", ""))
+    fields["info_prefix"] = _prompt(
+        "高级登录参数 info_prefix", item.get("info_prefix", "")
+    )
+    fields["double_stack"] = _prompt(
+        "高级登录参数 double_stack", item.get("double_stack", "")
+    )
+    fields["login_os"] = _prompt("高级登录参数 os", item.get("login_os", ""))
+    fields["login_name"] = _prompt("高级登录参数 name", item.get("login_name", ""))
     if fields["access_mode"] != "wired":
         fields["ssid"] = _prompt("校园网 SSID", item.get("ssid", "jxnu_stu"))
         fields["bssid"] = _prompt("BSSID（留空不锁定）", item.get("bssid", ""))
@@ -1042,11 +1070,8 @@ def _interactive_campus(existing=None):
 
     if not fields["label"]:
         suffix = fields.get("operator_suffix", "")
-        op = fields["operator"]
         if suffix:
             fields["label"] = "%s@%s" % (fields["user_id"], suffix)
-        elif op and op not in no_suffix_ops:
-            fields["label"] = "%s@%s" % (fields["user_id"], op)
         else:
             fields["label"] = fields["user_id"]
     return fields

@@ -17,8 +17,7 @@ class Profile(SchoolProfile):
 
     OPERATORS = (
         {"id": "cucc", "label": "中国联通"},
-        {"id": "xn",   "label": "校园网"},
+        {"id": "",     "label": "校园网"},
         {"id": "cmcc", "label": "中国移动"},
         {"id": "ctcc", "label": "中国电信"},
     )
-    NO_SUFFIX_OPERATORS = ("xn",)

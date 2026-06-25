@@ -427,17 +427,30 @@
       short_name: 'jxnu',
       name: '江西师范大学',
       defaults: { base_url: 'http://172.17.1.2', ac_id: '1', ssid: 'jxnu_stu' },
+      observed_login_shape: { n: '200', type: '1', enc: 'srun_bx1', info_prefix: 'SRBX1', double_stack: '0', os: 'Windows 10', name: 'Windows' },
       operators: [
-        {id:'cmcc', label:'中国移动'}, {id:'ctcc', label:'中国电信'},
-        {id:'cucc', label:'中国联通'}, {id:'xn', label:'校内网'}
-      ],
-      no_suffix_operators: ['xn']
+        {id:'cmcc', label:'中国移动'},
+        {id:'ctcc', label:'中国电信'},
+        {id:'cucc', label:'中国联通'},
+        {id:'', label:'校园网'}
+      ]
     }];
   }
+
+  var DEFAULT_LOGIN_SHAPE = {
+    n: '200',
+    type: '1',
+    enc: 'srun_bx1',
+    info_prefix: 'SRBX1',
+    double_stack: '0',
+    os: 'Windows 10',
+    name: 'Windows'
+  };
 
   function findSchoolPreset(id) {
     var items = schoolPresetList();
     var wanted = String(id || 'jxnu');
+    if (wanted === '__none__') return null;
     for (var i = 0; i < items.length; i++) {
       if (String(items[i].short_name || '') === wanted) return items[i];
     }
@@ -488,11 +501,15 @@
     modalEditId = id;
     var item = id ? findById(campusData, id) : {};
     var presets = schoolPresetList();
+    var NO_PRESET_ID = '__none__';
     var selectedPresetId = 'jxnu';
     var selectedPreset = findSchoolPreset(selectedPresetId);
+    var presetApplied = false;
     var defaultOperators = [
-      {id:'cmcc', label:'中国移动'}, {id:'ctcc', label:'中国电信'},
-      {id:'cucc', label:'中国联通'}, {id:'xn', label:'校内网'}
+      {id:'cmcc', label:'中国移动'},
+      {id:'ctcc', label:'中国电信'},
+      {id:'cucc', label:'中国联通'},
+      {id:'', label:'校园网'}
     ];
     var initialValues = {
       label: item.label || '',
@@ -502,6 +519,13 @@
       access_mode: item.access_mode || 'wifi',
       base_url: item.base_url || 'http://172.17.1.2',
       ac_id: item.ac_id || '1',
+      n: item.n || '',
+      type: item.type || '',
+      enc: item.enc || '',
+      info_prefix: item.info_prefix || '',
+      double_stack: item.double_stack || '',
+      login_os: item.login_os || '',
+      login_name: item.login_name || '',
       ssid: item.ssid || 'jxnu_stu',
       bssid: item.bssid || '',
       radio: item.radio || ''
@@ -511,21 +535,28 @@
       return preset && preset.operators && preset.operators.length ? preset.operators : defaultOperators;
     }
 
-    function noSuffixForPreset(preset) {
-      return preset && preset.no_suffix_operators ? preset.no_suffix_operators : ['xn'];
-    }
-
     function operatorOptionsMarkup(ops, selectedOperator) {
       var out = '';
+      var hasSelected = false;
+      var selectedText = String(selectedOperator || '');
       for (var oi = 0; oi < ops.length; oi++) {
-        var selected = (ops[oi].id === selectedOperator) ? ' selected' : '';
+        var opId = String(ops[oi].id || '');
+        var selected = (opId === selectedText) ? ' selected' : '';
+        if (selected) hasSelected = true;
         out += '<option value="' + escapeHtml(ops[oi].id) + '"' + selected + '>' + escapeHtml(ops[oi].label) + '</option>';
+      }
+      if (selectedText && !hasSelected) {
+        out += '<option value="' + escapeHtml(selectedText) + '" selected>' + escapeHtml(selectedText) + '</option>';
       }
       return out;
     }
 
+    function operatorSuffixFromSelectedId(operatorId) {
+      return String(operatorId || '');
+    }
+
     function presetOptionsMarkup() {
-      var out = '';
+      var out = '<option value="' + NO_PRESET_ID + '"' + (selectedPresetId === NO_PRESET_ID ? ' selected' : '') + '>无预设</option>';
       for (var pi = 0; pi < presets.length; pi++) {
         var presetId = String(presets[pi].short_name || '');
         if (!presetId) continue;
@@ -535,87 +566,122 @@
     }
 
     var bodyHtml =
-      '<div class="smart-native-row"><label>学校预设</label><span><select id="jm-school_preset">' + presetOptionsMarkup() + '</select> <button type="button" id="jm-apply-school-defaults" class="btn cbi-button cbi-button-action">应用默认值</button> <button type="button" id="jm-reset-school-defaults" class="btn cbi-button">复位</button></span></div>' +
+      '<div class="smart-native-row"><label>学校预设</label><span><select id="jm-school_preset">' + presetOptionsMarkup() + '</select> <button type="button" id="jm-apply-school-defaults" class="btn cbi-button cbi-button-action">应用预设</button> <button type="button" id="jm-reset-school-defaults" class="btn cbi-button">复位</button></span></div>' +
       '<div class="smart-native-row"><label>标签（选填）</label><input id="jm-label" value="' + escapeHtml(initialValues.label) + '"></div>' +
       '<div class="smart-native-row"><label>学工号</label><input id="jm-user_id" value="' + escapeHtml(initialValues.user_id) + '"></div>' +
       '<div class="smart-native-row"><label>运营商</label><select id="jm-operator">' + operatorOptionsMarkup(operatorsForPreset(selectedPreset), initialValues.operator) + '</select></div>' +
-      '<div class="smart-native-row"><label>运营商后缀（留空则为默认）</label><input id="jm-operator_suffix" value="' + escapeHtml(initialValues.operator_suffix) + '" placeholder=""></div>' +
+      '<div class="smart-native-row"><label>运营商后缀 <a href="https://github.com/matthewlu070111/smart-srun#%E8%8E%B7%E5%8F%96%E5%AD%A6%E6%A0%A1%E9%A2%84%E8%AE%BE%E4%B8%8E%E8%BF%90%E8%90%A5%E5%95%86%E5%90%8E%E7%BC%80" target="_blank" rel="noopener noreferrer">如何获取？</a></label><input id="jm-operator_suffix" value="' + escapeHtml(initialValues.operator_suffix) + '"></div>' +
       '<div class="smart-native-row"><label>接入方式</label><select id="jm-access_mode"><option value="wifi"' + (initialValues.access_mode === 'wifi' ? ' selected' : '') + '>无线</option><option value="wired"' + (initialValues.access_mode === 'wired' ? ' selected' : '') + '>有线（WAN）</option></select></div>' +
       '<div class="smart-native-row"><label>密码</label><div id="jm-password-field"></div></div>' +
       '<div class="smart-native-row"><label>认证地址</label><input id="jm-base_url" value="' + escapeHtml(initialValues.base_url) + '"></div>' +
-      '<div class="smart-native-row"><label>AC_ID</label><input id="jm-ac_id" value="' + escapeHtml(initialValues.ac_id) + '"></div>' +
+      '<div class="smart-native-row"><label>AC_ID</label><span><input id="jm-ac_id" value="' + escapeHtml(initialValues.ac_id) + '"> <button type="button" id="jm-detect-acid" class="btn cbi-button">嗅探</button> <span id="jm-detect-acid-status" style="margin-left:6px;color:#6b7280;"></span></span></div>' +
+      '<details class="smart-native-advanced"><summary>高级登录参数</summary>' +
+      '<div class="smart-native-row"><label>n</label><input id="jm-login-n" value="' + escapeHtml(initialValues.n) + '" placeholder="200"></div>' +
+      '<div class="smart-native-row"><label>type</label><input id="jm-login-type" value="' + escapeHtml(initialValues.type) + '" placeholder="1"></div>' +
+      '<div class="smart-native-row"><label>enc</label><input id="jm-login-enc" value="' + escapeHtml(initialValues.enc) + '" placeholder="srun_bx1"></div>' +
+      '<div class="smart-native-row"><label>info 前缀</label><input id="jm-info-prefix" value="' + escapeHtml(initialValues.info_prefix) + '" placeholder="SRBX1"></div>' +
+      '<div class="smart-native-row"><label>double_stack</label><input id="jm-double-stack" value="' + escapeHtml(initialValues.double_stack) + '" placeholder="0"></div>' +
+      '<div class="smart-native-row"><label>os</label><input id="jm-login-os" value="' + escapeHtml(initialValues.login_os) + '" placeholder="Windows 10"></div>' +
+      '<div class="smart-native-row"><label>name</label><input id="jm-login-name" value="' + escapeHtml(initialValues.login_name) + '" placeholder="Windows"></div>' +
+      '</details>' +
       '<div class="smart-native-row" id="jm-ssid-row"><label>校园网 SSID</label><input id="jm-ssid" value="' + escapeHtml(initialValues.ssid) + '"></div>' +
       '<div class="smart-native-row" id="jm-bssid-row"><label>BSSID（留空则不锁定）</label><input id="jm-bssid" value="' + escapeHtml(initialValues.bssid) + '"></div>' +
       '<div class="smart-native-row" id="jm-radio-row"><label>频段</label><select id="jm-radio">' + radioOptionsMarkup() + '</select></div>';
 
-    function updateSuffixPlaceholder() {
-      var opSel = document.getElementById('jm-operator');
+    function updateOperatorSuffixFromPreset() {
       var sfx = document.getElementById('jm-operator_suffix');
-      var preset = findSchoolPreset(selectedPresetId);
-      var noSuffixOps = noSuffixForPreset(preset);
-      if (!opSel || !sfx) return;
-      var opId = opSel.value;
-      var isNoSuffix = false;
-      for (var i = 0; i < noSuffixOps.length; i++) {
-        if (noSuffixOps[i] === opId) {
-          isNoSuffix = true;
-          break;
-        }
-      }
-      sfx.placeholder = isNoSuffix ? '(无后缀)' : ('留空则使用 "' + opId + '"');
+      var opSel = document.getElementById('jm-operator');
+      if (!sfx || !opSel || !presetApplied) return;
+      sfx.value = operatorSuffixFromSelectedId(opSel.value);
     }
 
     function applySchoolDefaultsToForm() {
       var preset = findSchoolPreset(selectedPresetId);
+      if (!preset) {
+        resetSchoolDefaultsForm();
+        return;
+      }
       var schoolDefaults = (preset && preset.defaults) ? preset.defaults : {};
+      var loginShape = (preset && preset.observed_login_shape) ? preset.observed_login_shape : {};
       var fieldMap = {
         base_url: 'jm-base_url',
         ac_id: 'jm-ac_id',
-        ssid: 'jm-ssid',
-        operator_suffix: 'jm-operator_suffix'
+        ssid: 'jm-ssid'
       };
       for (var key in fieldMap) {
-        if (schoolDefaults[key] !== undefined && schoolDefaults[key] !== null && schoolDefaults[key] !== '') {
-          var target = document.getElementById(fieldMap[key]);
-          if (target) target.value = String(schoolDefaults[key]);
-        }
+        var target = document.getElementById(fieldMap[key]);
+        if (!target) continue;
+        target.value = (schoolDefaults[key] !== undefined && schoolDefaults[key] !== null) ? String(schoolDefaults[key]) : '';
       }
       var opSel = document.getElementById('jm-operator');
       if (opSel) {
-        var nextOperator = schoolDefaults.operator ? String(schoolDefaults.operator) : opSel.value;
         var nextOperators = operatorsForPreset(preset);
+        var nextOperator = nextOperators.length ? String(nextOperators[0].id || '') : defaultOperators[0].id;
         opSel.innerHTML = operatorOptionsMarkup(nextOperators, nextOperator);
         opSel.value = nextOperator;
         if (opSel.value !== nextOperator && nextOperators.length) {
           opSel.value = nextOperators[0].id;
         }
       }
+      applyLoginShapeToForm(loginShape);
+      presetApplied = true;
+      updateOperatorSuffixFromPreset();
       if (schoolDefaults.access_mode) {
         var modeSel = document.getElementById('jm-access_mode');
         if (modeSel) modeSel.value = String(schoolDefaults.access_mode);
+      } else {
+        var fallbackModeSel = document.getElementById('jm-access_mode');
+        if (fallbackModeSel && selectedPresetId === NO_PRESET_ID) fallbackModeSel.value = 'wifi';
       }
       updateCampusAccessModeUI();
-      updateSuffixPlaceholder();
+    }
+
+    function applyLoginShapeToForm(shape) {
+      shape = shape || {};
+      var map = {
+        n: 'jm-login-n',
+        type: 'jm-login-type',
+        enc: 'jm-login-enc',
+        info_prefix: 'jm-info-prefix',
+        double_stack: 'jm-double-stack'
+      };
+      for (var key in map) {
+        var target = document.getElementById(map[key]);
+        if (!target) continue;
+        target.value = (shape[key] !== undefined && shape[key] !== null) ? String(shape[key]) : '';
+      }
+      var osNode = document.getElementById('jm-login-os');
+      if (osNode) osNode.value = (shape.os !== undefined && shape.os !== null) ? String(shape.os) : '';
+      var nameNode = document.getElementById('jm-login-name');
+      if (nameNode) nameNode.value = (shape.name !== undefined && shape.name !== null) ? String(shape.name) : '';
     }
 
     function resetSchoolDefaultsForm() {
-      selectedPresetId = 'jxnu';
+      presetApplied = false;
+      selectedPresetId = NO_PRESET_ID;
       selectedPreset = findSchoolPreset(selectedPresetId);
       var presetSel = document.getElementById('jm-school_preset');
       if (presetSel) presetSel.value = selectedPresetId;
       var opSel = document.getElementById('jm-operator');
       if (opSel) {
-        opSel.innerHTML = operatorOptionsMarkup(operatorsForPreset(selectedPreset), initialValues.operator);
-        opSel.value = initialValues.operator;
+        opSel.innerHTML = operatorOptionsMarkup(defaultOperators, defaultOperators[0].id);
+        opSel.value = defaultOperators[0].id;
       }
       var values = {
         'jm-label': initialValues.label,
         'jm-user_id': initialValues.user_id,
-        'jm-operator_suffix': initialValues.operator_suffix,
-        'jm-access_mode': initialValues.access_mode,
-        'jm-base_url': initialValues.base_url,
-        'jm-ac_id': initialValues.ac_id,
-        'jm-ssid': initialValues.ssid,
+        'jm-operator_suffix': '',
+        'jm-access_mode': 'wifi',
+        'jm-base_url': '',
+        'jm-ac_id': '',
+        'jm-login-n': DEFAULT_LOGIN_SHAPE.n,
+        'jm-login-type': DEFAULT_LOGIN_SHAPE.type,
+        'jm-login-enc': DEFAULT_LOGIN_SHAPE.enc,
+        'jm-info-prefix': DEFAULT_LOGIN_SHAPE.info_prefix,
+        'jm-double-stack': DEFAULT_LOGIN_SHAPE.double_stack,
+        'jm-login-os': DEFAULT_LOGIN_SHAPE.os,
+        'jm-login-name': DEFAULT_LOGIN_SHAPE.name,
+        'jm-ssid': '',
         'jm-bssid': initialValues.bssid,
         'jm-radio': initialValues.radio
       };
@@ -624,7 +690,43 @@
         if (node) node.value = values[idKey];
       }
       updateCampusAccessModeUI();
-      updateSuffixPlaceholder();
+    }
+
+    function detectAcidForForm() {
+      var baseInput = document.getElementById('jm-base_url');
+      var acidInput = document.getElementById('jm-ac_id');
+      var statusNode = document.getElementById('jm-detect-acid-status');
+      var button = document.getElementById('jm-detect-acid');
+      var baseUrl = baseInput ? baseInput.value : '';
+      if (!baseUrl) {
+        alert('请先填写认证地址');
+        return;
+      }
+      if (button) button.disabled = true;
+      if (statusNode) statusNode.textContent = '嗅探中...';
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', '/cgi-bin/luci/admin/services/smart_srun/detect_acid', true);
+      xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded; charset=UTF-8');
+      xhr.onload = function() {
+        var data = {};
+        try {
+          data = JSON.parse(xhr.responseText || '{}');
+        } catch (e) {}
+        if (data.ok && data.acid) {
+          if (acidInput) acidInput.value = data.acid;
+          if (baseInput && data.base_url) baseInput.value = data.base_url;
+          if (statusNode) statusNode.textContent = '已填入 ' + data.acid;
+        } else {
+          if (statusNode) statusNode.textContent = data.message || '未发现 AC_ID';
+          else alert(data.message || '未发现 AC_ID');
+        }
+        if (button) button.disabled = false;
+      };
+      xhr.onerror = function() {
+        if (statusNode) statusNode.textContent = '嗅探请求失败';
+        if (button) button.disabled = false;
+      };
+      xhr.send('base_url=' + encodeURIComponent(baseUrl));
     }
 
     showNativeModal(
@@ -633,15 +735,17 @@
       function() {
         document.getElementById('jm-radio').value = initialValues.radio;
         document.getElementById('jm-school_preset').addEventListener('change', function() {
-          selectedPresetId = this.value || 'jxnu';
+          presetApplied = false;
+          selectedPresetId = this.value || NO_PRESET_ID;
           selectedPreset = findSchoolPreset(selectedPresetId);
         });
         document.getElementById('jm-apply-school-defaults').addEventListener('click', applySchoolDefaultsToForm);
         document.getElementById('jm-reset-school-defaults').addEventListener('click', resetSchoolDefaultsForm);
+        document.getElementById('jm-detect-acid').addEventListener('click', detectAcidForForm);
         document.getElementById('jm-access_mode').addEventListener('change', updateCampusAccessModeUI);
-        document.getElementById('jm-operator').addEventListener('change', updateSuffixPlaceholder);
+        document.getElementById('jm-operator').addEventListener('change', updateOperatorSuffixFromPreset);
+        if (!id) applySchoolDefaultsToForm();
         updateCampusAccessModeUI();
-        updateSuffixPlaceholder();
         renderPasswordField('jm-password-field', 'jm-password', item.password || '');
       },
       function() { window.smartModalSave(); }
@@ -684,6 +788,13 @@
       fd.append('password', getFieldValue('jm-password'));
       fd.append('base_url', document.getElementById('jm-base_url').value);
       fd.append('ac_id', document.getElementById('jm-ac_id').value);
+      fd.append('n', document.getElementById('jm-login-n').value);
+      fd.append('type', document.getElementById('jm-login-type').value);
+      fd.append('enc', document.getElementById('jm-login-enc').value);
+      fd.append('info_prefix', document.getElementById('jm-info-prefix').value);
+      fd.append('double_stack', document.getElementById('jm-double-stack').value);
+      fd.append('login_os', document.getElementById('jm-login-os').value);
+      fd.append('login_name', document.getElementById('jm-login-name').value);
       fd.append('ssid', document.getElementById('jm-ssid').value);
       fd.append('bssid', document.getElementById('jm-bssid').value);
       fd.append('radio', document.getElementById('jm-radio').value);
