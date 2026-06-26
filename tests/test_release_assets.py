@@ -1,4 +1,5 @@
 import contextlib
+import hashlib
 import importlib
 import io
 import json
@@ -205,7 +206,46 @@ class ReleaseAssetsTests(unittest.TestCase):
 
             self.assertEqual(
                 sorted(path.name for path in split_dir.iterdir()),
-                ["smart-srun-split-packages-v1.2.3.zip"],
+                [
+                    "smart-srun-split-packages-v1.2.3.zip",
+                    "smart-srun-split-packages-v1.2.3.zip.sha256",
+                ],
+            )
+
+    def test_prepare_release_outputs_writes_matching_sha256_sidecar(self):
+        release_assets = load_release_assets_module(self)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            artifacts_dir = temp_path / "artifacts"
+            release_dir = temp_path / "release"
+            split_dir = temp_path / "split"
+            artifacts_dir.mkdir()
+
+            (artifacts_dir / "luci-app-smart-srun-bundle_1.2.3_all.ipk").write_text(
+                "bundle", encoding="utf-8"
+            )
+            (artifacts_dir / "smart-srun_1.2.3_all.ipk").write_text(
+                "core", encoding="utf-8"
+            )
+            (artifacts_dir / "luci-app-smart-srun_1.2.3_all.ipk").write_text(
+                "luci", encoding="utf-8"
+            )
+
+            metadata = release_assets.prepare_release_outputs(
+                artifacts_dir, release_dir, split_dir, "v1.2.3"
+            )
+
+            self.assertEqual(
+                metadata["split_zip_sha256_name"],
+                "smart-srun-split-packages-v1.2.3.zip.sha256",
+            )
+            sidecar = split_dir / metadata["split_zip_sha256_name"]
+            zip_bytes = Path(metadata["split_zip_path"]).read_bytes()
+            expected = hashlib.sha256(zip_bytes).hexdigest()
+            self.assertEqual(
+                sidecar.read_text(encoding="utf-8"),
+                "%s  smart-srun-split-packages-v1.2.3.zip\n" % expected,
             )
 
     def test_prepare_release_outputs_rejects_ambiguous_bundle_matches(self):
@@ -755,8 +795,11 @@ class ReleaseAssetsUnifiedTests(unittest.TestCase):
                 ]),
             )
             self.assertEqual(
-                [path.name for path in split_dir.iterdir()],
-                ["smart-srun-split-packages-v1.2.3.zip"],
+                sorted(path.name for path in split_dir.iterdir()),
+                [
+                    "smart-srun-split-packages-v1.2.3.zip",
+                    "smart-srun-split-packages-v1.2.3.zip.sha256",
+                ],
             )
 
     def test_main_prepare_unified_subcommand(self):

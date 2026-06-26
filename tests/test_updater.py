@@ -1,3 +1,4 @@
+import hashlib
 import os
 import sys
 import tempfile
@@ -103,6 +104,51 @@ class UpdaterTests(unittest.TestCase):
             any(os.path.basename(path).startswith("luci-app-smart-srun_") for path in selected)
         )
         self.assertFalse(any("bundle" in os.path.basename(path) for path in selected))
+
+
+class SplitZipDigestTests(unittest.TestCase):
+    def _write_zip(self, tmp):
+        zip_path = os.path.join(tmp, "split.zip")
+        with zipfile.ZipFile(zip_path, "w") as archive:
+            archive.writestr("smart-srun_1.3.4_all.ipk", "core")
+        return zip_path
+
+    def test_verify_split_zip_accepts_matching_sidecar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            zip_path = self._write_zip(tmp)
+            digest = hashlib.sha256(open(zip_path, "rb").read()).hexdigest()
+            sidecar = "%s  split.zip\n" % digest
+            with mock.patch.object(updater, "_fetch_text", return_value=sidecar):
+                # 不抛异常即视为通过校验。
+                updater._verify_split_zip(zip_path, "https://example.invalid/split.zip")
+
+    def test_verify_split_zip_rejects_mismatched_sidecar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            zip_path = self._write_zip(tmp)
+            sidecar = "%s  split.zip\n" % ("0" * 64)
+            with mock.patch.object(updater, "_fetch_text", return_value=sidecar):
+                with self.assertRaisesRegex(RuntimeError, "sha256 digest mismatch"):
+                    updater._verify_split_zip(
+                        zip_path, "https://example.invalid/split.zip"
+                    )
+
+    def test_verify_split_zip_skips_when_sidecar_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            zip_path = self._write_zip(tmp)
+
+            def _raise(*_args, **_kwargs):
+                raise RuntimeError("404")
+
+            with (
+                mock.patch.object(updater, "_fetch_text", side_effect=_raise),
+                mock.patch.object(updater, "_append_log"),
+            ):
+                # 旧版本无旁注文件，应静默跳过而非报错。
+                updater._verify_split_zip(zip_path, "https://example.invalid/split.zip")
+
+    def test_parse_sha256_extracts_hex_digest(self):
+        self.assertEqual(updater._parse_sha256("a" * 64 + "  file.zip"), "a" * 64)
+        self.assertEqual(updater._parse_sha256("not-a-hash file"), "")
 
 
 if __name__ == "__main__":

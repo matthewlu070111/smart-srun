@@ -1,6 +1,6 @@
 # 贡献者指南
 
-本仓库是 OpenWrt 包源码，不是普通单体应用。真正随包安装的内容都在 `root/` 下；`tests/`、`scripts/`、`doc/`、`cloudflare-pages/` 只用于开发、验证和维护。
+本仓库是 OpenWrt 包源码，不是普通单体应用。真正随包安装的内容都在 `root/` 下；`tests/`、`scripts/` 和 `doc/` 只用于开发、验证和维护。
 
 ## 项目结构
 
@@ -39,7 +39,7 @@ root/
 - `scripts/hot_update.py`：开发态热更新脚本，显式上传 shipped 文件。
 - 网页登录诊断与学校预设采集油猴脚本：独立仓库 [guiguisocute/smart_srun_school_preset_capture.user](https://github.com/guiguisocute/smart_srun_school_preset_capture.user)，本仓库不再保留副本。
 - `doc/school-presets.json`：机器可读学校预设主文件。
-- `cloudflare-pages/`：`srun.edu-publish.site` 学校预设镜像站代码。
+- `srun.edu-publish.site` 学校预设镜像站代码：独立仓库 [guiguisocute/smart_srun-_cloudflare_pages](https://github.com/guiguisocute/smart_srun-_cloudflare_pages)，本仓库不再保留副本。
 
 ## 运行环境约束
 
@@ -65,7 +65,6 @@ python -m pytest tests/ -v
 python -m pytest tests/ -k runtime -v
 ruff check root/usr/lib/smart_srun/
 node --check root/www/luci-static/resources/smart_srun.js
-node --check cloudflare-pages/functions/school-presets.json.js
 python -m pytest tests/test_lua_syntax.py -v
 ```
 
@@ -141,12 +140,10 @@ python scripts/hot_update.py
 - `os`
 - `name`
 
-更新预设后同步 fallback 和 Pages 静态副本：
+更新预设后同步随包 fallback：
 
 ```sh
 python -c "import json, pathlib; p=json.loads(pathlib.Path('doc/school-presets.json').read_text(encoding='utf-8')); p['source']='bundled fallback'; pathlib.Path('root/usr/lib/smart_srun/school_presets_fallback.json').write_text(json.dumps(p, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')"
-cp doc/school-presets.json cloudflare-pages/public/fallback-school-presets.json
-cp doc/school-presets.json cloudflare-pages/public/school-presets.json
 ```
 
 同步 fallback 时只允许 `source` 不同，内容应与 `doc/school-presets.json` 保持一致。

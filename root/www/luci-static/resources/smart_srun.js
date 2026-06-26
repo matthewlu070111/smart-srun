@@ -147,15 +147,23 @@
     return lines.join('\n');
   }
 
-  function pollUpdateStatus(outputNode) {
+  function pollUpdateStatus(outputNode, errorStreak) {
+    errorStreak = errorStreak || 0;
     fetchJson(UPDATE_STATUS_URL, function(err, data) {
       if (err || !data) {
-        outputNode.textContent = '读取更新状态失败';
+        // 更新末尾会重启 uwsgi，期间状态接口短暂不可用属正常现象，
+        // 容忍几次失败后再放弃，避免误报“读取更新状态失败”。
+        if (errorStreak >= 5) {
+          outputNode.textContent = '读取更新状态失败';
+          return;
+        }
+        outputNode.textContent = '更新进行中，正在等待服务恢复…';
+        setTimeout(function() { pollUpdateStatus(outputNode, errorStreak + 1); }, 2000);
         return;
       }
       outputNode.textContent = formatUpdateStatus(data);
       if (data.running) {
-        setTimeout(function() { pollUpdateStatus(outputNode); }, 2000);
+        setTimeout(function() { pollUpdateStatus(outputNode, 0); }, 2000);
       }
     });
   }

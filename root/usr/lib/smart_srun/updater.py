@@ -1,5 +1,6 @@
 """Package update helper for SMART SRun."""
 
+import errno
 import hashlib
 import json
 import os
@@ -342,6 +343,31 @@ def _verify_digest(path, digest):
     return True
 
 
+def _parse_sha256(text):
+    for token in str(text or "").split():
+        token = token.strip().lower()
+        if re.match(r"^[0-9a-f]{64}$", token):
+            return token
+    return ""
+
+
+def _verify_split_zip(path, source_url):
+    """校验 split zip 的 sha256，旁注来自 downloads 分支同目录的 <zip>.sha256。"""
+    if not source_url:
+        return
+    try:
+        text = _fetch_text(source_url + ".sha256", timeout=12)
+    except Exception:
+        # 旧版本的 downloads 目录没有 .sha256 旁注，保持向后兼容直接跳过。
+        _append_log("split zip sha256 sidecar missing, skipping verification")
+        return
+    expected = _parse_sha256(text)
+    if not expected:
+        _append_log("split zip sha256 sidecar unreadable, skipping verification")
+        return
+    _verify_digest(path, "sha256:" + expected)
+
+
 def _is_safe_zip_member(name):
     text = str(name or "")
     if not text or text.startswith("/") or text.startswith("\\"):
@@ -443,12 +469,41 @@ def _restart_services():
                 _append_log("restart skipped: %s" % exc)
 
 
+def _pid_alive(pid):
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError as exc:
+        # EPERM 说明进程存在但无权发信号，仍视为存活。
+        return exc.errno == errno.EPERM
+    return True
+
+
+def _read_lock_pid():
+    try:
+        with open(LOCK_FILE, "r", encoding="ascii", errors="ignore") as handle:
+            return int((handle.read() or "0").strip() or 0)
+    except (OSError, ValueError):
+        return 0
+
+
 def _acquire_lock():
     _ensure_parent(LOCK_FILE)
     try:
         fd = os.open(LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except OSError:
-        raise RuntimeError("已有更新任务正在运行")
+        # 锁文件已存在：若持有者进程已退出（崩溃 / 被服务重启杀掉）则视为陈旧锁，
+        # 清理后重试，避免一次失败的更新把后续更新永久挡在门外。
+        holder = _read_lock_pid()
+        if holder and _pid_alive(holder):
+            raise RuntimeError("已有更新任务正在运行")
+        _append_log("clearing stale update lock (pid=%s)" % (holder or "?"))
+        try:
+            os.remove(LOCK_FILE)
+            fd = os.open(LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except OSError:
+            raise RuntimeError("已有更新任务正在运行")
     os.write(fd, str(os.getpid()).encode("ascii", "ignore"))
     os.close(fd)
 
@@ -507,6 +562,7 @@ def run_update():
         else:
             zip_path = os.path.join(WORK_DIR, result["asset_name"])
             downloaded_from = _download_first(result.get("download_urls") or [], zip_path)
+            _verify_split_zip(zip_path, downloaded_from)
             extract_dir = os.path.join(WORK_DIR, "packages")
             os.makedirs(extract_dir)
             package_paths = _extract_split_zip(zip_path, extract_dir, fmt, mode)
@@ -566,11 +622,14 @@ def start_background_update():
     ]
     _ensure_parent(LOG_FILE)
     log_handle = open(LOG_FILE, "a", encoding="utf-8")
+    # start_new_session 让更新进程脱离 uwsgi 的会话/进程组，否则更新末尾重启 uwsgi
+    # 时会把正在收尾的更新进程一起杀掉，导致状态卡在 running 并残留锁文件。
     subprocess.Popen(
         cmd,
         stdout=log_handle,
         stderr=subprocess.STDOUT,
         close_fds=True,
+        start_new_session=True,
     )
     log_handle.close()
     return get_status()

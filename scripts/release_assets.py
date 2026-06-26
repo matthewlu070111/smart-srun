@@ -1,6 +1,7 @@
 """Helpers for preparing release assets."""
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -39,6 +40,28 @@ def _split_zip_name(version, package_format="ipk"):
     if package_format == "apk":
         return "smart-srun-split-packages-%s-apk.zip" % version
     return "smart-srun-split-packages-%s.zip" % version
+
+
+def _write_split_zip_sha256(split_zip_path):
+    """Write a `<zip>.sha256` sidecar so the updater can verify the download."""
+    split_zip_path = Path(split_zip_path)
+    sha = hashlib.sha256()
+    with open(str(split_zip_path), "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 128), b""):
+            sha.update(chunk)
+    sidecar_path = split_zip_path.with_name(split_zip_path.name + ".sha256")
+    # sha256sum 兼容格式：<hexdigest><space><space><filename>
+    sidecar_path.write_text(
+        "%s  %s\n" % (sha.hexdigest(), split_zip_path.name), encoding="utf-8"
+    )
+    return sidecar_path.name
+
+
+def _remove_split_zip_and_sidecar(zip_path):
+    zip_path.unlink()
+    sidecar = zip_path.with_name(zip_path.name + ".sha256")
+    if sidecar.exists():
+        sidecar.unlink()
 
 
 def _require_single_match(paths, label):
@@ -110,7 +133,7 @@ def prepare_release_outputs(
         # For ipk we must avoid clobbering apk zips that happen to live alongside.
         if package_format == "ipk" and stale_split_zip_path.name.endswith("-apk.zip"):
             continue
-        stale_split_zip_path.unlink()
+        _remove_split_zip_and_sidecar(stale_split_zip_path)
 
     bundle_path, split_package_paths = _collect_packages(artifacts_dir, package_format)
     shutil.copy2(str(bundle_path), str(release_dir / bundle_path.name))
@@ -119,8 +142,11 @@ def prepare_release_outputs(
         for package_path in split_package_paths:
             archive.write(str(package_path), package_path.name)
 
+    split_zip_sha256_name = _write_split_zip_sha256(split_zip_path)
+
     return {
         "split_zip_name": split_zip_name,
+        "split_zip_sha256_name": split_zip_sha256_name,
         "split_zip_path": str(split_zip_path),
         "package_format": package_format,
     }
@@ -148,7 +174,7 @@ def prepare_unified_release_outputs(artifacts_dir, release_dir, split_dir, versi
     for stale_release_path in release_dir.glob("*.apk"):
         stale_release_path.unlink()
     for stale_split_zip_path in split_dir.glob("smart-srun-split-packages-*.zip"):
-        stale_split_zip_path.unlink()
+        _remove_split_zip_and_sidecar(stale_split_zip_path)
 
     ipk_bundle, ipk_splits = _collect_packages(artifacts_dir, "ipk")
     apk_bundle, apk_splits = _collect_packages(artifacts_dir, "apk")
@@ -160,8 +186,11 @@ def prepare_unified_release_outputs(artifacts_dir, release_dir, split_dir, versi
         for package_path in ipk_splits + apk_splits:
             archive.write(str(package_path), package_path.name)
 
+    split_zip_sha256_name = _write_split_zip_sha256(split_zip_path)
+
     return {
         "split_zip_name": split_zip_name,
+        "split_zip_sha256_name": split_zip_sha256_name,
         "split_zip_path": str(split_zip_path),
         "package_format": "unified",
     }

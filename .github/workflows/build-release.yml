@@ -259,6 +259,7 @@ jobs:
 
           mkdir -p "$WORKTREE_DIR/${VERSION}"
           cp -f "split-downloads/${SPLIT_ZIP_NAME}" "$WORKTREE_DIR/${VERSION}/${SPLIT_ZIP_NAME}"
+          cp -f "split-downloads/${SPLIT_ZIP_NAME}.sha256" "$WORKTREE_DIR/${VERSION}/${SPLIT_ZIP_NAME}.sha256"
 
           git -C "$WORKTREE_DIR" add -- "${VERSION}/"
           if git -C "$WORKTREE_DIR" diff --cached --quiet; then
