@@ -9,8 +9,9 @@ from unittest import mock
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODULE_ROOT = os.path.join(REPO_ROOT, "root", "usr", "lib", "smart_srun")
-PRESET_CAPTURE_SCRIPT = os.path.join(
-    REPO_ROOT, "scripts", "srun_school_preset_capture.user.js"
+DOC_PRESETS_FILE = os.path.join(REPO_ROOT, "doc", "school-presets.json")
+FALLBACK_PRESETS_FILE = os.path.join(
+    MODULE_ROOT, "school_presets_fallback.json"
 )
 
 if MODULE_ROOT not in sys.path:
@@ -57,16 +58,26 @@ class SchoolPresetTests(unittest.TestCase):
         self.assertEqual(jxnu["observed_login_shape"]["enc"], "srun_bx1")
         self.assertEqual(jxnu["observed_login_shape"]["os"], "Windows 10")
         self.assertEqual(jxnu["observed_login_shape"]["name"], "Windows")
-        operators_by_id = {item["id"]: item for item in jxnu["operators"]}
-        self.assertIn("cmcc", operators_by_id)
-        self.assertIn("ctcc", operators_by_id)
-        self.assertIn("cucc", operators_by_id)
-        self.assertIn("", operators_by_id)
+        operators_by_suffix = {item["suffix"]: item for item in jxnu["operators"]}
+        self.assertIn("cmcc", operators_by_suffix)
+        self.assertIn("ctcc", operators_by_suffix)
+        self.assertIn("cucc", operators_by_suffix)
+        self.assertIn("", operators_by_suffix)
         self.assertNotIn("operator", jxnu["defaults"])
         self.assertNotIn("operator_suffix", jxnu["defaults"])
         self.assertNotIn("no_suffix_operators", jxnu)
         for operator in jxnu["operators"]:
             self.assertNotIn("operator_suffix", operator)
+
+    def test_bundled_fallback_is_synced_with_doc_presets(self):
+        with open(DOC_PRESETS_FILE, "r", encoding="utf-8") as handle:
+            doc_payload = json.load(handle)
+        with open(FALLBACK_PRESETS_FILE, "r", encoding="utf-8") as handle:
+            fallback_payload = json.load(handle)
+
+        self.assertEqual(fallback_payload.get("source"), "bundled fallback")
+        fallback_payload["source"] = doc_payload.get("source")
+        self.assertEqual(fallback_payload, doc_payload)
 
     def test_remote_cache_overrides_builtin_presets(self):
         payload = {
@@ -111,6 +122,53 @@ class SchoolPresetTests(unittest.TestCase):
             },
         )
 
+    def test_refresh_remote_presets_prefers_mirror_and_falls_back_to_github(self):
+        payload = {
+            "schema_version": 1,
+            "schools": [
+                {
+                    "id": "mirror-fallback",
+                    "name": "镜像回退学校",
+                    "status": "active",
+                    "defaults": {"base_url": PORTAL_ORIGIN},
+                }
+            ],
+        }
+        calls = []
+
+        def fake_fetch(url, timeout):
+            calls.append(url)
+            if url == school_presets.MIRROR_PRESETS_URL:
+                raise RuntimeError("mirror unavailable")
+            return json.dumps(payload)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_path = os.path.join(tmp, "school_presets_cache.json")
+            with (
+                mock.patch.object(school_presets, "CACHE_PRESETS_FILE", cache_path),
+                mock.patch.object(
+                    school_presets, "_fetch_via_urllib", side_effect=fake_fetch
+                ),
+                mock.patch.object(
+                    school_presets,
+                    "_fetch_via_system_client",
+                    side_effect=RuntimeError("no system fetcher"),
+                ),
+            ):
+                result = school_presets.refresh_remote_presets()
+                cached = json.load(open(cache_path, "r", encoding="utf-8"))
+
+        self.assertEqual(
+            calls,
+            [
+                school_presets.MIRROR_PRESETS_URL,
+                school_presets.GITHUB_PRESETS_URL,
+            ],
+        )
+        self.assertEqual(result["source_url"], school_presets.GITHUB_PRESETS_URL)
+        self.assertEqual(cached["_source_url"], school_presets.GITHUB_PRESETS_URL)
+        self.assertEqual(result["schools"][0]["short_name"], "mirror-fallback")
+
     def test_legacy_verified_preset_cache_is_accepted_but_not_exported(self):
         payload = {
             "schema_version": 1,
@@ -152,7 +210,7 @@ class SchoolPresetTests(unittest.TestCase):
 
         items = school_presets.normalize_payload(payload)
 
-        self.assertEqual(items[0]["operators"][0]["id"], "hcmcc")
+        self.assertEqual(items[0]["operators"][0]["suffix"], "hcmcc")
         self.assertNotIn("operator", items[0]["defaults"])
         self.assertNotIn("operator_suffix", items[0]["defaults"])
 
@@ -174,54 +232,8 @@ class SchoolPresetTests(unittest.TestCase):
 
         items = school_presets.normalize_payload(payload)
 
-        self.assertEqual(items[0]["operators"][0]["id"], "")
-        self.assertNotIn("xn", [item["id"] for item in items[0]["operators"]])
-
-    def test_preset_capture_userscript_exports_school_preset_entry(self):
-        with open(PRESET_CAPTURE_SCRIPT, "r", encoding="utf-8") as handle:
-            source = handle.read()
-
-        self.assertIn("smart-srun school preset capture", source)
-        self.assertIn("buildPresetEntry", source)
-        self.assertIn("operator_suffix", source)
-        self.assertNotIn("defaults.operator =", source)
-        self.assertNotIn("defaults.operator_suffix =", source)
-        self.assertNotIn("entry.no_suffix_operators", source)
-        self.assertIn("GM_setClipboard", source)
-        self.assertIn("buildOperatorsForEntry", source)
-        self.assertIn("pushUniqueOperator", source)
-        operator_builder = source[
-            source.index("function buildOperatorsForEntry"):
-            source.index("function operatorLabelFromSuffix")
-        ]
-        self.assertNotIn("return []", operator_builder)
-        self.assertIn("entry.operators = operators", source)
-        self.assertIn("setButtonFeedback", source)
-        self.assertIn("已重新检查", source)
-        self.assertIn("请手动复制", source)
-        self.assertIn("makeDraggable", source)
-        self.assertIn("toggleMinimized", source)
-        self.assertIn("hidePanel", source)
-        self.assertIn("renderStep", source)
-        self.assertIn("observed_login_shape", source)
-        self.assertIn("buildObservedLoginShape", source)
-        self.assertIn("info_prefix_supported", source)
-        self.assertIn("decoded.enc_ver", source)
-        self.assertIn("double_stack", source)
-        self.assertIn("paramsFromBody", source)
-        self.assertIn("mergeParams(queryParams(url), paramsFromBody(body))", source)
-        self.assertIn("state.login_os", source)
-        self.assertIn("state.login_name", source)
-        self.assertIn("copyCaptureSummary", source)
-        self.assertIn("提交信息，协助开发者", source)
-        self.assertIn("登录失败，但已捕获请求信息", source)
-        self.assertIn('parts.push("os=" + state.login_os)', source)
-        self.assertIn('parts.push("name=" + state.login_name)', source)
-        self.assertIn("当前脚本只支持解码 {SRBX1}", source)
-        self.assertIn("捕获运营商后缀", source)
-        self.assertIn("raw username/password/challenge/info are not exported", source)
-        self.assertNotIn("operators: DEFAULT_OPERATORS.slice(0)", source)
-        self.assertNotIn("[已验证]", source)
+        self.assertEqual(items[0]["operators"][0]["suffix"], "")
+        self.assertNotIn("xn", [item["suffix"] for item in items[0]["operators"]])
 
     def test_presets_do_not_register_as_school_runtimes(self):
         for name in ["schools", "school_runtime"]:

@@ -16,8 +16,8 @@ class Profile(SchoolProfile):
     DEFAULT_AC_ID = "1"
 
     OPERATORS = (
-        {"id": "cucc", "label": "中国联通"},
-        {"id": "",     "label": "校园网"},
-        {"id": "cmcc", "label": "中国移动"},
-        {"id": "ctcc", "label": "中国电信"},
+        {"suffix": "cucc", "label": "中国联通"},
+        {"suffix": "",     "label": "校园网"},
+        {"suffix": "cmcc", "label": "中国移动"},
+        {"suffix": "ctcc", "label": "中国电信"},
     )

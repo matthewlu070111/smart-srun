@@ -38,6 +38,7 @@ from wireless import (
     ensure_expected_profile,
     parse_wireless_iface_data,
     switch_to_campus,
+    teardown_managed_sta_interfaces,
     wait_for_network_interface_ipv4,
 )
 import srun_auth
@@ -524,6 +525,11 @@ def clean_slate_for_manual_login(cfg, online_user=""):
                 reason=message or "unknown",
             )
             return False, message or "禁用历史 STA 接口失败"
+
+        # 拉下无线 STA 的 L3 接口，清掉残留的 wwan 路由。否则它会与 WAN 指向同一认证网关
+        # 的路由冲突，发往网关的包被路由到失效接口并报 EPERM（Operation not permitted），
+        # 该状态会一直持续到重启路由器——这正是“无线切有线”卡死只能重启的根因。
+        teardown_managed_sta_interfaces(cfg, active_data)
 
         log(
             "INFO",

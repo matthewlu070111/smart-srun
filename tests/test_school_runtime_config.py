@@ -335,6 +335,39 @@ class SchoolRuntimeConfigTests(unittest.TestCase):
         self.assertEqual("alice@hcmcc", loaded["username"])
         self.assertEqual("hcmcc", loaded["operator"])
 
+    def test_custom_operator_id_is_preserved_but_blank_suffix_stays_plain(self):
+        raw_cfg = {
+            "school": "runtime-school",
+            "active_campus_id": "campus-1",
+            "default_campus_id": "campus-1",
+            "campus_accounts": [
+                {
+                    "id": "campus-1",
+                    "user_id": "alice",
+                    "operator": "hcmcc",
+                    "operator_suffix": "",
+                    "password": "pw",
+                    "base_url": PORTAL_ORIGIN,
+                    "ac_id": "1",
+                }
+            ],
+            "hotspot_profiles": [],
+        }
+
+        with (
+            mock.patch.object(config, "load_json_raw_config", return_value=raw_cfg),
+            mock.patch(
+                "schools.get_school_metadata",
+                return_value=self._school_metadata(),
+            ),
+        ):
+            loaded = config.load_config()
+
+        self.assertEqual("hcmcc", loaded["operator"])
+        self.assertEqual("", loaded["operator_suffix"])
+        self.assertEqual("alice", loaded["username"])
+        self.assertEqual("alice", loaded["campus_account_label"])
+
     def test_account_login_shape_overrides_legacy_global_values(self):
         raw_cfg = {
             "school": "runtime-school",

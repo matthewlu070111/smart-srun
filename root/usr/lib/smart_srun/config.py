@@ -104,14 +104,23 @@ LEGACY_HOTSPOT_KEYS = {
     "hotspot_radio",
 }
 
-OPERATORS = {"cmcc", "ctcc", "cucc", "xn"}
-
-
 def normalize_wifi_encryption(value):
     enc = str(value or "").strip().lower()
     if enc in ("", "none", "open", "nopass"):
         return "none"
     return enc
+
+
+def normalize_operator_id(value):
+    text = str(value or "").strip().lower()
+    return "" if text in ("xn", "??") else text
+
+
+def normalize_operator_suffix(value):
+    text = str(value or "").strip()
+    # "??" 是学校预设里"运营商后缀未经验证"的哨兵值，绝不能当作真实后缀拼进用户名，
+    # 否则会构造出 user@?? 导致登录失败。和历史占位符 "xn" 一样归一化为空。
+    return "" if text.lower() in ("xn", "??") else text
 
 
 def wifi_key_required(encryption):
@@ -171,6 +180,13 @@ def _load_defaults():
 
 
 DEFAULTS = _load_defaults()
+DEFAULT_LOGIN_N = str(DEFAULTS.get("n", "200") or "200")
+DEFAULT_LOGIN_TYPE = str(DEFAULTS.get("type", "1") or "1")
+DEFAULT_LOGIN_ENC = str(DEFAULTS.get("enc", "srun_bx1") or "srun_bx1")
+DEFAULT_INFO_PREFIX = "SRBX1"
+DEFAULT_DOUBLE_STACK = "0"
+DEFAULT_LOGIN_OS = "Windows 10"
+DEFAULT_LOGIN_NAME = "Windows"
 
 
 # ---------------------------------------------------------------------------
@@ -546,7 +562,7 @@ def _get_school_metadata(cfg):
             return metadata
         return schools.get_default_school_metadata()
     except (AttributeError, ImportError, LookupError, ValueError):
-        return {"short_name": school_key, "no_suffix_operators": ["xn"]}
+        return {"short_name": school_key}
 
 
 # ---------------------------------------------------------------------------
@@ -688,6 +704,55 @@ def parse_non_negative_float(value, default_value):
         return float(default_value)
 
 
+def _login_shape_number(value, default_value):
+    text = str(value or "").strip()
+    return text if text.isdigit() and int(text) >= 0 else str(default_value)
+
+
+def _login_shape_text(value, default_value):
+    text = str(value or "").strip()
+    return text or str(default_value)
+
+
+def _normalize_info_prefix(value, default_value=DEFAULT_INFO_PREFIX):
+    text = str(value or "").strip()
+    if text.startswith("{") and text.endswith("}") and len(text) > 2:
+        text = text[1:-1].strip()
+    return text or str(default_value)
+
+
+def _apply_login_shape(cfg, campus):
+    cfg["n"] = _login_shape_number(
+        campus.get("n", cfg.get("n", "")),
+        DEFAULT_LOGIN_N,
+    )
+    cfg["type"] = _login_shape_number(
+        campus.get("type", cfg.get("type", "")),
+        DEFAULT_LOGIN_TYPE,
+    )
+    cfg["enc"] = _login_shape_text(
+        campus.get("enc", cfg.get("enc", "")),
+        DEFAULT_LOGIN_ENC,
+    )
+    cfg["info_prefix"] = _normalize_info_prefix(
+        campus.get("info_prefix", cfg.get("info_prefix", "")),
+        DEFAULT_INFO_PREFIX,
+    )
+    cfg["double_stack"] = _login_shape_number(
+        campus.get("double_stack", cfg.get("double_stack", "")),
+        DEFAULT_DOUBLE_STACK,
+    )
+    cfg["login_os"] = _login_shape_text(
+        campus.get("login_os", cfg.get("login_os", "")),
+        DEFAULT_LOGIN_OS,
+    )
+    cfg["login_name"] = _login_shape_text(
+        campus.get("login_name", cfg.get("login_name", "")),
+        DEFAULT_LOGIN_NAME,
+    )
+    return cfg
+
+
 # ---------------------------------------------------------------------------
 # 指针 / 列表项操作
 # ---------------------------------------------------------------------------
@@ -720,11 +785,8 @@ def _make_campus_label(account):
         return label
     user_id = str(account.get("user_id", "")).strip()
     suffix = str(account.get("operator_suffix", "")).strip()
-    operator = str(account.get("operator", "")).strip()
     if suffix and user_id:
         return "%s@%s" % (user_id, suffix)
-    if user_id and operator and operator != "xn":
-        return "%s@%s" % (user_id, operator)
     return user_id or "未命名账号"
 
 
@@ -821,6 +883,7 @@ def _migrate_legacy_config(raw):
             )
 
     user_id = str(raw.get("user_id", "")).strip()
+    legacy_operator = normalize_operator_id(raw.get("operator", "cucc"))
     campus_account = {
         "id": "campus-1",
         "label": "",
@@ -829,8 +892,8 @@ def _migrate_legacy_config(raw):
         "ac_id": str(raw.get("ac_id", "1")).strip(),
         "user_id": user_id,
         "password": str(raw.get("password", "")).strip(),
-        "operator": str(raw.get("operator", "cucc")).strip().lower(),
-        "operator_suffix": "",
+        "operator": legacy_operator,
+        "operator_suffix": legacy_operator,
         "ssid": str(raw.get("campus_ssid", "jxnu_stu")).strip(),
         "bssid": str(raw.get("campus_bssid", "")).strip(),
         "radio": str(raw.get("campus_radio", "")).strip(),
@@ -909,19 +972,12 @@ def get_active_hotspot_profile(cfg):
     return profiles[0]
 
 
-def _get_no_suffix_operators(cfg):
-    metadata = _get_school_metadata(cfg)
-    return set(metadata.get("no_suffix_operators", []) or ["xn"])
-
-
 def resolve_active_items(cfg):
     campus = get_active_campus_account(cfg)
     hotspot = get_active_hotspot_profile(cfg)
 
     cfg["user_id"] = str(campus.get("user_id", "")).strip()
-    cfg["operator"] = str(campus.get("operator", "cucc")).strip().lower()
-    if cfg["operator"] not in OPERATORS:
-        cfg["operator"] = "cucc"
+    cfg["operator"] = normalize_operator_id(campus.get("operator", ""))
     cfg["password"] = str(campus.get("password", "")).strip()
     cfg["base_url"] = normalize_base_url(campus.get("base_url", "http://172.17.1.2"))
     cfg["campus_access_mode"] = normalize_campus_access_mode(
@@ -935,8 +991,11 @@ def resolve_active_items(cfg):
         str(campus.get("encryption", "none")).strip() or "none"
     )
     cfg["campus_key"] = ""
-    cfg["operator_suffix"] = str(campus.get("operator_suffix", "")).strip()
+    cfg["operator_suffix"] = normalize_operator_suffix(
+        campus.get("operator_suffix", "")
+    )
     cfg["campus_account_label"] = _make_campus_label(campus)
+    _apply_login_shape(cfg, campus)
 
     cfg["hotspot_ssid"] = str(hotspot.get("ssid", "")).strip()
     cfg["hotspot_encryption"] = normalize_wifi_encryption(
@@ -951,11 +1010,7 @@ def resolve_active_items(cfg):
         if cfg["operator_suffix"]:
             cfg["username"] = cfg["user_id"] + "@" + cfg["operator_suffix"]
         else:
-            no_suffix_ops = _get_no_suffix_operators(cfg)
-            if cfg["operator"] in no_suffix_ops:
-                cfg["username"] = cfg["user_id"]
-            else:
-                cfg["username"] = cfg["user_id"] + "@" + cfg["operator"]
+            cfg["username"] = cfg["user_id"]
     return cfg
 
 

@@ -121,21 +121,15 @@ apk add --allow-untrusted ./luci-app-smart-srun-bundle-*.apk
 
 ## 获取学校预设与运营商后缀
 
-如果浏览器网页登录可用，但插件不确定认证地址、`AC_ID`、运营商后缀或高级登录参数，可以用仓库里的油猴脚本采集一次真实网页登录请求：
+如果浏览器网页登录可用，但插件不确定认证地址、`AC_ID`、运营商后缀或高级登录参数，可以用专门的油猴脚本采集一次真实网页登录请求。脚本独立维护在这个仓库：
 
-```text
-scripts/srun_school_preset_capture.user.js
-```
+**👉 [smart_srun_school_preset_capture.user](https://github.com/guiguisocute/smart_srun_school_preset_capture.user)**（含一键安装链接和详细说明）
 
-使用方式：
+简要使用：装好 Tampermonkey（油猴）后，从上面仓库点一键安装，打开学校的深澜认证页正常登录，脚本会自动抓取并生成预设 JSON，按提示填好接入方式 / SSID / 贡献者后，点「提交 Issue」把 JSON 贴过来即可。
 
-1. 安装 Tampermonkey（油猴）浏览器扩展。
-2. 新建脚本，粘贴 `scripts/srun_school_preset_capture.user.js` 的全部内容并启用。
-3. 打开学校的深澜认证页，像平时一样手动输入账号密码登录。
-4. 如果网页登录成功，脚本会显示“登录成功，已获取配置数据”，并提供“提交信息，协助开发者”入口。
-5. 如果网页登录失败，脚本会显示失败原因和已捕获字段；请先检查账号密码或网络状态后重试，也可以复制诊断信息给维护者排查。
+脚本只记录真实请求里出现的字段，不会猜默认值；明文账号、密码、challenge 和加密 `info` 原文不会导出。空运营商后缀就保持空字符串，不再使用 `xn` 或额外的 `no_suffix_operators` 字段表示。学校预设 JSON 中，运营商后缀统一维护在 `operators[].suffix`（维护者手工标注“已知存在但后缀未验证”时用 `"??"` 占位），`defaults` 不再写 `operator` 或 `operator_suffix`。用不同运营商账号多登录几次（失败也能抓），脚本会按“抓一个补一个”把抓到的运营商后缀逐个补进 `operators`。
 
-脚本只记录真实请求里出现的字段，不会猜默认值；明文账号、密码、challenge 和加密 `info` 原文不会导出。空运营商后缀就保持空字符串，不再使用 `xn` 或额外的 `no_suffix_operators` 字段表示。学校预设 JSON 中，运营商后缀统一维护在 `operators[].id`，`defaults` 不再写 `operator` 或 `operator_suffix`。
+插件会优先从 `https://srun.edu-publish.site/school-presets.json` 拉取远端学校预设，失败时再回退 GitHub raw、路由器本地缓存和随包兜底预设。
 
 如果只是不确定 `AC_ID`，也可以在 LuCI 校园网账号弹窗里点击 `AC_ID` 旁的“嗅探”，或通过 SSH 执行：
 

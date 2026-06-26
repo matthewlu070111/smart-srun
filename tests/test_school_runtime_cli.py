@@ -232,6 +232,7 @@ class SchoolRuntimeCliTests(unittest.TestCase):
             "man",
             "update",
             "presets",
+            "detect",
         ]
 
         for name in reserved:
@@ -636,7 +637,7 @@ class SchoolRuntimeCliTests(unittest.TestCase):
         self.assertNotIn("operator_suffix", lnut["defaults"])
         self.assertNotIn("operator", jxnu["defaults"])
         self.assertNotIn("operator_suffix", jxnu["defaults"])
-        self.assertEqual(lnut["operators"][0]["id"], "hcmcc")
+        self.assertEqual(lnut["operators"][0]["suffix"], "hcmcc")
         for preset in (lnut, jxnu):
             for operator in preset["operators"]:
                 self.assertNotIn("operator_suffix", operator)
@@ -677,7 +678,7 @@ class SchoolRuntimeCliTests(unittest.TestCase):
         self.assertIn("bob@hcmcc", text)
         self.assertIn("128/3/custom_enc/C", text)
 
-    def test_interactive_account_allows_custom_operator_id(self):
+    def test_interactive_account_allows_custom_operator_suffix(self):
         with (
             mock.patch.object(daemon, "_get_current_profile", return_value=None),
             mock.patch(
@@ -685,7 +686,6 @@ class SchoolRuntimeCliTests(unittest.TestCase):
                 side_effect=[
                     "",
                     "alice",
-                    "hcmcc",
                     "hcmcc",
                     "wired",
                     PORTAL_ORIGIN,
@@ -703,7 +703,7 @@ class SchoolRuntimeCliTests(unittest.TestCase):
         ):
             fields = daemon._interactive_campus()
 
-        self.assertEqual(fields["operator"], "hcmcc")
+        self.assertNotIn("operator", fields)
         self.assertEqual(fields["operator_suffix"], "hcmcc")
         self.assertEqual(fields["n"], "128")
         self.assertEqual(fields["type"], "3")

@@ -143,7 +143,7 @@ def _build_parser():
         sub,
         "presets",
         help_text="管理远端学校预设",
-        description="列出或刷新 GitHub 远端学校预设缓存。",
+        description="列出或刷新远端学校预设缓存。",
     )
     presets_sub = p_presets.add_subparsers(dest="presets_command", metavar="SUBCOMMAND")
     _make_subparser(
@@ -156,7 +156,7 @@ def _build_parser():
         presets_sub,
         "refresh",
         help_text="刷新远端学校预设缓存",
-        description="从 raw GitHub 拉取 doc/school-presets.json 并写入本地缓存。",
+        description="优先从 srun.edu-publish.site 拉取学校预设，失败时回退 raw GitHub。",
     )
 
     p_detect = _make_subparser(

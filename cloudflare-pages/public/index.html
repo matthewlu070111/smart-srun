@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SMART SRun 学校预设镜像</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f6f7f9;
+      --fg: #172033;
+      --muted: #5c667a;
+      --line: #d8dee9;
+      --panel: #ffffff;
+      --accent: #0969da;
+      --ok: #16833a;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #101418;
+        --fg: #edf2f7;
+        --muted: #a3adbd;
+        --line: #2f3946;
+        --panel: #171d24;
+        --accent: #7cb7ff;
+        --ok: #7ee787;
+      }
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--fg);
+      font: 15px/1.65 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 40px 20px;
+    }
+    header {
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 22px;
+      margin-bottom: 24px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(28px, 5vw, 42px);
+      line-height: 1.15;
+      letter-spacing: 0;
+    }
+    p { margin: 0 0 12px; color: var(--muted); }
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 13px;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px;
+      margin: 16px 0;
+    }
+    .endpoint {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+    }
+    a { color: var(--accent); }
+    button {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 7px 12px;
+      background: transparent;
+      color: var(--fg);
+      cursor: pointer;
+    }
+    button:hover { border-color: var(--accent); color: var(--accent); }
+    .status { color: var(--muted); }
+    .status.ok { color: var(--ok); }
+    ul { margin: 10px 0 0; padding-left: 20px; }
+    li { margin: 4px 0; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>SMART SRun 学校预设镜像</h1>
+      <p>面向 OpenWrt 插件的轻量 JSON 分发域名，用于降低国内校园网环境访问 GitHub raw 的失败率。</p>
+    </header>
+
+    <section class="panel">
+      <div class="endpoint">
+        <div>
+          <strong>插件读取地址</strong><br>
+          <code id="endpoint">https://srun.edu-publish.site/school-presets.json</code>
+        </div>
+        <button id="copy" type="button">复制地址</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <strong>当前镜像状态</strong>
+      <p id="status" class="status">正在读取 school-presets.json...</p>
+      <ul id="schools"></ul>
+    </section>
+
+    <section class="panel">
+      <strong>备用路径</strong>
+      <p><a href="/school-presets.json">/school-presets.json</a>：插件默认读取。</p>
+      <p><a href="/fallback-school-presets.json">/fallback-school-presets.json</a>：随站点部署的静态兜底副本。</p>
+      <p><a href="/presets">/presets</a>：兼容短路径。</p>
+    </section>
+  </main>
+
+  <script>
+    (function () {
+      var status = document.getElementById("status");
+      var list = document.getElementById("schools");
+      var endpoint = document.getElementById("endpoint").textContent;
+
+      document.getElementById("copy").onclick = function () {
+        var button = this;
+        function done(text) {
+          var old = button.textContent;
+          button.textContent = text;
+          setTimeout(function () { button.textContent = old; }, 1000);
+        }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(endpoint).then(function () {
+            done("已复制");
+          }, function () {
+            window.prompt("复制下面的地址", endpoint);
+            done("请手动复制");
+          });
+        } else {
+          window.prompt("复制下面的地址", endpoint);
+          done("请手动复制");
+        }
+      };
+
+      fetch("/school-presets.json", { cache: "no-store" }).then(function (response) {
+        return response.json().then(function (payload) {
+          return { response: response, payload: payload };
+        });
+      }).then(function (result) {
+        var payload = result.payload || {};
+        var schools = Array.isArray(payload.schools) ? payload.schools : [];
+        status.className = "status ok";
+        status.textContent =
+          "schema v" + payload.schema_version + "，共 " + schools.length +
+          " 个学校条目，来源：" +
+          (result.response.headers.get("X-Smart-SRun-Preset-Source") || payload.source || "static");
+        list.innerHTML = schools.slice(0, 12).map(function (school) {
+          var state = school.status ? " (" + school.status + ")" : "";
+          return "<li>" + escapeHtml(school.name || school.id || "未命名") + state + "</li>";
+        }).join("");
+      }).catch(function (error) {
+        status.textContent = "读取失败：" + error.message;
+      });
+
+      function escapeHtml(value) {
+        return String(value || "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+    })();
+  </script>
+</body>
+</html>
+

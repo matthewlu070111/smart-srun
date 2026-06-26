@@ -725,7 +725,6 @@ function tables_html.cfgvalue()
     local current_iface = tostring(state.current_iface or "")
     local current_campus_access_mode = tostring(state.current_campus_access_mode or "")
 
-    local operator_labels = { cmcc = "移动", ctcc = "电信", cucc = "联通", xn = "校内网" }
     local radio_labels = { [""] = "自动" }
     local radio_options = '<option value="">自动</option>'
     for radio, meta in pairs(RADIO_CHOICES) do
@@ -782,7 +781,6 @@ function tables_html.cfgvalue()
                 .. '<td class="td">' .. util.pcdata(tostring(a.base_url or "http://172.17.1.2")) .. '</td>'
                 .. '<td class="td">' .. util.pcdata(tostring(a.ac_id or "1")) .. '</td>'
                 .. '<td class="td">' .. util.pcdata(tostring(a.user_id or "")) .. '</td>'
-                .. '<td class="td">' .. (operator_labels[tostring(a.operator or "")] or tostring(a.operator or "")) .. '</td>'
                 .. '<td class="td">' .. util.pcdata(tostring(a.operator_suffix or "")) .. '</td>'
                 .. '<td class="td">' .. util.pcdata(ssid_display) .. '</td>'
                 .. '<td class="td">' .. util.pcdata(tostring(a.bssid or "")) .. '</td>'
@@ -794,7 +792,7 @@ function tables_html.cfgvalue()
         end
     end
     if campus_rows == "" then
-        campus_rows = '<tr class="tr"><td class="td" colspan="11" style="text-align:center;color:#999;">暂无账号，请点击"新增"添加</td></tr>'
+        campus_rows = '<tr class="tr"><td class="td" colspan="10" style="text-align:center;color:#999;">暂无账号，请点击"新增"添加</td></tr>'
     end
 
     -- 构建热点配置表格行
@@ -862,7 +860,7 @@ function tables_html.cfgvalue()
 <div class="cbi-section cbi-tblsection smart-native-box">
   <h3>校园网账号</h3>
   <table class="table cbi-section-table">
-    <tr class="tr table-titles"><th class="th" style="width:80px;">状态</th><th class="th">标签</th><th class="th">认证地址</th><th class="th">ACID</th><th class="th">学工号</th><th class="th">运营商</th><th class="th">后缀</th><th class="th">SSID</th><th class="th">BSSID</th><th class="th">频段</th><th class="th cbi-section-actions" style="width:120px;">操作</th></tr>
+    <tr class="tr table-titles"><th class="th" style="width:80px;">状态</th><th class="th">标签</th><th class="th">认证地址</th><th class="th">ACID</th><th class="th">学工号</th><th class="th">运营商后缀</th><th class="th">SSID</th><th class="th">BSSID</th><th class="th">频段</th><th class="th cbi-section-actions" style="width:120px;">操作</th></tr>
     <tbody>]] .. campus_rows .. [[</tbody>
   </table>
   <div class="smart-box-actions">

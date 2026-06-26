@@ -14,20 +14,23 @@ except ImportError:  # OpenWrt python3-light may omit urllib.
 
 
 SCHEMA_VERSION = 1
-REMOTE_PRESETS_URL = (
+MIRROR_PRESETS_URL = "https://srun.edu-publish.site/school-presets.json"
+GITHUB_PRESETS_URL = (
     "https://raw.githubusercontent.com/matthewlu070111/"
     "smart-srun/main/doc/school-presets.json"
 )
+REMOTE_PRESETS_URL = MIRROR_PRESETS_URL
+REMOTE_PRESETS_URLS = (MIRROR_PRESETS_URL, GITHUB_PRESETS_URL)
 MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 FALLBACK_PRESETS_FILE = os.path.join(MODULE_DIR, "school_presets_fallback.json")
 CACHE_PRESETS_FILE = os.path.join(MODULE_DIR, "school_presets_cache.json")
 REMOTE_TIMEOUT_SECONDS = 8
 
 DEFAULT_OPERATORS = [
-    {"id": "cmcc", "label": "中国移动"},
-    {"id": "ctcc", "label": "中国电信"},
-    {"id": "cucc", "label": "中国联通"},
-    {"id": "", "label": "校园网"},
+    {"suffix": "cmcc", "label": "中国移动"},
+    {"suffix": "ctcc", "label": "中国电信"},
+    {"suffix": "cucc", "label": "中国联通"},
+    {"suffix": "", "label": "校园网"},
 ]
 
 
@@ -82,18 +85,22 @@ def _copy_string_list(value):
 def _normalize_operator(item):
     if not isinstance(item, dict):
         return None
-    op_id = str(item.get("id", "")).strip().lower()
-    if not op_id and "id" not in item:
+    # 字段已从 id 改名为 suffix；仍接受旧的 id 以兼容尚未刷新的远端预设。
+    has_suffix = "suffix" in item
+    has_legacy_id = "id" in item
+    if not has_suffix and not has_legacy_id:
         return None
+    raw = item.get("suffix") if has_suffix else item.get("id")
+    suffix = str(raw or "").strip().lower()
     operator = {
-        "id": op_id,
-        "label": str(item.get("label") or op_id or "校园网").strip()
+        "suffix": suffix,
+        "label": str(item.get("label") or suffix or "校园网").strip()
         or "校园网",
     }
     return operator
 
 
-def _canonical_operator_id(value):
+def _canonical_operator_suffix(value):
     text = str(value or "").strip().lower()
     return "" if text == "xn" else text
 
@@ -102,18 +109,18 @@ def _legacy_default_operator(defaults):
     if not isinstance(defaults, dict):
         return None
     if "operator_suffix" in defaults:
-        return _canonical_operator_id(defaults.get("operator_suffix"))
+        return _canonical_operator_suffix(defaults.get("operator_suffix"))
     if "operator" in defaults:
-        return _canonical_operator_id(defaults.get("operator"))
+        return _canonical_operator_suffix(defaults.get("operator"))
     return None
 
 
-def _operator_label_from_id(operator_id):
-    op_id = str(operator_id or "").strip().lower()
+def _operator_label_from_suffix(suffix):
+    text = str(suffix or "").strip().lower()
     for item in DEFAULT_OPERATORS:
-        if item["id"] == op_id:
+        if item["suffix"] == text:
             return item["label"]
-    return op_id or "校园网"
+    return text or "校园网"
 
 
 def _normalize_operators(value, legacy_defaults=None):
@@ -125,13 +132,13 @@ def _normalize_operators(value, legacy_defaults=None):
                 operators.append(operator)
     legacy_operator = _legacy_default_operator(legacy_defaults)
     if legacy_operator is not None and not any(
-        item["id"] == legacy_operator for item in operators
+        item["suffix"] == legacy_operator for item in operators
     ):
         operators.insert(
             0,
             {
-                "id": legacy_operator,
-                "label": _operator_label_from_id(legacy_operator),
+                "suffix": legacy_operator,
+                "label": _operator_label_from_suffix(legacy_operator),
             },
         )
     return operators or [dict(item) for item in DEFAULT_OPERATORS]
@@ -279,28 +286,66 @@ def _fetch_via_system_client(url, timeout):
     raise RuntimeError("no usable HTTP client for school presets")
 
 
-def fetch_remote_payload(url=REMOTE_PRESETS_URL, timeout=REMOTE_TIMEOUT_SECONDS):
-    try:
-        text = _fetch_via_urllib(url, timeout)
-    except Exception:
-        text = _fetch_via_system_client(url, timeout)
-    data = json.loads(text)
-    if not isinstance(data, dict):
-        raise ValueError("remote school presets must be a JSON object")
+def _remote_urls(url=None):
+    if url:
+        return (url,)
+    return REMOTE_PRESETS_URLS
+
+
+def _fetch_remote_payload_with_source(url=None, timeout=REMOTE_TIMEOUT_SECONDS):
+    errors = []
+    for candidate_url in _remote_urls(url):
+        try:
+            text = _fetch_via_urllib(candidate_url, timeout)
+        except Exception:
+            try:
+                text = _fetch_via_system_client(candidate_url, timeout)
+            except Exception as exc:
+                errors.append("%s: %s" % (candidate_url, exc))
+                continue
+        try:
+            data = json.loads(text)
+        except ValueError as exc:
+            errors.append("%s: %s" % (candidate_url, exc))
+            continue
+        if not isinstance(data, dict):
+            errors.append(
+                "%s: remote school presets must be a JSON object" % candidate_url
+            )
+            continue
+        return data, candidate_url
+    raise RuntimeError("failed to fetch school presets: %s" % "; ".join(errors))
+
+
+def fetch_remote_payload(url=None, timeout=REMOTE_TIMEOUT_SECONDS):
+    data, _source_url = _fetch_remote_payload_with_source(url=url, timeout=timeout)
     return data
 
 
-def refresh_remote_presets(url=REMOTE_PRESETS_URL, timeout=REMOTE_TIMEOUT_SECONDS):
-    payload = fetch_remote_payload(url=url, timeout=timeout)
+def refresh_remote_presets(url=None, timeout=REMOTE_TIMEOUT_SECONDS):
+    payload, source_url = _fetch_remote_payload_with_source(url=url, timeout=timeout)
     payload["_cached_at"] = int(time.time())
-    payload["_source_url"] = url
+    payload["_source_url"] = source_url
     _write_json(CACHE_PRESETS_FILE, payload)
     return {
         "ok": True,
-        "source_url": url,
+        "source_url": source_url,
         "cached_at": payload["_cached_at"],
         "schools": normalize_payload(payload, include_draft=True),
     }
+
+
+def _refresh_remote_payload_for_list():
+    try:
+        payload, source_url = _fetch_remote_payload_with_source(
+            timeout=REMOTE_TIMEOUT_SECONDS
+        )
+    except Exception:
+        return {}
+    payload["_cached_at"] = int(time.time())
+    payload["_source_url"] = source_url
+    _write_json(CACHE_PRESETS_FILE, payload)
+    return payload
 
 
 def _merge_presets(base_items, override_items):
@@ -318,13 +363,7 @@ def list_presets(include_draft=False, refresh=False):
     builtin = normalize_payload(_read_json(FALLBACK_PRESETS_FILE), include_draft=True)
     cached_payload = {}
     if refresh:
-        try:
-            cached_payload = fetch_remote_payload(REMOTE_PRESETS_URL, REMOTE_TIMEOUT_SECONDS)
-            cached_payload["_cached_at"] = int(time.time())
-            cached_payload["_source_url"] = REMOTE_PRESETS_URL
-            _write_json(CACHE_PRESETS_FILE, cached_payload)
-        except Exception:
-            cached_payload = {}
+        cached_payload = _refresh_remote_payload_for_list()
     if not cached_payload:
         cached_payload = _read_json(CACHE_PRESETS_FILE)
 

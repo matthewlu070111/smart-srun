@@ -1,6 +1,6 @@
 # 默认配置
 
-机器可读学校预设请维护 `doc/school-presets.json`。插件运行时优先读取 raw GitHub 上的 JSON；本文只保留人工说明。
+机器可读学校预设请维护 `doc/school-presets.json`。插件运行时优先读取 `https://srun.edu-publish.site/school-presets.json`，再回退 raw GitHub 和随包 fallback；本文只保留人工说明。
 
 ## 学校预设
 

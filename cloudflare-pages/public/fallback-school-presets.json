@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "updated_at": "2026-06-26",
-  "source": "bundled fallback",
+  "source": "https://github.com/matthewlu070111/smart-srun/issues",
   "schools": [
     {
       "id": "jxnu",
