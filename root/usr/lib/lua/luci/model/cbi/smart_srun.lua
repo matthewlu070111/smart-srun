@@ -302,10 +302,9 @@ local RADIO_CHOICES = load_radio_choices()
 local function render_school_info_html(schools, current_school)
     local helper_prefix = "如果该配置无法在您的学校使用，请直接前往"
     local helper_suffix = "提交 Issue 或 PR"
-    local helper_link = "https://github.com/matthewlu070111/luci-app-smart-srun"
-    local doc_base = "https://github.com/matthewlu070111/smart-srun/blob/main/doc/"
-    local short = tostring(current_school or "")
-    local doc_url = doc_base .. util.pcdata(short) .. ".md"
+    local helper_link = "https://github.com/matthewlu070111/smart-srun"
+    -- 初始渲染统一指向 doc 目录（永不 404）；前端 JS 会按预设的 doc_url 覆写为具体文档。
+    local doc_url = "https://github.com/matthewlu070111/smart-srun/tree/main/doc"
     local js_data = jsonc.stringify(schools or {}) or "[]"
 
     return string.format([[
@@ -922,9 +921,10 @@ end
 retry_max_cooldown_seconds.placeholder = "600"
 bind_text(retry_max_cooldown_seconds, "retry_max_cooldown_seconds", validate_non_negative_number)
 
-switch_ready_timeout_seconds = s:taboption("advanced", Value, "switch_ready_timeout_seconds", "切网完成等待时间（秒）")
+switch_ready_timeout_seconds = s:taboption("advanced", Value, "switch_ready_timeout_seconds", "切网完成等待时间（秒）",
+    "切换后等待获取 IPv4 的最长时间；部分学校 DHCP 较慢（如出现“未获取到IPv4地址”可调大）")
 switch_ready_timeout_seconds.datatype = "uinteger"
-switch_ready_timeout_seconds.placeholder = "12"
+switch_ready_timeout_seconds.placeholder = "30"
 bind_text(switch_ready_timeout_seconds, "switch_ready_timeout_seconds")
 
 manual_terminal_check_max_attempts = s:taboption("advanced", Value, "manual_terminal_check_max_attempts", "手动登录/登出终态最大检查次数")

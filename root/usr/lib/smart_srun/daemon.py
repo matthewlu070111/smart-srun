@@ -17,16 +17,20 @@ from config import (
     build_school_runtime_luci_contract,
     log,
     campus_uses_wired,
+    clear_inflight_action,
     clear_log_context,
     ensure_parent_dir,
     failover_enabled,
     in_quiet_window,
     load_config,
+    load_inflight_action,
     load_json_file,
     load_json_raw_config,
     load_runtime_state,
     localize_error,
+    mark_inflight_action,
     pop_runtime_action,
+    requeue_runtime_action,
     save_runtime_status,
     reconcile_manual_login_service_guard,
     set_log_context,
@@ -80,30 +84,82 @@ def load_pending_runtime_action():
     return payload if isinstance(payload, dict) else {}
 
 
+def _recover_interrupted_action():
+    """守护进程启动时恢复上次被中断的动作。
+
+    handle_runtime_action 出队后会写 inflight 标记、结束后清除。启动时若标记仍在，
+    说明上一个实例在执行途中被终止（常见于手动动作触发的 service restart 叠加）。
+    此时把动作重新排队一次（requeue_count 防止无限循环）；若用户已排入新动作，
+    则放弃旧动作，尊重最新意图。
+    """
+    inflight = load_inflight_action()
+    clear_inflight_action()
+    action = str(inflight.get("action") or "").strip()
+    if not action:
+        return
+    queued = load_pending_runtime_action()
+    if str(queued.get("action") or "").strip():
+        log(
+            "INFO",
+            "action_interrupted",
+            "interrupted action superseded by newer queued action",
+            action=action,
+        )
+        return
+    if int(inflight.get("requeue_count") or 0) >= 1:
+        log(
+            "WARN",
+            "action_interrupted",
+            "action interrupted again after requeue, giving up",
+            action=action,
+        )
+        return
+    inflight["requeue_count"] = 1
+    requeue_runtime_action(inflight)
+
+
 def _build_startup_status_payload():
     runtime_state = load_runtime_state()
     queued_action = load_pending_runtime_action()
 
-    pending_action = str(
-        queued_action.get("action") or runtime_state.get("pending_action") or ""
-    ).strip()
-    action_result = str(runtime_state.get("action_result") or "").strip()
-    requested_at = int(
-        queued_action.get("requested_at")
-        or runtime_state.get("action_started_at")
-        or runtime_state.get("last_action_ts")
-        or 0
-    )
-
-    if pending_action and (queued_action.get("action") or action_result == "pending"):
+    queued_name = str(queued_action.get("action") or "").strip()
+    if queued_name:
+        requested_at = int(
+            queued_action.get("requested_at")
+            or runtime_state.get("action_started_at")
+            or runtime_state.get("last_action_ts")
+            or 0
+        )
         return (
-            str(runtime_state.get("message") or ("正在执行动作: %s" % pending_action)),
+            str(runtime_state.get("message") or ("正在执行动作: %s" % queued_name)),
             {
-                "last_action": str(runtime_state.get("last_action") or pending_action),
+                "last_action": str(runtime_state.get("last_action") or queued_name),
                 "last_action_ts": requested_at,
                 "action_result": "pending",
                 "action_started_at": requested_at,
-                "pending_action": pending_action,
+                "pending_action": queued_name,
+            },
+        )
+
+    stale_pending = str(runtime_state.get("pending_action") or "").strip()
+    stale_result = str(runtime_state.get("action_result") or "").strip()
+    if stale_pending and stale_result == "pending":
+        # 队列里已没有该动作（出队后进程被终止且未能重新排队）。
+        # 必须显式收敛为 error，否则界面会永远停留在“待执行”。
+        log(
+            "WARN",
+            "action_interrupted",
+            "stale pending action found at startup, marking as error",
+            action=stale_pending,
+        )
+        return (
+            "上次动作 %s 未执行完成（守护进程重启），请重试" % stale_pending,
+            {
+                "last_action": stale_pending,
+                "last_action_ts": int(runtime_state.get("last_action_ts") or 0),
+                "action_result": "error",
+                "action_started_at": 0,
+                "pending_action": "",
             },
         )
 
@@ -217,6 +273,7 @@ def handle_runtime_action(cfg, state, runtime=None, app_ctx=None):
     requested_at = int(payload.get("requested_at") or action_started_at)
     op_id = "act-%d" % requested_at
     set_log_context(op_id=op_id, action=action)
+    mark_inflight_action(payload)
     try:
         log(
             "INFO",
@@ -225,6 +282,8 @@ def handle_runtime_action(cfg, state, runtime=None, app_ctx=None):
             requested_at=requested_at,
             queue_lag_ms=max(0, (action_started_at - requested_at) * 1000),
         )
+        # 此处不刷新运行时快照：快照里的连通性探测可能阻塞数十秒，
+        # 会让刚出队的动作迟迟不执行（界面表现为“待执行”卡死）。
         save_runtime_status(
             "正在执行动作: %s" % action,
             state,
@@ -233,13 +292,16 @@ def handle_runtime_action(cfg, state, runtime=None, app_ctx=None):
             action_result="pending",
             pending_action=action,
             action_started_at=action_started_at,
-            **build_runtime_snapshot(cfg, state),
         )
 
-        with timed() as t:
-            ok, message = school_runtime.dispatch_runtime_action(
-                runtime, app_ctx, action, state
-            )
+        try:
+            with timed() as t:
+                ok, message = school_runtime.dispatch_runtime_action(
+                    runtime, app_ctx, action, state
+                )
+        except Exception as exc:
+            ok = False
+            message = "动作执行异常: " + localize_error(exc)
         action_result = "ok" if ok else "error"
         if message.startswith("忽略未知动作:"):
             action_result = "ignored"
@@ -258,6 +320,7 @@ def handle_runtime_action(cfg, state, runtime=None, app_ctx=None):
             ok=ok,
             duration_ms=t.ms,
         )
+        # 先写结果解锁界面，再单独刷新快照（快照可能较慢）。
         save_runtime_status(
             message,
             state,
@@ -266,10 +329,18 @@ def handle_runtime_action(cfg, state, runtime=None, app_ctx=None):
             action_result=action_result,
             action_started_at=0,
             pending_action="",
+        )
+        # 动作已进入终态，立刻清除执行中标记：后面的快照可能走网络阻塞数十秒，
+        # 若拖到 finally 才清，这段窗口内被杀+重启会把已完成动作重放一次。
+        clear_inflight_action()
+        save_runtime_status(
+            message,
+            state,
             **build_runtime_snapshot(cfg, state),
         )
         return True, message
     finally:
+        clear_inflight_action()
         clear_log_context("op_id", "action")
 
 
@@ -372,16 +443,34 @@ def _daemon_tick_active(cfg, state, interval):
         urls = srun_auth.build_urls(cfg)
         online_now = False
         status_message = ""
+        online_name = ""
         if cfg["username"]:
-            online_now, status_message = srun_auth.query_online_status(
+            online_now, online_name, status_message = srun_auth.query_online_identity(
                 srun_profile, urls["rad_user_info_api"], cfg["username"]
             )
 
         if online_now:
+            expected_main = str(cfg["username"]).split("@", 1)[0]
+            if online_name and expected_main and online_name != expected_main:
+                # 别的账号占着本机会话（例如残留的第三方登录脚本、他人经
+                # 路由器网页认证）。srun 对已在线 IP 的重复登录会被拒绝，
+                # 强行抢登只会反复失败，这里只告警一次让用户能发现。
+                if state.get("online_mismatch_name") != online_name:
+                    state["online_mismatch_name"] = online_name
+                    log(
+                        "WARN",
+                        "online_account_mismatch",
+                        "online account differs from configured account",
+                        online=online_name,
+                        expected=expected_main,
+                    )
+            else:
+                state["online_mismatch_name"] = ""
             message = "在线，下一次检测间隔 %d 秒" % online_interval
             state["was_online"] = True
             next_sleep = online_interval
         else:
+            state["online_mismatch_name"] = ""
             if state["was_online"]:
                 log(
                     "WARN",
@@ -447,20 +536,30 @@ def _run_runtime_daemon_hook(app_ctx, state, interval):
     )
 
 
-def _acquire_daemon_lock():
+def _acquire_daemon_lock(max_wait_seconds=20):
     ensure_parent_dir(DAEMON_LOCK_FILE)
     lock_handle = open(DAEMON_LOCK_FILE, "a+", encoding="utf-8")
 
     try:
         import fcntl
-
-        fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except ImportError:
-        pass
-    except OSError:
-        lock_handle.close()
-        print("另一个 daemon 实例已在运行，退出。", flush=True)
-        raise SystemExit(1)
+        fcntl = None
+
+    if fcntl is not None:
+        # 手动动作会触发 service restart，procd 拉起新实例时旧实例可能还差
+        # 一两秒才退出。立刻放弃会白白烧掉 procd 的 respawn 预算（耗尽后守护
+        # 进程就再也起不来了），所以先等一小段时间让旧实例退出。
+        deadline = time.time() + max(int(max_wait_seconds), 0)
+        while True:
+            try:
+                fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.time() >= deadline:
+                    lock_handle.close()
+                    print("另一个 daemon 实例已在运行，退出。", flush=True)
+                    raise SystemExit(1)
+                time.sleep(0.5)
 
     lock_handle.seek(0)
     lock_handle.truncate()
@@ -472,9 +571,10 @@ def _acquire_daemon_lock():
 def run_daemon(runtime=None):
     _daemon_lock = _acquire_daemon_lock()
     reconcile_manual_login_service_guard()
+    _recover_interrupted_action()
     state = _make_daemon_state()
     startup_cfg = load_config()
-    runtime = runtime or school_runtime.resolve_runtime(startup_cfg)
+    runtime = runtime or school_runtime.resolve_runtime_safe(startup_cfg)
     startup_message, startup_action_state = _build_startup_status_payload()
     log(
         "INFO",
@@ -487,23 +587,22 @@ def run_daemon(runtime=None):
         failover=startup_cfg.get("failover_enabled", "0"),
         log_level=startup_cfg.get("log_level", "INFO"),
     )
+    # 启动时不做运行时快照：快照内的连通性探测可能阻塞几十秒，会推迟
+    # 首个排队动作的执行。快照字段沿用 state.json 里的上次值，首个 tick 会刷新。
     save_runtime_status(
         startup_message,
         state,
         daemon_running=True,
         enabled=True,
         **startup_action_state,
-        **build_runtime_snapshot(startup_cfg, state),
     )
 
     tick_counter = 0
     while True:
         cfg = load_config()
         runtime_state = load_runtime_state()
-        _refresh_school_presets_after_online(runtime_state)
-        state["presets_refresh_checked_at"] = runtime_state.get("presets_refresh_checked_at", 0)
         interval = max(int(cfg["interval"]), 5)
-        runtime = school_runtime.resolve_runtime(cfg)
+        runtime = school_runtime.resolve_runtime_safe(cfg)
         app_ctx = school_runtime.build_app_context(cfg, runtime=runtime)
 
         tick_counter += 1
@@ -516,12 +615,17 @@ def run_daemon(runtime=None):
             was_online=state.get("was_online", False),
         )
 
+        # 动作消费必须是 tick 的第一步：presets 刷新等可能走网络的步骤
+        # 一旦阻塞，排队中的手动动作会被 LuCI 判定为滞留而丢弃。
         action_handled, action_message = handle_runtime_action(
             cfg, state, runtime=runtime, app_ctx=app_ctx
         )
         if action_handled:
             time.sleep(1)
             continue
+
+        _refresh_school_presets_after_online(runtime_state)
+        state["presets_refresh_checked_at"] = runtime_state.get("presets_refresh_checked_at", 0)
 
         if cfg["enabled"] != "1":
             state.update(_make_daemon_state())
@@ -740,27 +844,27 @@ def _runtime_cli_login(app_ctx):
             "夜间停用中（北京时间 %s），不执行登录" % quiet_window_label(cfg),
         )
     if not cfg["username"] or not cfg["password"]:
-        return True, 0, "请先配置学工号和密码: srunnet config account add"
+        return True, 1, "请先配置学工号和密码: srunnet config account add"
     ok_prep, msg_prep = orchestrator.prepare_campus_for_login(cfg)
     if not ok_prep:
-        return True, 0, msg_prep
+        return True, 1, msg_prep
     ok, message = runtime.login_once(app_ctx)
     log("INFO", "action_result", "login: " + message, action="login")
-    return True, 0, message
+    return True, 0 if ok else 1, message
 
 
 def _runtime_cli_logout(app_ctx):
     cfg = app_ctx["cfg"]
     ok, message = orchestrator.run_manual_logout(cfg)
     log("INFO", "action_result", "logout: " + message, action="logout")
-    return True, 0, message
+    return True, 0 if ok else 1, message
 
 
 def _runtime_cli_relogin(app_ctx):
     cfg = app_ctx["cfg"]
     ok, message = orchestrator.run_manual_login(cfg)
     log("INFO", "action_result", "relogin: " + message, action="relogin")
-    return True, 0, message
+    return True, 0 if ok else 1, message
 
 
 def _emit_cli_result(result):
@@ -954,6 +1058,20 @@ def _config_set(pairs, json_file=None):
             print("未知配置项: %s" % key)
             print("可用: %s" % ", ".join(sorted(GLOBAL_SCALAR_KEYS)))
             return
+        if key == "school":
+            candidate = str(val).strip()
+            if candidate and candidate != "default":
+                import schools
+
+                if not schools.get_school_entry(candidate):
+                    names = [
+                        str(m.get("short_name") or m.get("id") or "")
+                        for m in schools.list_schools()
+                    ]
+                    names = [n for n in names if n]
+                    print("未知学校运行时: %s（注意这是 schools/ 下的运行时短名，不是预设 id）" % candidate)
+                    print("可用: default%s" % (", " + ", ".join(names) if names else ""))
+                    return
         old = raw.get(key, "")
         changed.append((key, old, val))
 

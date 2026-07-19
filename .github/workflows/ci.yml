@@ -1,0 +1,49 @@
+name: CI
+
+# Runs the checks CLAUDE.md / CONTRIBUTING mandate on every push and PR.
+# The build workflows only copy files (Build/Compile is empty), so without this
+# a broken runtime (syntax error, failing test) would package and publish clean.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NO_COLOR: "1"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python tooling
+        run: python -m pip install --upgrade pip pytest ruff
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Lua (for luac syntax checks)
+        run: sudo apt-get update && sudo apt-get install -y lua5.1
+
+      - name: Ruff
+        run: ruff check root/usr/lib/smart_srun/
+
+      - name: Node syntax check (LuCI frontend)
+        run: node --check root/www/luci-static/resources/smart_srun.js
+
+      - name: Pytest
+        run: python -m pytest tests/ -v

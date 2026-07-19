@@ -690,7 +690,7 @@ def main():
     if args.command == "switch":
         cfg = daemon.load_config()
         expect_hotspot = args.target == "hotspot"
-        _, message = daemon.run_switch(cfg, expect_hotspot=expect_hotspot)
+        ok, message = daemon.run_switch(cfg, expect_hotspot=expect_hotspot)
         daemon.log(
             "INFO",
             "action_result",
@@ -698,6 +698,8 @@ def main():
             action="switch_%s" % args.target,
         )
         print(message)
+        if not ok:
+            raise SystemExit(1)
         return
 
     if args.command == "config":

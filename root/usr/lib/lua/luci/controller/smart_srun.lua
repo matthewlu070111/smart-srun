@@ -9,9 +9,10 @@ local schema = require "luci.smart_srun.schema"
 
 local STATE_FILE = "/var/run/smart_srun/state.json"
 local ACTION_FILE = "/var/run/smart_srun/action.json"
+local INFLIGHT_ACTION_FILE = "/var/run/smart_srun/action_inflight.json"
 local LOG_FILE = "/var/log/smart_srun.log"
 local restore_manual_guarded_enabled
-local ACTION_STALE_SECONDS = 20
+local ACTION_STALE_SECONDS = 90
 local LOG_TAIL_SOURCE_LINES = 2000
 
 local NETWORK_EVENTS = {
@@ -29,6 +30,8 @@ local NETWORK_EVENTS = {
     srun_online_result = true,
     ip_wait_progress = true,
     ip_wait_result = true,
+    dhcp_kick = true,
+    sta_iface_up = true,
     wifi_reload = true,
     sta_section_disabled = true,
     uci_wireless_update = true,
@@ -137,7 +140,18 @@ local function write_json_file(path, payload)
     if dir and not fs.access(dir) then
         fs.mkdirr(dir)
     end
-    fs.writefile(path, (jsonc.stringify(payload) or "{}") .. "\n")
+    -- 原子写：先写临时文件再 rename，避免守护进程读到截断中的半截 JSON
+    -- （撕裂读会被当成空动作，进而误删刚入队的 action.json）。
+    local body = (jsonc.stringify(payload) or "{}") .. "\n"
+    local tmp = path .. ".tmp"
+    if fs.writefile(tmp, body) then
+        if not fs.rename(tmp, path) then
+            fs.writefile(path, body)
+            fs.remove(tmp)
+        end
+    else
+        fs.writefile(path, body)
+    end
 end
 
 local function remove_file(path)
@@ -180,6 +194,9 @@ local function handle_force_stop()
     sys.call("/etc/init.d/smart_srun stop >/dev/null 2>&1")
     local killed = force_stop_client_processes()
     remove_file(ACTION_FILE)
+    -- 强停是用户明确取消动作，必须一并清掉执行中标记，
+    -- 否则下次服务重启时守护进程会把被取消的动作重新排队执行。
+    remove_file(INFLIGHT_ACTION_FILE)
 
     local state = read_json_file(STATE_FILE)
     restore_manual_guarded_enabled(state)
@@ -201,7 +218,19 @@ local function current_pending_runtime_action()
     if queued ~= "" then
         local requested_at = tonumber(action.requested_at) or 0
         if requested_at > 0 and (os.time() - requested_at) >= ACTION_STALE_SECONDS then
+            -- 丢弃滞留动作时必须同步收敛 state，否则 action_result 会一直停在
+            -- pending，界面永远显示“待执行”（旧版正是这样卡死的）。
             remove_file(ACTION_FILE)
+            local state = read_json_file(STATE_FILE)
+            if tostring(state.action_result or "") == "pending" then
+                state.message = string.format("动作 %s 长时间未被守护进程接取，已取消，请重试", queued)
+                state.pending_action = ""
+                state.action_result = "error"
+                state.action_started_at = 0
+                state.last_action = queued
+                state.last_action_ts = os.time()
+                write_json_file(STATE_FILE, state)
+            end
         else
             return queued
         end
@@ -476,7 +505,13 @@ function action_enqueue()
                 local idx = find_index_by_id(cfg.campus_accounts, id)
                 if idx then
                     item.id = id
-                    cfg.campus_accounts[idx] = item
+                    -- 浅合并：以现有账号为基底，仅覆盖弹窗提交的字段，保留 Python 侧
+                    -- 写入但表单未提交的字段（如 encryption/key 及未来新增字段），
+                    -- 避免每次在网页编辑都把这些字段清空。
+                    local merged = cfg.campus_accounts[idx]
+                    if type(merged) ~= "table" then merged = {} end
+                    for k, v in pairs(item) do merged[k] = v end
+                    cfg.campus_accounts[idx] = merged
                     ok = true; message = "已更新"; need_restart = true
                 else
                     ok = false; message = "未找到 ID: " .. id
@@ -507,7 +542,11 @@ function action_enqueue()
                 local idx = find_index_by_id(cfg.hotspot_profiles, id)
                 if idx then
                     item.id = id
-                    cfg.hotspot_profiles[idx] = item
+                    -- 同 edit_campus：浅合并保留表单未提交的既有字段。
+                    local merged = cfg.hotspot_profiles[idx]
+                    if type(merged) ~= "table" then merged = {} end
+                    for k, v in pairs(item) do merged[k] = v end
+                    cfg.hotspot_profiles[idx] = merged
                     ok = true; message = "已更新"; need_restart = true
                 else
                     ok = false; message = "未找到 ID: " .. id
@@ -602,11 +641,13 @@ local event_zh = {
     login_success       = "登录成功",
     login_failed        = "登录失败",
     retry_scheduled     = "即将重试",
+    retry_interrupted   = "重试被中断",
     retry_success       = "重试成功",
     retry_failed        = "重试失败",
     retry_stopped       = "停止重试",
     disconnect_detected = "检测到断线",
     status_check_error  = "状态检测异常",
+    online_account_mismatch = "在线账号与配置不符",
     logout_request      = "正在登出",
     logout_success      = "登出成功",
     logout_failed       = "登出失败",
@@ -619,6 +660,8 @@ local event_zh = {
     action_result       = "操作结果",
     action_started      = "开始执行动作",
     action_unknown      = "未知操作",
+    action_requeued     = "动作重新排队",
+    action_interrupted  = "动作已中断",
     switch_progress     = "切换进度",
     quiet_enter         = "进入夜间停用",
     quiet_exit          = "退出夜间停用",
@@ -638,6 +681,7 @@ local event_zh = {
     config_loaded       = "配置已加载",
     status_query        = "状态查询",
     update_status       = "更新状态",
+    presets_refresh     = "学校预设刷新",
     -- 重试与生命周期
     retry_cycle_start   = "进入重试循环",
     retry_cycle_end     = "重试循环结束",
@@ -654,6 +698,8 @@ local event_zh = {
     sta_section_disabled = "已禁用 STA 配置段",
     ip_wait_progress    = "等待 IPv4 中",
     ip_wait_result      = "IPv4 等待结果",
+    dhcp_kick           = "重新触发 DHCP",
+    sta_iface_up        = "拉起 STA 网络接口",
     runtime_mode_detect = "检测运行模式",
     profile_rebuild     = "重建无线配置",
     uci_wireless_update = "更新 UCI 无线配置",

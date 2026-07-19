@@ -6,8 +6,8 @@ PKG_RELEASE:=1
 
 include $(INCLUDE_DIR)/package.mk
 
-RUNTIME_DEPENDS:=+python3-light
-LUCI_FILE_DEPENDS:=
+RUNTIME_DEPENDS:=+python3-light +python3-urllib
+LUCI_FILE_DEPENDS:=+luci-base +luci-compat
 LUCI_PACKAGE_DEPENDS:=+smart-srun $(LUCI_FILE_DEPENDS)
 BUNDLE_DEPENDS:=$(RUNTIME_DEPENDS) $(LUCI_FILE_DEPENDS)
 

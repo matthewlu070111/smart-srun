@@ -2,6 +2,7 @@ import io
 import importlib.util
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -12,6 +13,14 @@ from unittest import mock
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODULE_ROOT = os.path.join(REPO_ROOT, "root", "usr", "lib", "smart_srun")
+
+# Python 3.14 起 argparse 会给帮助输出着色，断言前需剥离 ANSI 转义序列。
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def strip_ansi(text):
+    return _ANSI_ESCAPE_RE.sub("", text)
+
 
 if MODULE_ROOT not in sys.path:
     sys.path.insert(0, MODULE_ROOT)
@@ -276,7 +285,7 @@ class SchoolRuntimeCliTests(unittest.TestCase):
         ):
             daemon.main()
 
-        text = stdout.getvalue()
+        text = strip_ansi(stdout.getvalue())
         self.assertIn("usage: srunnet", text)
         self.assertIn("常用命令组", text)
 
@@ -289,7 +298,7 @@ class SchoolRuntimeCliTests(unittest.TestCase):
         ):
             daemon.main()
 
-        text = stdout.getvalue()
+        text = strip_ansi(stdout.getvalue())
         self.assertIn("usage: srunnet config", text)
         self.assertIn("show", text)
 
@@ -302,7 +311,7 @@ class SchoolRuntimeCliTests(unittest.TestCase):
         ):
             daemon.main()
 
-        text = stdout.getvalue()
+        text = strip_ansi(stdout.getvalue())
         self.assertIn("usage: srunnet config account", text)
 
     def test_help_with_unknown_command_returns_nonzero_and_writes_to_stderr(self):
@@ -750,7 +759,7 @@ class SchoolRuntimeCliTests(unittest.TestCase):
                 daemon.main()
 
         self.assertEqual(exc.exception.code, 0)
-        self.assertIn("usage: srunnet", stdout.getvalue())
+        self.assertIn("usage: srunnet", strip_ansi(stdout.getvalue()))
 
     def test_runtime_action_contract_error_is_isolated(self):
         state = {"current_mode": "campus", "last_switch_ts": 0}

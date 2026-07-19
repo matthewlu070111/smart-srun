@@ -91,9 +91,12 @@ jobs:
         run: |
           BASE_VERSION='${{ github.event.inputs.version }}'
           BASE_VERSION="${BASE_VERSION#v}"
-          VERSION="${BASE_VERSION}-b${{ github.event.inputs.beta }}"
           if [ "${{ matrix.format }}" = "apk" ]; then
-            VERSION="${VERSION//-/_}"
+            # apk-tools 只接受 _alpha/_beta/_pre/_rc/... 后缀，"_b<N>" 非法会导致
+            # mkpkg 报 "package version is invalid" 而整条预发布流水线无法发布。
+            VERSION="${BASE_VERSION}_beta${{ github.event.inputs.beta }}"
+          else
+            VERSION="${BASE_VERSION}-b${{ github.event.inputs.beta }}"
           fi
           awk -v ver="$VERSION" '
             BEGIN { replaced=0 }

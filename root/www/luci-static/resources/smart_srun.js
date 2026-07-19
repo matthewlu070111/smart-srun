@@ -434,6 +434,7 @@
     return items && items.length ? items : [{
       short_name: 'jxnu',
       name: '江西师范大学',
+      doc_url: 'https://github.com/matthewlu070111/smart-srun/blob/main/doc/jxnu.md',
       defaults: { base_url: 'http://172.17.1.2', ac_id: '1', ssid: 'jxnu_stu' },
       observed_login_shape: { n: '200', type: '1', enc: 'srun_bx1', info_prefix: 'SRBX1', double_stack: '0', os: 'Windows 10', name: 'Windows' },
       operators: [
@@ -490,17 +491,16 @@
     var xhr = new XMLHttpRequest();
     xhr.open('POST', '/cgi-bin/luci/admin/services/smart_srun/enqueue', true);
     xhr.onload = function() {
-      var message = '已保存默认配置';
-      if (xhr.status === 200) {
-        try {
-          var data = JSON.parse(xhr.responseText || '{}');
-          if (typeof data.message === 'string' && data.message !== '')
-            message = data.message;
-        } catch (e) {}
+      var data = {};
+      try { data = JSON.parse(xhr.responseText || '{}'); } catch (e) {}
+      if (xhr.status === 200 && data.ok !== false) {
+        alert((typeof data.message === 'string' && data.message !== '') ? data.message : '已保存默认配置');
+        location.reload();
+      } else {
+        alert((data && data.message) ? data.message : ('操作失败（HTTP ' + xhr.status + '）'));
       }
-      alert(message);
-      location.reload();
     };
+    xhr.onerror = function() { alert('操作失败：网络错误，请重试'); };
     xhr.send(fd);
   };
 
@@ -511,7 +511,16 @@
     fd.append('id', id);
     var xhr = new XMLHttpRequest();
     xhr.open('POST', '/cgi-bin/luci/admin/services/smart_srun/enqueue', true);
-    xhr.onload = function() { location.reload(); };
+    xhr.onload = function() {
+      var data = {};
+      try { data = JSON.parse(xhr.responseText || '{}'); } catch (e) {}
+      if (xhr.status === 200 && data.ok !== false) {
+        location.reload();
+      } else {
+        alert((data && data.message) ? data.message : ('删除失败（HTTP ' + xhr.status + '）'));
+      }
+    };
+    xhr.onerror = function() { alert('删除失败：网络错误，请重试'); };
     xhr.send(fd);
   };
 
@@ -629,7 +638,7 @@
       '<div class="smart-native-row"><label>学校预设</label><span><select id="jm-school_preset">' + presetOptionsMarkup() + '</select> <button type="button" id="jm-apply-school-defaults" class="btn cbi-button cbi-button-action">应用预设</button> <button type="button" id="jm-reset-school-defaults" class="btn cbi-button">复位</button></span></div>' +
       '<div class="smart-native-row"><label>标签（选填）</label><input id="jm-label" value="' + escapeHtml(initialValues.label) + '"></div>' +
       '<div class="smart-native-row"><label>学工号</label><input id="jm-user_id" value="' + escapeHtml(initialValues.user_id) + '"></div>' +
-      '<div class="smart-native-row"><label>运营商后缀 <a href="https://github.com/matthewlu070111/smart-srun#%E8%8E%B7%E5%8F%96%E5%AD%A6%E9%A2%84%E8%AE%BE%E4%B8%8E%E8%BF%90%E8%90%A5%E5%95%86%E5%90%8E%E7%BC%80" target="_blank" rel="noopener noreferrer">如何获取？</a></label>' +
+      '<div class="smart-native-row"><label>运营商后缀 <a href="https://github.com/matthewlu070111/smart-srun#%E8%8E%B7%E5%8F%96%E5%AD%A6%E6%A0%A1%E9%A2%84%E8%AE%BE%E4%B8%8E%E7%8E%AF%E5%A2%83%E7%9C%9F%E5%AE%9E%E5%AD%97%E6%AE%B5%E5%80%BC" target="_blank" rel="noopener noreferrer">如何获取？</a></label>' +
         '<span id="jm-operator-quickpick-wrap" style="display:' + quickpickDisplay + ';margin-bottom:.35rem;"><select id="jm-operator">' + operatorOptionsMarkup(initialOperators, initialValues.operator_suffix) + '</select></span>' +
         '<input id="jm-operator_suffix" value="' + escapeHtml(initialValues.operator_suffix) + '" placeholder="">' +
         '<div id="jm-operator-suffix-hint" style="display:none;color:#d97706;font-size:12px;margin-top:.25rem;"></div></div>' +
@@ -830,6 +839,8 @@
   };
 
   window.smartModalSave = function() {
+    if (window.__smartModalSaving) return;
+    window.__smartModalSaving = true;
     var fd = new FormData();
     fd.append('action', (modalEditId ? 'edit_' : 'add_') + modalType);
     if (modalEditId) fd.append('id', modalEditId);
@@ -863,8 +874,20 @@
     var xhr = new XMLHttpRequest();
     xhr.open('POST', '/cgi-bin/luci/admin/services/smart_srun/enqueue', true);
     xhr.onload = function() {
-      L.hideModal();
-      location.reload();
+      var data = {};
+      try { data = JSON.parse(xhr.responseText || '{}'); } catch (e) {}
+      if (xhr.status === 200 && data.ok !== false) {
+        L.hideModal();
+        location.reload();
+      } else {
+        // 失败时保持弹窗打开，避免静默丢弃用户刚填的整套表单。
+        window.__smartModalSaving = false;
+        alert((data && data.message) ? data.message : ('保存失败（HTTP ' + xhr.status + '）'));
+      }
+    };
+    xhr.onerror = function() {
+      window.__smartModalSaving = false;
+      alert('保存失败：网络错误，请重试');
     };
     xhr.send(fd);
   };
@@ -875,7 +898,14 @@
     if (!infoBox || !docLinkEl || window.__smartSchoolInfoInit) return;
     window.__smartSchoolInfoInit = true;
 
-    var DOC_BASE = 'https://github.com/matthewlu070111/smart-srun/blob/main/doc/';
+    var DOC_FALLBACK = 'https://github.com/matthewlu070111/smart-srun/tree/main/doc';
+    function docUrlFor(value) {
+      var items = schoolPresetList();
+      for (var i = 0; i < items.length; i++) {
+        if (items[i] && items[i].short_name === value && items[i].doc_url) return items[i].doc_url;
+      }
+      return DOC_FALLBACK;
+    }
     var outerDescEl = null;
     for (var parent = infoBox.parentNode; parent; parent = parent.parentNode) {
       if (parent.className && String(parent.className).indexOf('cbi-value-description') >= 0) {
@@ -905,7 +935,7 @@
     function update(value) {
       infoBox.style.display = 'block';
       if (outerDescEl) outerDescEl.style.display = 'block';
-      docLinkEl.href = DOC_BASE + encodeURIComponent(String(value || '')) + '.md';
+      docLinkEl.href = docUrlFor(String(value || ''));
     }
 
     update(sel.value);

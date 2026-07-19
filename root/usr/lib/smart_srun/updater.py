@@ -143,8 +143,29 @@ def _version_tuple(value):
     return tuple(nums or [0])
 
 
+def _version_sort_key(value):
+    """把版本串解析为可比较的 key，正确处理预发布语义。
+
+    预发布（-bN / -betaN / -rcN / _betaN 等，含字母标记）排在同号正式版之前，
+    因此同一主版本下 “无预发布 > 有预发布”。修复 beta 用户永远收不到同号
+    正式版更新的问题（旧实现把 -b2 的 2 当成第 4 段版本号，反而判成更高）。
+    """
+    text = _release_version(str(value or "").strip())
+    text = text.split("-r", 1)[0]
+    match = re.match(r"^(\d+(?:\.\d+)*)(.*)$", text)
+    if not match:
+        return ((0,), 1, ())
+    release = tuple(int(p) for p in match.group(1).split("."))
+    rest = match.group(2)
+    is_prerelease = bool(re.search(r"[A-Za-z]", rest))
+    if is_prerelease:
+        pre_nums = tuple(int(n) for n in re.findall(r"\d+", rest)) or (0,)
+        return (release, 0, pre_nums)
+    return (release, 1, ())
+
+
 def is_remote_newer(current_version, latest_tag):
-    return _version_tuple(latest_tag) > _version_tuple(current_version)
+    return _version_sort_key(latest_tag) > _version_sort_key(current_version)
 
 
 def _fetch_json(url, timeout=12):
@@ -609,8 +630,13 @@ def run_update():
 
 def start_background_update():
     status = get_status()
-    if status.get("running"):
+    holder = _read_lock_pid()
+    if status.get("running") and holder and _pid_alive(holder):
         return dict(status, ok=False, message="已有更新任务正在运行")
+    if status.get("running"):
+        # 状态残留 running 但持有进程已死（被 kill/OOM/服务重启杀掉）：视为陈旧，
+        # 清理后继续；否则 LuCI「立即更新」会被永久挡住，只能重启路由器恢复。
+        _append_log("clearing stale running status (holder pid=%s)" % (holder or "?"))
     _set_status("queued", "已提交后台更新任务", ok=True, running=True)
     cmd = [
         sys.executable or "python3",

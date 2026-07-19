@@ -724,12 +724,20 @@ class ReleaseAssetsUnifiedTests(unittest.TestCase):
                 encoding="utf-8"
             )
             self.assertIn('if [ "${{ matrix.format }}" = "apk" ]; then', workflow)
-            self.assertIn('VERSION="${VERSION//-/_}"', workflow)
             self.assertIn("uses: actions/checkout@v7", workflow)
             self.assertIn("uses: actions/cache@v6", workflow)
             self.assertIn("uses: actions/upload-artifact@v7", workflow)
             self.assertIn("uses: actions/download-artifact@v8", workflow)
             self.assertIn("uses: softprops/action-gh-release@v3", workflow)
+        prerelease = (
+            root / ".github" / "workflows" / "build-prerelease.yml"
+        ).read_text(encoding="utf-8")
+        # apk-tools 只接受 _alpha/_beta/_pre/_rc 后缀；预发布 apk 版本必须用合法的
+        # _beta<N>，而不是曾导致 mkpkg "package version is invalid" 的 _b<N>。
+        self.assertIn(
+            'VERSION="${BASE_VERSION}_beta${{ github.event.inputs.beta }}"', prerelease
+        )
+        self.assertNotIn('VERSION="${VERSION//-/_}"', prerelease)
 
     def test_unified_prepare_zip_contains_all_four_split_packages(self):
         release_assets = load_release_assets_module(self)

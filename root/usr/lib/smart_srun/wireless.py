@@ -911,6 +911,11 @@ def wait_for_sta_ipv4(
     deadline = started_at + max(int(timeout_seconds), 1)
     last_net = get_network_interface_from_sta_section(sec)
     last_progress_log = 0.0
+    # 等到一半（至少 5 秒）仍无 IPv4 时主动 ifup 一次承载接口：部分环境
+    #（如南昌航空 issue #22）关联成功但 DHCP 迟迟不来，被动轮询会一直等到
+    # 超时；ifup 对已 up 的接口安全，可触发 netifd 重新发起 DHCP。
+    kick_at = started_at + min(max(int(timeout_seconds) // 2, 5), int(timeout_seconds))
+    kicked = False
 
     while time.time() < deadline:
         net = get_network_interface_from_sta_section(sec)
@@ -931,6 +936,19 @@ def wait_for_sta_ipv4(
                 )
                 return net, ip
         now = time.time()
+        if (not kicked) and now >= kick_at:
+            kicked = True
+            kick_net = net or last_net
+            if kick_net:
+                log(
+                    "INFO",
+                    "dhcp_kick",
+                    "no IPv4 yet, re-triggering DHCP via ifup",
+                    section=sec,
+                    network=kick_net,
+                    elapsed_ms=int((now - started_at) * 1000),
+                )
+                bring_up_network_interface(kick_net)
         if now - last_progress_log >= 2.0:
             last_progress_log = now
             log(
@@ -1078,10 +1096,14 @@ def switch_sta_profile(cfg, expect_hotspot):
             radio=radio or "?",
             band=bl,
         )
-        return False, "已切换为%s配置但未获取到IPv4地址（%s %s）" % (
-            target["label"],
-            radio or "?",
-            bl,
+        return False, (
+            "已切换为%s配置但未获取到IPv4地址（%s %s）；"
+            "可在全局设置调大“切网就绪等待”，并确认该账号是否已有其他设备在线占用名额"
+            % (
+                target["label"],
+                radio or "?",
+                bl,
+            )
         )
 
     _, ip = wait_for_sta_ipv4(section, timeout_seconds=ip_timeout)

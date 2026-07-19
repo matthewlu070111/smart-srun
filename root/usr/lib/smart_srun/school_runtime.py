@@ -270,6 +270,29 @@ def resolve_runtime(cfg):
     raise LookupError("school runtime has no supported entrypoint: %s" % short_name)
 
 
+def resolve_runtime_safe(cfg):
+    """像 resolve_runtime，但把无法解析的学校降级为内置默认运行时而非抛异常。
+
+    守护进程主循环必须用它：若 config 里的 school 值未知（例如把预设 id 误当
+    school 值填入、或 schools/ 模块缺失/损坏），裸 resolve_runtime 抛 LookupError
+    会让守护进程启动即退出，procd 无限重生 → 认证完全停摆、syslog 刷屏。
+    与 CLAUDE.md 解析链“-> built-in default”一致。
+    """
+    try:
+        return resolve_runtime(cfg)
+    except LookupError as exc:
+        log(
+            "WARN",
+            "runtime_resolved",
+            "unknown school runtime, falling back to built-in default",
+            school=str((cfg or {}).get("school", "")),
+            reason=str(exc),
+            runtime_type="DefaultRuntime",
+            source="fallback",
+        )
+        return DefaultRuntime()
+
+
 def build_app_context(cfg, runtime=None):
     cfg = cfg or {}
     runtime = runtime or resolve_runtime(cfg)

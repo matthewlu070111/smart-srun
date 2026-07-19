@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-06-26",
+  "updated_at": "2026-07-19",
   "source": "https://github.com/matthewlu070111/smart-srun/issues",
   "schools": [
     {
@@ -8,6 +8,7 @@
       "name": "江西师范大学",
       "status": "active",
       "description": "江西师范大学预设。",
+      "doc_url": "https://github.com/matthewlu070111/smart-srun/blob/main/doc/jxnu.md",
       "defaults": {
         "base_url": "http://172.17.1.2",
         "ac_id": "1",
@@ -146,6 +147,33 @@
       ],
       "contributors": ["@zhaogods"],
       "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/20"
+    },
+    {
+      "id": "nchu",
+      "name": "南昌航空大学（前湖校区）",
+      "status": "active",
+      "description": "环境信息来自 #22 真实抓包；电信运营商后缀尚未验证（捕获脚本上报值与实际不符），选择后请按提示手动确认。",
+      "defaults": {
+        "base_url": "http://10.1.88.4",
+        "ac_id": "1",
+        "ssid": "NCHU_Wireless",
+        "access_mode": "wifi"
+      },
+      "observed_login_shape": {
+        "n": "200",
+        "type": "1",
+        "enc": "srun_bx1",
+        "info_prefix": "SRBX1",
+        "double_stack": "0",
+        "os": "Mac OS",
+        "name": "Macintosh"
+      },
+      "operators": [
+        {"suffix": "??", "label": "中国电信"},
+        {"suffix": "", "label": "校园网"}
+      ],
+      "contributors": ["@REALBochengWen"],
+      "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/22"
     },
     {
       "id": "hsyu",

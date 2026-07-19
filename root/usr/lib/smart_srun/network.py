@@ -45,20 +45,42 @@ CONNECTIVITY_CHECK_URLS = [
 ]
 
 
-def run_cmd(cmd):
+def run_cmd(cmd, timeout=60):
     try:
         res = subprocess.run(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout,
         )
         return res.returncode == 0, (res.stdout or res.stderr or "").strip()
+    except subprocess.TimeoutExpired:
+        return False, "命令超时（%ds）: %s" % (timeout, " ".join(str(c) for c in cmd))
     except OSError as exc:
         return False, str(exc)
+
+
+def _wget_supports_bind(path):
+    """真实的 GNU wget 才支持 --bind-address；uclient-fetch / busybox 不支持。"""
+    try:
+        real = os.path.realpath(path)
+    except OSError:
+        real = path
+    base = os.path.basename(real).lower()
+    return "uclient" not in base and "busybox" not in base
 
 
 def parse_uci_value(raw):
     text = str(raw or "").strip()
     if len(text) >= 2 and text[0] == text[-1] and text[0] in ('"', "'"):
-        return text[1:-1]
+        inner = text[1:-1]
+        if text[0] == "'":
+            # uci 把值内单引号输出为 '\''（关引号+转义引号+开引号），此处还原，
+            # 否则含撇号的 SSID/密码读回值与写入值不符，会触发每 30s 重建循环、
+            # 手动登录校验永远失败。
+            inner = inner.replace("'\\''", "'")
+        return inner
     return text
 
 
@@ -368,11 +390,14 @@ def http_get(url, params=None, timeout=5, bind_ip=None):
             if not os.path.exists(path):
                 continue
             available = True
-            if kind == "wget":
+            # 原生 OpenWrt 的 /usr/bin/wget 往往是 uclient-fetch 的符号链接，
+            # 不认识 --bind-address；按真实实现判断，避免给它传该参数直接报错退出。
+            supports_bind = kind == "wget" and _wget_supports_bind(path)
+            if supports_bind:
                 bind_capable = True
 
-            if bind_ip and kind != "wget":
-                errors.append("%s: bind_ip requires wget --bind-address support" % kind)
+            if bind_ip and not supports_bind:
+                errors.append("%s: 不支持 --bind-address（uclient-fetch/busybox）" % kind)
                 continue
 
             if kind == "wget":
@@ -383,8 +408,14 @@ def http_get(url, params=None, timeout=5, bind_ip=None):
             else:
                 cmd = [path, "-q", "-O", "-", "--timeout", str(int(timeout)), url]
 
+            # GNU wget 的 --timeout 只约束单次尝试，默认还会重试 20 次并线性
+            # 退避，实测单个探测可拖到 4 分钟以上，把守护循环整个卡住。
+            # 用子进程级硬超时兜底，对 busybox/GNU 两种实现都成立。
+            hard_cap = max(int(timeout) * 2, int(timeout) + 3)
             try:
-                output = subprocess.check_output(cmd, stderr=subprocess.STDOUT)
+                output = subprocess.check_output(
+                    cmd, stderr=subprocess.STDOUT, timeout=hard_cap
+                )
                 body = output.decode("utf-8", errors="replace")
                 log(
                     "DEBUG",
@@ -396,6 +427,8 @@ def http_get(url, params=None, timeout=5, bind_ip=None):
                     duration_ms=t.ms,
                 )
                 return body
+            except subprocess.TimeoutExpired:
+                errors.append("%s: timed out after %ds (hard cap)" % (kind, hard_cap))
             except subprocess.CalledProcessError as exc:
                 details = exc.output.decode("utf-8", errors="replace") if exc.output else ""
                 if not details:

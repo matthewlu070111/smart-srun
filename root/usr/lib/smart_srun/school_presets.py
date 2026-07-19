@@ -237,7 +237,13 @@ def normalize_school(item):
 def normalize_payload(payload, include_draft=False):
     if not isinstance(payload, dict):
         return []
-    if int(payload.get("schema_version") or 0) != SCHEMA_VERSION:
+    try:
+        schema_version = int(payload.get("schema_version") or 0)
+    except (TypeError, ValueError):
+        # 远端把 schema_version 写成 "abc"/"v2"/数组等非法值时，视为版本不匹配，
+        # 而不是让 int() 抛异常把整个预设加载（含内置 fallback）打崩。
+        return []
+    if schema_version != SCHEMA_VERSION:
         return []
     out = []
     seen = set()
@@ -328,8 +334,21 @@ def _payload_updated_at(payload):
     return str(payload.get("updated_at") or "").strip()
 
 
+def _payload_schema_ok(payload):
+    if not isinstance(payload, dict):
+        return False
+    try:
+        return int(payload.get("schema_version") or 0) == SCHEMA_VERSION
+    except (TypeError, ValueError):
+        return False
+
+
 def refresh_remote_presets(url=None, timeout=REMOTE_TIMEOUT_SECONDS):
     payload, source_url = _fetch_remote_payload_with_source(url=url, timeout=timeout)
+    # 先校验再落盘：非法 schema_version 的远端发布不写入缓存，否则会毒化本地
+    # 缓存，此后每次 list_presets 都从坏缓存崩溃且无法自愈（连内置 fallback 一起丢）。
+    if not _payload_schema_ok(payload):
+        raise RuntimeError("远端预设 schema_version 非法，已拒绝缓存")
     cached = _read_json(CACHE_PRESETS_FILE)
     remote_version = _payload_updated_at(payload)
     cached_version = _payload_updated_at(cached)
@@ -358,6 +377,8 @@ def _refresh_remote_payload_for_list():
             timeout=REMOTE_TIMEOUT_SECONDS
         )
     except Exception:
+        return {}
+    if not _payload_schema_ok(payload):
         return {}
     payload["_cached_at"] = int(time.time())
     payload["_source_url"] = source_url

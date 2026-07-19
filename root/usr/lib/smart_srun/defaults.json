@@ -11,7 +11,7 @@
   "backoff_max_duration": "600",
   "retry_cooldown_seconds": "10",
   "retry_max_cooldown_seconds": "600",
-  "switch_ready_timeout_seconds": "12",
+  "switch_ready_timeout_seconds": "30",
   "manual_terminal_check_max_attempts": "5",
   "manual_terminal_check_interval_seconds": "2",
   "hotspot_failback_enabled": "1",

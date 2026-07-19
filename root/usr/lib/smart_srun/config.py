@@ -36,6 +36,7 @@ timed = _logger.timed
 JSON_CONFIG_FILE = "/usr/lib/smart_srun/config.json"
 STATE_FILE = "/var/run/smart_srun/state.json"
 ACTION_FILE = "/var/run/smart_srun/action.json"
+INFLIGHT_ACTION_FILE = "/var/run/smart_srun/action_inflight.json"
 CONNECTIVITY_CACHE_SECONDS = 15
 SWITCH_DELAY_SECONDS = 2
 SSID_READY_TIMEOUT_SECONDS = 12
@@ -154,7 +155,7 @@ def _load_defaults():
         "backoff_max_duration": "600",
         "retry_cooldown_seconds": "10",
         "retry_max_cooldown_seconds": "600",
-        "switch_ready_timeout_seconds": "12",
+        "switch_ready_timeout_seconds": "30",
         "manual_terminal_check_max_attempts": "5",
         "manual_terminal_check_interval_seconds": "2",
         "hotspot_failback_enabled": "1",
@@ -220,12 +221,15 @@ def _exclusive_file_lock(path):
         except ImportError:
             fcntl_mod = None
         if fcntl_mod is not None:
-            fcntl_mod.flock(lock_file.fileno(), fcntl_mod.LOCK_EX)
+            # 用 lockf（POSIX 记录锁），与 LuCI 侧 nixio 的 lockf 是同一类锁，
+            # 才能真正互斥；此前用 flock（BSD 锁）与 nixio 互不阻塞，config.json
+            # 的读改写在 Python 与 Lua 之间形同无锁。
+            fcntl_mod.lockf(lock_file.fileno(), fcntl_mod.LOCK_EX)
         yield lock_file
     finally:
         if fcntl_mod is not None:
             try:
-                fcntl_mod.flock(lock_file.fileno(), fcntl_mod.LOCK_UN)
+                fcntl_mod.lockf(lock_file.fileno(), fcntl_mod.LOCK_UN)
             except OSError:
                 pass
         lock_file.close()
@@ -576,10 +580,14 @@ def begin_manual_login_service_guard():
         return False, previous_enabled
 
     set_json_scalar_config("enabled", "0")
-    runtime_state = load_runtime_state()
-    runtime_state["manual_service_guard_active"] = True
-    runtime_state["manual_service_enabled_before"] = previous_enabled
-    save_runtime_state(runtime_state)
+
+    def _apply(payload):
+        payload["manual_service_guard_active"] = True
+        payload["manual_service_enabled_before"] = previous_enabled
+        payload["updated_at"] = int(time.time())
+        return payload
+
+    update_json_file(STATE_FILE, _apply)
     return True, previous_enabled
 
 
@@ -594,9 +602,13 @@ def restore_manual_login_service_guard(clear_only=False):
     if (not clear_only) and previous_enabled:
         set_json_scalar_config("enabled", previous_enabled)
 
-    runtime_state["manual_service_guard_active"] = False
-    runtime_state["manual_service_enabled_before"] = ""
-    save_runtime_state(runtime_state)
+    def _apply(payload):
+        payload["manual_service_guard_active"] = False
+        payload["manual_service_enabled_before"] = ""
+        payload["updated_at"] = int(time.time())
+        return payload
+
+    update_json_file(STATE_FILE, _apply)
     return True, previous_enabled
 
 
@@ -637,12 +649,18 @@ def save_runtime_state(state):
 
 
 def save_runtime_status(message, state=None, **extra):
-    payload = load_runtime_state()
-    if state:
-        payload.update(state)
-    payload.update(extra)
-    payload["message"] = str(message or "")
-    save_runtime_state(payload)
+    # 原子 RMW：在 STATE_FILE 锁内重读磁盘、合并本进程的 state/extra 后写回，
+    # 避免与另一进程（如 CLI relogin 写入 manual_service_guard_active）的
+    # 无锁读-改-写交错，把对方刚写入的持久字段覆盖丢失。
+    def _apply(payload):
+        if state:
+            payload.update(state)
+        payload.update(extra)
+        payload["message"] = str(message or "")
+        payload["updated_at"] = int(time.time())
+        return payload
+
+    update_json_file(STATE_FILE, _apply)
 
 
 # ---------------------------------------------------------------------------
@@ -665,11 +683,15 @@ def queue_runtime_action(action):
 
 
 def pop_runtime_action():
-    payload = load_json_file(ACTION_FILE)
-    try:
-        os.remove(ACTION_FILE)
-    except OSError:
-        pass
+    # 在 ACTION_FILE 锁内读+删，且仅当解析出 action 时才删除：
+    # 配合 LuCI 侧的原子写，避免撕裂/空读时把刚入队的动作连文件一起删掉。
+    with _exclusive_file_lock(ACTION_FILE):
+        payload = _load_json_file_unlocked(ACTION_FILE)
+        if isinstance(payload, dict) and payload.get("action"):
+            try:
+                os.remove(ACTION_FILE)
+            except OSError:
+                pass
     if isinstance(payload, dict) and payload.get("action"):
         requested_at = int(payload.get("requested_at") or 0)
         lag_ms = int(max(0, time.time() - requested_at) * 1000) if requested_at else 0
@@ -681,6 +703,51 @@ def pop_runtime_action():
             lag_ms=lag_ms,
         )
     return payload if isinstance(payload, dict) else {}
+
+
+def requeue_runtime_action(payload):
+    """把中断的动作原样写回队列，保留 requeue_count 等附加字段。
+
+    requested_at 必须刷新：LuCI 侧会把滞留超过一定时长的队列文件当作
+    死队列丢弃，沿用旧时间戳会让刚重排的动作立刻被判定为滞留。
+    """
+    data = dict(payload or {})
+    data["action"] = str(data.get("action") or "").strip()
+    if not data["action"]:
+        return
+    data["requested_at"] = int(time.time())
+    save_json_file(ACTION_FILE, data)
+    log(
+        "INFO",
+        "action_requeued",
+        "requeued interrupted action",
+        action=data["action"],
+        requeue_count=int(data.get("requeue_count") or 0),
+    )
+
+
+def mark_inflight_action(payload):
+    """动作出队后、执行前落盘一个执行中标记；执行结束后清除。
+
+    守护进程若在执行途中被杀（例如再次点击手动动作触发的 service restart），
+    重启后可凭该标记把动作重新排队一次，避免动作凭空丢失、界面卡在待执行。
+    """
+    data = dict(payload or {})
+    if not str(data.get("action") or "").strip():
+        return
+    save_json_file(INFLIGHT_ACTION_FILE, data)
+
+
+def load_inflight_action():
+    payload = load_json_file(INFLIGHT_ACTION_FILE)
+    return payload if isinstance(payload, dict) else {}
+
+
+def clear_inflight_action():
+    try:
+        os.remove(INFLIGHT_ACTION_FILE)
+    except OSError:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -722,32 +789,34 @@ def _normalize_info_prefix(value, default_value=DEFAULT_INFO_PREFIX):
 
 
 def _apply_login_shape(cfg, campus):
+    # 账号字段存为空字符串时视同未设置，回落到 legacy 全局值，保持
+    # account > legacy global > default 三级优先级。
     cfg["n"] = _login_shape_number(
-        campus.get("n", cfg.get("n", "")),
+        campus.get("n") or cfg.get("n", ""),
         DEFAULT_LOGIN_N,
     )
     cfg["type"] = _login_shape_number(
-        campus.get("type", cfg.get("type", "")),
+        campus.get("type") or cfg.get("type", ""),
         DEFAULT_LOGIN_TYPE,
     )
     cfg["enc"] = _login_shape_text(
-        campus.get("enc", cfg.get("enc", "")),
+        campus.get("enc") or cfg.get("enc", ""),
         DEFAULT_LOGIN_ENC,
     )
     cfg["info_prefix"] = _normalize_info_prefix(
-        campus.get("info_prefix", cfg.get("info_prefix", "")),
+        campus.get("info_prefix") or cfg.get("info_prefix", ""),
         DEFAULT_INFO_PREFIX,
     )
     cfg["double_stack"] = _login_shape_number(
-        campus.get("double_stack", cfg.get("double_stack", "")),
+        campus.get("double_stack") or cfg.get("double_stack", ""),
         DEFAULT_DOUBLE_STACK,
     )
     cfg["login_os"] = _login_shape_text(
-        campus.get("login_os", cfg.get("login_os", "")),
+        campus.get("login_os") or cfg.get("login_os", ""),
         DEFAULT_LOGIN_OS,
     )
     cfg["login_name"] = _login_shape_text(
-        campus.get("login_name", cfg.get("login_name", "")),
+        campus.get("login_name") or cfg.get("login_name", ""),
         DEFAULT_LOGIN_NAME,
     )
     return cfg
@@ -1019,6 +1088,75 @@ def resolve_active_items(cfg):
 # ---------------------------------------------------------------------------
 
 
+def _reconcile_selection_pointers(raw):
+    """收敛历史遗留的 default/active 选择指针分裂。
+
+    v1.3.4 的“设为默认”只写 default_*_id（提示“手动登录后生效”），active 仍指向
+    旧账号；此后所有自动路径（掉线重连、门户注销后的自动重登）按 active 解析，
+    会持续用错账号（例如丢失运营商后缀、落到校园网/学生侧）。现行代码所有写入
+    点都成对更新两个指针，因此不一致只可能是旧数据，以 default 为准收敛。
+    """
+    changed = False
+    pairs = (
+        ("campus_accounts", "default_campus_id", "active_campus_id"),
+        ("hotspot_profiles", "default_hotspot_id", "active_hotspot_id"),
+    )
+    for list_key, default_key, active_key in pairs:
+        items = raw.get(list_key)
+        if not isinstance(items, list) or not items:
+            continue
+        default_id = str(raw.get(default_key, "") or "").strip()
+        active_id = str(raw.get(active_key, "") or "").strip()
+        if not default_id or default_id == active_id:
+            continue
+        if not _find_item_by_id(items, default_id):
+            continue
+        raw[active_key] = default_id
+        changed = True
+        log(
+            "INFO",
+            "config_legacy_fix",
+            "reconciled stale selection pointer to default",
+            key=active_key,
+            value=default_id,
+            previous=active_id,
+        )
+    return changed
+
+
+_WARNED_UNKNOWN_SCHOOLS = set()
+
+
+def _sanitize_school(cfg):
+    """未知 school 值就地降级为内置默认，避免守护进程解析运行时时崩溃重启。
+
+    非破坏性：只改内存中的 cfg，不回写配置文件——若 schools/<name>.py 是稍后
+    才热部署的，下次 load_config 会自动识别并恢复。同一坏值每进程只告警一次，
+    防止每个 tick 刷日志。schools 模块不可用时直接放行，交给守护进程侧
+    resolve_runtime_safe 兜底。
+    """
+    name = str(cfg.get("school", "")).strip()
+    if not name or name == "default":
+        return
+    try:
+        import schools
+
+        known = schools.get_school_entry(name) is not None
+    except Exception:
+        return
+    if known:
+        return
+    if name not in _WARNED_UNKNOWN_SCHOOLS:
+        _WARNED_UNKNOWN_SCHOOLS.add(name)
+        log(
+            "WARN",
+            "config_legacy_fix",
+            "unknown school in config, using built-in default",
+            school=name,
+        )
+    cfg["school"] = "default"
+
+
 def load_config():
     raw = load_json_raw_config()
 
@@ -1027,6 +1165,12 @@ def load_config():
         try:
             save_json_raw_config(raw)
             log("INFO", "config_migrated", "legacy config migrated to new format")
+        except OSError:
+            pass
+
+    if _reconcile_selection_pointers(raw):
+        try:
+            save_json_raw_config(raw)
         except OSError:
             pass
 
@@ -1062,6 +1206,8 @@ def load_config():
 
     resolve_active_items(cfg)
 
+    _sanitize_school(cfg)
+
     cfg["backoff_max_retries"] = parse_non_negative_int(cfg["backoff_max_retries"], 0)
     cfg["backoff_initial_duration"] = parse_non_negative_float(
         cfg["backoff_initial_duration"], 10.0
@@ -1076,7 +1222,7 @@ def load_config():
         cfg["retry_max_cooldown_seconds"], 600.0
     )
     cfg["switch_ready_timeout_seconds"] = parse_non_negative_int(
-        cfg["switch_ready_timeout_seconds"], 12
+        cfg["switch_ready_timeout_seconds"], 30
     )
     cfg["manual_terminal_check_interval_seconds"] = parse_non_negative_int(
         cfg["manual_terminal_check_interval_seconds"], 2
@@ -1220,8 +1366,8 @@ def get_retry_max_cooldown_seconds(cfg):
 
 
 def get_switch_ready_timeout_seconds(cfg):
-    value = int(cfg.get("switch_ready_timeout_seconds", 12))
-    return value if value > 0 else 12
+    value = int(cfg.get("switch_ready_timeout_seconds", 30))
+    return value if value > 0 else 30
 
 
 def get_manual_terminal_check_interval_seconds(cfg):
