@@ -509,6 +509,12 @@ def _read_lock_pid():
         return 0
 
 
+def _write_lock_pid(pid):
+    _ensure_parent(LOCK_FILE)
+    with open(LOCK_FILE, "w", encoding="ascii") as handle:
+        handle.write(str(int(pid)))
+
+
 def _acquire_lock():
     _ensure_parent(LOCK_FILE)
     try:
@@ -536,8 +542,242 @@ def _release_lock():
         pass
 
 
+# Standalone worker: must NOT run as client.py. Package install can restart
+# smart_srun/uwsgi; init.d used to kill every client.py process (including the
+# updater). This script lives under /tmp, uses only stdlib, and finalizes status.
+_FINISH_UPDATE_SCRIPT = r"""#!/usr/bin/env python3
+# smart-srun update finish worker (generated; do not edit)
+import json
+import os
+import subprocess
+import sys
+import time
+
+
+def _append_log(log_file, message):
+    parent = os.path.dirname(log_file)
+    if parent and not os.path.exists(parent):
+        os.makedirs(parent)
+    line = "%s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), str(message))
+    with open(log_file, "a", encoding="utf-8") as handle:
+        handle.write(line)
+
+
+def _write_json(path, payload):
+    parent = os.path.dirname(path)
+    if parent and not os.path.exists(parent):
+        os.makedirs(parent)
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
+        handle.write("\n")
+    os.replace(tmp_path, path)
+
+
+def _read_json(path):
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        return data if isinstance(data, dict) else {}
+    except (OSError, TypeError, ValueError):
+        return {}
+
+
+def _set_status(status_file, log_file, phase, message, **fields):
+    payload = _read_json(status_file)
+    payload.update(fields)
+    payload["phase"] = phase
+    payload["message"] = str(message or "")
+    payload["updated_at"] = int(time.time())
+    _write_json(status_file, payload)
+    _append_log(log_file, "%s: %s" % (phase, message))
+    return payload
+
+
+def _run_command(args, log_file, timeout=240):
+    proc = subprocess.Popen(
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        universal_newlines=True,
+    )
+    try:
+        out, _ = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        out, _ = proc.communicate()
+        raise RuntimeError("command timed out: %s" % " ".join(args))
+    if out:
+        for line in out.splitlines():
+            _append_log(log_file, "  " + line)
+    if proc.returncode != 0:
+        raise RuntimeError(
+            "command failed (%d): %s" % (proc.returncode, " ".join(args))
+        )
+    return out
+
+
+def _install_command(paths, manager):
+    if manager == "apk":
+        return [
+            "apk",
+            "add",
+            "-q",
+            "--force-overwrite",
+            "--clean-protected",
+            "--allow-untrusted",
+        ] + list(paths)
+    return ["opkg", "install"] + list(paths)
+
+
+def _restart_services(log_file):
+    for command in (
+        ["/etc/init.d/smart_srun", "restart"],
+        ["/etc/init.d/uwsgi", "restart"],
+    ):
+        if not os.path.exists(command[0]):
+            continue
+        try:
+            _run_command(command, log_file, timeout=30)
+        except Exception as exc:
+            _append_log(log_file, "restart skipped: %s" % exc)
+
+
+def main(argv):
+    if len(argv) != 2:
+        raise SystemExit("usage: finish_update.py <plan.json>")
+    plan_path = argv[1]
+    with open(plan_path, "r", encoding="utf-8") as handle:
+        plan = json.load(handle)
+
+    status_file = str(plan["status_file"])
+    log_file = str(plan["log_file"])
+    lock_file = str(plan["lock_file"])
+    manager = str(plan["manager"])
+    package_paths = list(plan.get("package_paths") or [])
+    fields = dict(plan.get("status_fields") or {})
+
+    # Claim lock ownership for this worker.
+    parent = os.path.dirname(lock_file)
+    if parent and not os.path.exists(parent):
+        os.makedirs(parent)
+    with open(lock_file, "w", encoding="ascii") as handle:
+        handle.write(str(os.getpid()))
+
+    try:
+        _set_status(
+            status_file,
+            log_file,
+            "installing",
+            "正在安装更新包",
+            ok=True,
+            running=True,
+            **fields
+        )
+        _run_command(_install_command(package_paths, manager), log_file, timeout=240)
+
+        _set_status(
+            status_file,
+            log_file,
+            "restarting",
+            "正在重启服务",
+            ok=True,
+            running=True,
+            **fields
+        )
+        _restart_services(log_file)
+
+        _set_status(
+            status_file,
+            log_file,
+            "complete",
+            "更新完成",
+            ok=True,
+            running=False,
+            **fields
+        )
+        return 0
+    except Exception as exc:
+        _set_status(
+            status_file,
+            log_file,
+            "failed",
+            "更新失败: %s" % exc,
+            ok=False,
+            running=False,
+            **fields
+        )
+        return 1
+    finally:
+        try:
+            os.remove(lock_file)
+        except OSError:
+            pass
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
+"""
+
+
+def _finish_script_path():
+    return os.path.join(WORK_DIR, "finish_update.py")
+
+
+def _finish_plan_path():
+    return os.path.join(WORK_DIR, "finish_plan.json")
+
+
+def _write_finish_worker(package_paths, manager, status_fields):
+    """Write /tmp finish worker + plan. Worker is not client.py (survives restarts)."""
+    plan = {
+        "package_paths": list(package_paths),
+        "manager": str(manager),
+        "status_fields": dict(status_fields or {}),
+        "status_file": STATUS_FILE,
+        "log_file": LOG_FILE,
+        "lock_file": LOCK_FILE,
+    }
+    _write_json(_finish_plan_path(), plan)
+    script_path = _finish_script_path()
+    with open(script_path, "w", encoding="utf-8") as handle:
+        handle.write(_FINISH_UPDATE_SCRIPT)
+    try:
+        os.chmod(script_path, 0o755)
+    except OSError:
+        pass
+    return script_path, _finish_plan_path()
+
+
+def _spawn_finish_worker(script_path, plan_path):
+    """Detach install/restart/finalize so package self-replace + service restart
+    cannot kill the process that writes the terminal update status.
+
+    Applies to both opkg and apk: both replace shipped files under
+    /usr/lib/smart_srun and both are followed by smart_srun/uwsgi restart.
+    """
+    _ensure_parent(LOG_FILE)
+    log_handle = open(LOG_FILE, "a", encoding="utf-8")
+    try:
+        proc = subprocess.Popen(
+            [sys.executable or "python3", "-B", script_path, plan_path],
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            close_fds=True,
+            start_new_session=True,
+            cwd=WORK_DIR,
+        )
+    finally:
+        log_handle.close()
+    # Transfer lock ownership before parent returns/exits.
+    _write_lock_pid(proc.pid)
+    _append_log("handed off install/restart to finish worker pid=%s" % proc.pid)
+    return proc
+
+
 def run_update():
     _acquire_lock()
+    handed_off = False
     try:
         if os.path.exists(WORK_DIR):
             shutil.rmtree(WORK_DIR)
@@ -588,44 +828,43 @@ def run_update():
             os.makedirs(extract_dir)
             package_paths = _extract_split_zip(zip_path, extract_dir, fmt, mode)
 
+        status_fields = dict(
+            _status_fields(result),
+            downloaded_from=downloaded_from,
+            package_paths=package_paths,
+        )
         _set_status(
             "preinstall",
             "正在执行预安装测试",
             ok=True,
             running=True,
-            downloaded_from=downloaded_from,
-            package_paths=package_paths,
-            **_status_fields(result)
+            **status_fields
         )
         _run_command(_preinstall_command(package_paths, manager), timeout=180)
 
+        # Hand off install + service restart + final status to a /tmp worker.
+        # In-process install used to die when smart_srun restart killed client.py
+        # (and package file replace is hostile to a live interpreter under
+        # /usr/lib/smart_srun). Same risk for apk and opkg.
+        script_path, plan_path = _write_finish_worker(
+            package_paths, manager, status_fields
+        )
         _set_status(
             "installing",
             "正在安装更新包",
             ok=True,
             running=True,
-            **_status_fields(result)
+            **status_fields
         )
-        _run_command(_install_command(package_paths, manager), timeout=240)
-
-        _set_status(
-            "restarting",
-            "正在重启服务",
-            ok=True,
-            running=True,
-            **_status_fields(result)
-        )
-        _restart_services()
-
-        _set_status(
-            "complete", "更新完成", ok=True, running=False, **_status_fields(result)
-        )
+        _spawn_finish_worker(script_path, plan_path)
+        handed_off = True
         return get_status()
     except Exception as exc:
         _set_status("failed", "更新失败: %s" % exc, ok=False, running=False)
         return get_status()
     finally:
-        _release_lock()
+        if not handed_off:
+            _release_lock()
 
 
 def start_background_update():
@@ -659,3 +898,4 @@ def start_background_update():
     )
     log_handle.close()
     return get_status()
+

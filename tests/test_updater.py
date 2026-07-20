@@ -152,5 +152,172 @@ class SplitZipDigestTests(unittest.TestCase):
         self.assertEqual(updater._parse_sha256("not-a-hash file"), "")
 
 
+class UpdateFinishHandoffTests(unittest.TestCase):
+    def test_write_finish_worker_uses_tmp_script_not_client_py(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.object(updater, "WORK_DIR", tmp),
+                mock.patch.object(updater, "STATUS_FILE", os.path.join(tmp, "status.json")),
+                mock.patch.object(updater, "LOG_FILE", os.path.join(tmp, "update.log")),
+                mock.patch.object(updater, "LOCK_FILE", os.path.join(tmp, "update.lock")),
+            ):
+                script, plan = updater._write_finish_worker(
+                    ["/tmp/pkg.ipk"],
+                    "opkg",
+                    {"latest_tag": "v1.3.5-b2", "package_format": "ipk"},
+                )
+                self.assertTrue(script.startswith(tmp))
+                self.assertTrue(script.endswith("finish_update.py"))
+                self.assertNotIn("client.py", script)
+                self.assertTrue(os.path.isfile(script))
+                self.assertTrue(os.path.isfile(plan))
+                with open(plan, "r", encoding="utf-8") as handle:
+                    payload = handle.read()
+                self.assertIn("opkg", payload)
+                self.assertIn("/tmp/pkg.ipk", payload)
+                with open(script, "r", encoding="utf-8") as handle:
+                    body = handle.read()
+                self.assertIn("opkg", body)
+                self.assertIn("apk", body)
+                self.assertIn("smart_srun", body)
+
+    def test_run_update_hands_off_install_and_keeps_lock_for_worker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            status_file = os.path.join(tmp, "status.json")
+            lock_file = os.path.join(tmp, "update.lock")
+            log_file = os.path.join(tmp, "update.log")
+            work_dir = os.path.join(tmp, "work")
+            os.makedirs(work_dir)
+
+            plan = {
+                "ok": True,
+                "update_available": True,
+                "package_manager": "opkg",
+                "package_format": "ipk",
+                "install_mode": "bundle",
+                "package_name": "luci-app-smart-srun-bundle",
+                "current_version": "v1.3.4",
+                "latest_tag": "v1.3.5-b2",
+                "latest_version": "1.3.5-b2",
+                "download_kind": "release_asset",
+                "asset_name": "bundle.ipk",
+                "download_url": "https://example.invalid/bundle.ipk",
+                "asset_digest": "",
+            }
+
+            class FakeProc:
+                pid = 4242
+
+            def fake_spawn(script_path, plan_path):
+                updater._write_lock_pid(FakeProc.pid)
+                return FakeProc()
+
+            with (
+                mock.patch.object(updater, "WORK_DIR", work_dir),
+                mock.patch.object(updater, "STATUS_FILE", status_file),
+                mock.patch.object(updater, "LOG_FILE", log_file),
+                mock.patch.object(updater, "LOCK_FILE", lock_file),
+                mock.patch.object(updater, "check_update", return_value=plan),
+                mock.patch.object(updater, "_download_url"),
+                mock.patch.object(updater, "_verify_digest", return_value=True),
+                mock.patch.object(updater, "_run_command"),
+                mock.patch.object(
+                    updater, "_spawn_finish_worker", side_effect=fake_spawn
+                ) as spawn,
+                mock.patch.object(updater, "log"),
+            ):
+                result = updater.run_update()
+
+            self.assertTrue(result.get("running"))
+            self.assertEqual(result.get("phase"), "installing")
+            spawn.assert_called_once()
+            # Parent handed off: lock remains and points at worker pid.
+            self.assertTrue(os.path.exists(lock_file))
+            with open(lock_file, "r", encoding="ascii") as handle:
+                self.assertEqual(handle.read().strip(), "4242")
+
+    def test_finish_worker_script_completes_status_for_opkg_and_apk(self):
+        """Execute generated worker with a fake package manager (both formats)."""
+        for manager, package_name in (
+            ("opkg", "bundle.ipk"),
+            ("apk", "bundle.apk"),
+        ):
+            with self.subTest(manager=manager):
+                with tempfile.TemporaryDirectory() as tmp:
+                    status_file = os.path.join(tmp, "status.json")
+                    lock_file = os.path.join(tmp, "update.lock")
+                    log_file = os.path.join(tmp, "update.log")
+                    work_dir = os.path.join(tmp, "work")
+                    os.makedirs(work_dir)
+                    package_path = os.path.join(tmp, package_name)
+                    with open(package_path, "wb") as handle:
+                        handle.write(b"pkg")
+
+                    with (
+                        mock.patch.object(updater, "WORK_DIR", work_dir),
+                        mock.patch.object(updater, "STATUS_FILE", status_file),
+                        mock.patch.object(updater, "LOG_FILE", log_file),
+                        mock.patch.object(updater, "LOCK_FILE", lock_file),
+                    ):
+                        script, plan = updater._write_finish_worker(
+                            [package_path],
+                            manager,
+                            {
+                                "latest_tag": "v1.3.5-b2",
+                                "package_format": "apk"
+                                if manager == "apk"
+                                else "ipk",
+                            },
+                        )
+
+                    def fake_popen(args, **kwargs):
+                        class Proc:
+                            returncode = 0
+
+                            def communicate(self, timeout=None):
+                                return ("ok\n", None)
+
+                            def kill(self):
+                                return None
+
+                        fake_popen.calls.append(list(args))
+                        return Proc()
+
+                    fake_popen.calls = []
+
+                    with open(script, "r", encoding="utf-8") as handle:
+                        code = compile(handle.read(), script, "exec")
+                    ns = {"__name__": "not_main"}
+                    exec(code, ns)
+                    with mock.patch.object(
+                        ns["subprocess"], "Popen", side_effect=fake_popen
+                    ):
+                        with mock.patch.object(
+                            ns["os"].path, "exists", return_value=True
+                        ):
+                            rc = ns["main"](["finish_update.py", plan])
+                    self.assertEqual(rc, 0)
+                    with open(status_file, "r", encoding="utf-8") as handle:
+                        status = handle.read()
+                    self.assertIn('"phase": "complete"', status)
+                    self.assertIn('"running": false', status)
+                    self.assertFalse(os.path.exists(lock_file))
+                    self.assertGreaterEqual(len(fake_popen.calls), 1)
+                    self.assertEqual(fake_popen.calls[0][0], manager)
+
+
+class InitScriptUpdateSafetyTests(unittest.TestCase):
+    def test_init_script_only_stops_daemon_not_all_client_py(self):
+        init_path = os.path.join(
+            REPO_ROOT, "root", "etc", "init.d", "smart_srun"
+        )
+        with open(init_path, "r", encoding="utf-8") as handle:
+            text = handle.read()
+        self.assertIn("is_daemon_cmdline", text)
+        self.assertIn('*"$PROG"\\ daemon', text)
+        # Must not use the old broad matcher that killed update workers.
+        self.assertNotIn('*"$PROG"*)', text)
+
+
 if __name__ == "__main__":
     unittest.main()

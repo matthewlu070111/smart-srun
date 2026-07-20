@@ -27,25 +27,32 @@ start_service() {
 	procd_close_instance
 }
 
+# Only stop the long-running daemon instance.
+# CLI/update workers also invoke client.py; killing them mid-install leaves
+# update_status.json stuck on "installing" and may orphan the update lock.
+is_daemon_cmdline() {
+	# cmdline is space-joined; match "client.py daemon" as its own argv tokens.
+	case "$1" in
+		*"$PROG"\ daemon|*"$PROG"\ daemon\ *)
+			return 0
+			;;
+	esac
+	return 1
+}
+
 stop_client_processes() {
 	for proc in /proc/[0-9]*; do
 		[ -r "$proc/cmdline" ] || continue
 		cmdline="$(tr '\000' ' ' < "$proc/cmdline" 2>/dev/null)"
-		case "$cmdline" in
-			*"$PROG"*)
-				kill -TERM "${proc##*/}" 2>/dev/null
-				;;
-		esac
+		is_daemon_cmdline "$cmdline" || continue
+		kill -TERM "${proc##*/}" 2>/dev/null
 	done
 	sleep 1
 	for proc in /proc/[0-9]*; do
 		[ -r "$proc/cmdline" ] || continue
 		cmdline="$(tr '\000' ' ' < "$proc/cmdline" 2>/dev/null)"
-		case "$cmdline" in
-			*"$PROG"*)
-				kill -KILL "${proc##*/}" 2>/dev/null
-				;;
-		esac
+		is_daemon_cmdline "$cmdline" || continue
+		kill -KILL "${proc##*/}" 2>/dev/null
 	done
 }
 
