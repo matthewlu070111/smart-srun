@@ -319,5 +319,47 @@ class InitScriptUpdateSafetyTests(unittest.TestCase):
         self.assertNotIn('*"$PROG"*)', text)
 
 
+class LockWriteAtomicityTests(unittest.TestCase):
+    def test_write_lock_pid_uses_atomic_replace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock_file = os.path.join(tmp, "update.lock")
+            with (
+                mock.patch.object(updater, "LOCK_FILE", lock_file),
+            ):
+                updater._write_lock_pid(13579)
+            self.assertFalse(os.path.exists(lock_file + ".tmp"))
+            with open(lock_file, "r", encoding="ascii") as handle:
+                self.assertEqual(handle.read().strip(), "13579")
+            # Second write still atomic and replaces content.
+            with mock.patch.object(updater, "LOCK_FILE", lock_file):
+                updater._write_lock_pid(24680)
+            with open(lock_file, "r", encoding="ascii") as handle:
+                self.assertEqual(handle.read().strip(), "24680")
+
+    def test_finish_worker_claims_lock_via_replace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work_dir = os.path.join(tmp, "work")
+            os.makedirs(work_dir)
+            lock_file = os.path.join(tmp, "update.lock")
+            status_file = os.path.join(tmp, "status.json")
+            log_file = os.path.join(tmp, "update.log")
+            with (
+                mock.patch.object(updater, "WORK_DIR", work_dir),
+                mock.patch.object(updater, "STATUS_FILE", status_file),
+                mock.patch.object(updater, "LOG_FILE", log_file),
+                mock.patch.object(updater, "LOCK_FILE", lock_file),
+            ):
+                script, _plan = updater._write_finish_worker(
+                    [os.path.join(tmp, "pkg.ipk")], "opkg", {}
+                )
+            with open(script, "r", encoding="utf-8") as handle:
+                body = handle.read()
+            self.assertIn("os.replace(tmp_lock, lock_file)", body)
+            self.assertNotIn(
+                'with open(lock_file, "w", encoding="ascii") as handle:',
+                body,
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

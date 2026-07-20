@@ -510,9 +510,13 @@ def _read_lock_pid():
 
 
 def _write_lock_pid(pid):
+    # Atomic replace so concurrent readers never observe a truncated empty PID
+    # (open(..., "w") truncates first; that would look like a stale lock).
     _ensure_parent(LOCK_FILE)
-    with open(LOCK_FILE, "w", encoding="ascii") as handle:
+    tmp_path = LOCK_FILE + ".tmp"
+    with open(tmp_path, "w", encoding="ascii") as handle:
         handle.write(str(int(pid)))
+    os.replace(tmp_path, LOCK_FILE)
 
 
 def _acquire_lock():
@@ -657,12 +661,14 @@ def main(argv):
     package_paths = list(plan.get("package_paths") or [])
     fields = dict(plan.get("status_fields") or {})
 
-    # Claim lock ownership for this worker.
+    # Claim lock ownership for this worker (atomic replace; avoid empty PID race).
     parent = os.path.dirname(lock_file)
     if parent and not os.path.exists(parent):
         os.makedirs(parent)
-    with open(lock_file, "w", encoding="ascii") as handle:
+    tmp_lock = lock_file + ".tmp"
+    with open(tmp_lock, "w", encoding="ascii") as handle:
         handle.write(str(os.getpid()))
+    os.replace(tmp_lock, lock_file)
 
     try:
         _set_status(
