@@ -769,6 +769,8 @@ class SchoolRuntimeCliTests(unittest.TestCase):
             ),
             mock.patch.object(daemon, "save_runtime_status"),
             mock.patch.object(daemon, "build_runtime_snapshot", return_value={}),
+            mock.patch.object(daemon, "mark_inflight_action"),
+            mock.patch.object(daemon, "clear_inflight_action"),
         ):
             self.runtime.handle_runtime_action = mock.Mock(
                 return_value=(True, "bad", "shape")
@@ -791,6 +793,8 @@ class SchoolRuntimeCliTests(unittest.TestCase):
             ),
             mock.patch.object(daemon, "save_runtime_status"),
             mock.patch.object(daemon, "build_runtime_snapshot", return_value={}),
+            mock.patch.object(daemon, "mark_inflight_action"),
+            mock.patch.object(daemon, "clear_inflight_action"),
         ):
             self.runtime.handle_runtime_action = mock.Mock(
                 side_effect=RuntimeError("boom")
