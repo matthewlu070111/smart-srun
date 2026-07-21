@@ -152,6 +152,45 @@ class SplitZipDigestTests(unittest.TestCase):
         self.assertEqual(updater._parse_sha256("not-a-hash file"), "")
 
 
+class UpdaterHttpFallbackTests(unittest.TestCase):
+    def test_fetch_text_falls_back_when_stdlib_lacks_idna_codec(self):
+        # OpenWrt python3-light: urllib exists but "example.com".encode("idna")
+        # raises LookupError; updater must use uclient-fetch/wget instead.
+        with (
+            mock.patch.object(updater, "_stdlib_http_is_usable", return_value=False),
+            mock.patch.object(
+                updater,
+                "_fetch_via_system_client",
+                return_value=b'{"tag_name":"v1.4.0"}',
+            ) as system_fetch,
+        ):
+            text = updater._fetch_text(
+                "https://api.github.com/repos/example/smart-srun/releases/latest"
+            )
+
+        self.assertEqual(text, '{"tag_name":"v1.4.0"}')
+        system_fetch.assert_called_once()
+
+    def test_fetch_text_falls_back_when_urlopen_raises_lookup_error(self):
+        with (
+            mock.patch.object(updater, "_stdlib_http_is_usable", return_value=True),
+            mock.patch.object(
+                updater.urlrequest,
+                "urlopen",
+                side_effect=LookupError("unknown encoding: idna"),
+            ),
+            mock.patch.object(
+                updater,
+                "_fetch_via_system_client",
+                return_value=b"ok-from-wget",
+            ) as system_fetch,
+        ):
+            text = updater._fetch_text("https://example.invalid/x")
+
+        self.assertEqual(text, "ok-from-wget")
+        system_fetch.assert_called_once()
+
+
 class UpdateFinishHandoffTests(unittest.TestCase):
     def test_write_finish_worker_uses_tmp_script_not_client_py(self):
         with tempfile.TemporaryDirectory() as tmp:

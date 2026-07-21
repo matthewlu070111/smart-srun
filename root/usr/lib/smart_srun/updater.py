@@ -173,17 +173,40 @@ def _fetch_json(url, timeout=12):
     return json.loads(text)
 
 
+def _stdlib_http_is_usable():
+    """OpenWrt python3-light often ships urllib but lacks the idna codec.
+
+    Hostname resolution then raises LookupError('unknown encoding: idna')
+    before any network IO. Prefer detecting that early so we can fall back to
+    uclient-fetch/wget (which work fine on these devices).
+    """
+    if urlrequest is None:
+        return False
+    try:
+        "example.com".encode("idna")
+    except LookupError:
+        return False
+    return True
+
+
 def _fetch_text(url, timeout=12, accept="*/*"):
-    if urlrequest is not None:
-        req = urlrequest.Request(
-            url,
-            headers={
-                "Accept": accept,
-                "User-Agent": "smart-srun-updater/1",
-            },
-        )
-        with urlrequest.urlopen(req, timeout=timeout) as response:
-            return response.read().decode("utf-8", "replace")
+    if _stdlib_http_is_usable():
+        try:
+            req = urlrequest.Request(
+                url,
+                headers={
+                    "Accept": accept,
+                    "User-Agent": "smart-srun-updater/1",
+                },
+            )
+            with urlrequest.urlopen(req, timeout=timeout) as response:
+                return response.read().decode("utf-8", "replace")
+        except LookupError:
+            # idna / codec path can still fail late on some builds.
+            pass
+        except OSError:
+            # Fall through to system clients when stdlib networking is broken.
+            pass
     return _fetch_via_system_client(url, timeout).decode("utf-8", "replace")
 
 
@@ -193,7 +216,19 @@ def _fetch_via_system_client(url, timeout=30):
         binary = shutil.which(command)
         if not binary:
             continue
-        args = [binary, "-q", "-O", "-", url]
+        if command == "wget":
+            args = [
+                binary,
+                "-q",
+                "-O",
+                "-",
+                "--timeout=%s" % int(timeout),
+                "--user-agent=smart-srun-updater/1",
+                url,
+            ]
+        else:
+            # uclient-fetch has no portable UA flag across OpenWrt versions.
+            args = [binary, "-q", "-O", "-", url]
         try:
             return subprocess.check_output(
                 args, stderr=subprocess.STDOUT, timeout=timeout
@@ -204,10 +239,17 @@ def _fetch_via_system_client(url, timeout=30):
 
 
 def _fetch_binary(url, timeout=30):
-    if urlrequest is not None:
-        req = urlrequest.Request(url, headers={"User-Agent": "smart-srun-updater/1"})
-        with urlrequest.urlopen(req, timeout=timeout) as response:
-            return response.read()
+    if _stdlib_http_is_usable():
+        try:
+            req = urlrequest.Request(
+                url, headers={"User-Agent": "smart-srun-updater/1"}
+            )
+            with urlrequest.urlopen(req, timeout=timeout) as response:
+                return response.read()
+        except LookupError:
+            pass
+        except OSError:
+            pass
     return _fetch_via_system_client(url, timeout)
 
 
