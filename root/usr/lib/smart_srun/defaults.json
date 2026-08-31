@@ -1,5 +1,6 @@
 {
   "enabled": "0",
+  "multi_wan_enabled": "0",
   "quiet_hours_enabled": "1",
   "quiet_start": "00:00",
   "quiet_end": "06:00",
