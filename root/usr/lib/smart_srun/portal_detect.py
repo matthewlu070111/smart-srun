@@ -75,9 +75,35 @@ class _NoRedirectHandler(urllib_request.HTTPRedirectHandler if urllib_request el
         return None
 
 
-def _fetch_once(url, timeout):
+def _stdlib_http_is_usable():
+    """OpenWrt python3-light ships urllib but often omits the idna codec.
+
+    Hostname encoding then raises LookupError('unknown encoding: idna')
+    before any network IO, so detect it up front and let the system HTTP
+    client (uclient-fetch / wget) run the probe instead.
+    """
     if not HAVE_URLLIB or not urllib_request:
-        return 200, {}, http_get(url, timeout=timeout)
+        return False
+    try:
+        "example.com".encode("idna")
+    except LookupError:
+        return False
+    return True
+
+
+def _fetch_via_system_client(url, timeout):
+    """Probe without stdlib networking.
+
+    uclient-fetch / wget follow redirects themselves, so no response headers
+    are available and the body is already the final landing page. _probe_url
+    still finds AC_ID via the HTML patterns.
+    """
+    return 200, {}, http_get(url, timeout=timeout)
+
+
+def _fetch_once(url, timeout):
+    if not _stdlib_http_is_usable():
+        return _fetch_via_system_client(url, timeout)
 
     opener = urllib_request.build_opener(_NoRedirectHandler)
     req = urllib_request.Request(url, headers=HEADER, method="GET")
@@ -91,6 +117,9 @@ def _fetch_once(url, timeout):
     except urllib_error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         return exc.code, dict(exc.headers.items()), body
+    except LookupError:
+        # idna / codec path can still fail late on some builds.
+        return _fetch_via_system_client(url, timeout)
     except Exception as exc:
         raise RuntimeError(humanize_http_errors(url, [exc]))
 
