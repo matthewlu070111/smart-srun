@@ -742,6 +742,17 @@ class DaemonStartupStateTests(unittest.TestCase):
         self.assertFalse(
             daemon._should_log_daemon_tick("在线，下一次检测间隔 30 秒", {})
         )
+        self.assertFalse(
+            daemon._should_log_daemon_tick("多 WAN 认证：2/2 条线路在线", {})
+        )
+        self.assertFalse(
+            daemon._should_log_daemon_tick("多 WAN 认证：3/3 条线路在线", {})
+        )
+        self.assertTrue(
+            daemon._should_log_daemon_tick(
+                "多 WAN 认证：1/2 条线路在线；wan.v2: 登录失败", {}
+            )
+        )
         self.assertTrue(daemon._should_log_daemon_tick("校园网配置未就绪", {}))
 
     def test_run_daemon_preserves_pending_action_context_on_startup(self):

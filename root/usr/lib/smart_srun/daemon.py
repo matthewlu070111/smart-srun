@@ -5,6 +5,7 @@
 """
 
 import os
+import re
 import time
 
 from config import (
@@ -60,6 +61,9 @@ from snapshot import build_runtime_snapshot
 
 DAEMON_LOCK_FILE = "/var/run/smart_srun/daemon.lock"
 ROUTINE_ONLINE_TICK_PREFIX = "在线，下一次检测间隔 "
+ROUTINE_MULTI_WAN_ONLINE_TICK = re.compile(
+    r"^多 WAN 认证：(\d+)/\1 条线路在线$"
+)
 PRESETS_REFRESH_INTERVAL_SECONDS = 24 * 60 * 60
 
 
@@ -82,7 +86,10 @@ def _make_daemon_state():
 def _should_log_daemon_tick(message, state=None):
     del state
     text = str(message or "")
-    return not text.startswith(ROUTINE_ONLINE_TICK_PREFIX)
+    return not (
+        text.startswith(ROUTINE_ONLINE_TICK_PREFIX)
+        or ROUTINE_MULTI_WAN_ONLINE_TICK.fullmatch(text)
+    )
 
 
 def load_pending_runtime_action():
