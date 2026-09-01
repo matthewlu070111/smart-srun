@@ -659,6 +659,9 @@ def _pause_managed_wired_accounts(cfg, state):
 def _daemon_tick_active(cfg, state, interval):
     online_interval = interval
     mode_msg = ""
+    managed_ids = set()
+    multi_message = ""
+    multi_sleep = interval
 
     if state["was_in_quiet"]:
         log("INFO", "quiet_exit", "leaving quiet hours, switching back to campus")
@@ -671,6 +674,18 @@ def _daemon_tick_active(cfg, state, interval):
             state["current_mode"] = "campus" if switched else "hotspot"
             if sw_msg:
                 mode_msg = sw_msg
+
+    # 多 WAN 维护必须先于活跃账号的 failover 前置检查。后者在有线模式下
+    # 只检查当前活跃账号的接口；若该接口掉线，不能因此跳过其它托管线路。
+    if multi_wan_enabled(cfg):
+        managed_ids, multi_message, multi_sleep = _maintain_managed_wired_accounts(
+            cfg, state, interval
+        )
+        if campus_uses_wired(cfg) and not managed_ids:
+            state["was_online"] = False
+            return multi_message, multi_sleep
+    else:
+        state["wired_auth_sessions"] = {}
 
     if failover_enabled(cfg):
         ready_ok, ready_msg, state["last_switch_ts"] = ensure_expected_profile(
@@ -688,21 +703,20 @@ def _daemon_tick_active(cfg, state, interval):
             message = "校园网配置未就绪"
             if ready_msg:
                 message = message + "；" + ready_msg
-            return message, min(interval, 30)
+            if multi_message:
+                message = message + "；" + multi_message
+            return message, min(interval, multi_sleep, 30)
 
     if failover_enabled(cfg) and state["current_mode"] == "hotspot":
         state["was_online"] = False
         message = "已切换到热点SSID，校园网SSID恢复后将自动切回"
         if mode_msg:
             message = message + "；" + mode_msg
-        return message, interval
+        if multi_message:
+            message = message + "；" + multi_message
+        return message, min(interval, multi_sleep)
 
-    multi_message = ""
-    multi_sleep = interval
     if multi_wan_enabled(cfg):
-        _, multi_message, multi_sleep = _maintain_managed_wired_accounts(
-            cfg, state, interval
-        )
         # In multi-WAN mode every wired account is controlled exclusively by
         # its own checkbox. Do not let the legacy default-account path log in a
         # disabled wired row behind the user's back.
@@ -714,8 +728,6 @@ def _daemon_tick_active(cfg, state, interval):
                 and (sessions.get(active_id, {}) or {}).get("online")
             )
             return multi_message, multi_sleep
-    else:
-        state["wired_auth_sessions"] = {}
 
     srun_profile = srun_auth.get_profile(cfg)
     next_sleep = interval

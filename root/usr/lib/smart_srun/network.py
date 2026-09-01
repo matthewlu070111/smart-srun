@@ -258,11 +258,12 @@ def wait_for_network_interface_ipv4(iface_name, timeout_seconds=12, interval_sec
 
 def resolve_bind_ip(url, cfg):
     host = extract_host_from_url(url)
+    wired_mode = campus_uses_wired(cfg)
 
-    # 多 WAN 环境不能依赖系统默认路由选源地址：PPPoE WAN 可能已经联网，
-    # 但校园门户只接受 DHCP 虚拟 WAN（例如 wan.v2）的地址。优先使用当前
-    # 账号指定接口的 IPv4，确保 init/challenge/login/logout 全链路走同一 WAN。
-    if campus_uses_wired(cfg):
+    # 有线模式优先使用指定接口的 IPv4。多 WAN 守护生成的账号视图会带上
+    # 严格绑定标记，此时缺少接口地址必须失败，不能把认证流量发到其它 WAN；
+    # 存量单有线配置没有该标记，缺地址时继续沿用原来的路由选源逻辑。
+    if wired_mode:
         iface = get_wired_iface(cfg)
         bind_ip = get_ipv4_from_network_interface(iface)
         log(
@@ -273,14 +274,18 @@ def resolve_bind_ip(url, cfg):
             bind_ip=bind_ip or "",
             reason="wired_interface" if bind_ip else "wired_interface_no_ip",
         )
-        if not bind_ip:
+        if bind_ip:
+            return bind_ip
+        if str(cfg.get("_multi_wan_strict_bind", "0")).strip() == "1":
             raise RuntimeError("有线接口 %s 尚未获取到 IPv4 地址" % iface)
-        return bind_ip
 
     bind_ip = get_local_ip_for_target(host) if host else None
-    reason = "route_to_host" if bind_ip else "no_route"
+    if wired_mode:
+        reason = "wired_interface_no_ip_route_fallback" if bind_ip else "no_route"
+    else:
+        reason = "route_to_host" if bind_ip else "no_route"
     host_ip = pick_valid_ip(host)
-    if host_ip and not campus_uses_wired(cfg):
+    if host_ip and not wired_mode:
         try:
             if ipaddress.ip_address(host_ip).is_private:
                 from wireless import (

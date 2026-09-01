@@ -953,7 +953,11 @@ def resolve_campus_account_config(cfg, account):
     resolved["campus_accounts"] = [account_copy]
     resolved["active_campus_id"] = account_id
     resolved["default_campus_id"] = account_id
-    return resolve_active_items(resolved)
+    resolved = resolve_active_items(resolved)
+    # 只对多 WAN 守护生成的账号视图启用严格绑定。存量单有线配置仍可在
+    # 指定接口暂时无地址时沿用原来的路由选源逻辑，避免升级后直接失效。
+    resolved["_multi_wan_strict_bind"] = "1"
+    return resolved
 
 
 def get_managed_wired_account_configs(cfg):

@@ -24,27 +24,12 @@
         "name": "Windows"
       },
       "operators": [
-        {
-          "suffix": "cmcc",
-          "label": "中国移动"
-        },
-        {
-          "suffix": "ctcc",
-          "label": "中国电信"
-        },
-        {
-          "suffix": "cucc",
-          "label": "中国联通"
-        },
-        {
-          "suffix": "",
-          "label": "校园网"
-        }
+        {"suffix": "cmcc", "label": "中国移动"},
+        {"suffix": "ctcc", "label": "中国电信"},
+        {"suffix": "cucc", "label": "中国联通"},
+        {"suffix": "", "label": "校园网"}
       ],
-      "contributors": [
-        "@matthewlu070111",
-        "@guiguisocute"
-      ],
+      "contributors": ["@matthewlu070111", "@guiguisocute"],
       "source_issue": ""
     },
     {
@@ -170,9 +155,7 @@
         "base_url": "http://10.10.184.56",
         "access_mode": "wired"
       },
-      "contributors": [
-        "@enoungh"
-      ],
+      "contributors": ["@enoungh"],
       "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/7"
     },
     {
@@ -184,9 +167,7 @@
         "ac_id": "4",
         "access_mode": "wired"
       },
-      "contributors": [
-        "@o-liverkk"
-      ],
+      "contributors": ["@o-liverkk"],
       "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/15"
     },
     {
@@ -207,18 +188,10 @@
         "double_stack": "0"
       },
       "operators": [
-        {
-          "suffix": "hcmcc",
-          "label": "中国移动"
-        },
-        {
-          "suffix": "",
-          "label": "校园网"
-        }
+        {"suffix": "hcmcc", "label": "中国移动"},
+        {"suffix": "", "label": "校园网"}
       ],
-      "contributors": [
-        "@zhaogods"
-      ],
+      "contributors": ["@zhaogods"],
       "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/20"
     },
     {
@@ -242,15 +215,9 @@
         "name": "Windows"
       },
       "operators": [
-        {
-          "suffix": "stu.nchu.edu.cn",
-          "label": "学生用户"
-        }
+        {"suffix": "stu.nchu.edu.cn", "label": "学生用户"}
       ],
-      "contributors": [
-        "@REALBochengWen",
-        "@guiguisocute"
-      ],
+      "contributors": ["@REALBochengWen", "@guiguisocute"],
       "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/22",
       "doc_url": "https://github.com/matthewlu070111/smart-srun/blob/main/doc/nchu.md"
     },
@@ -264,14 +231,9 @@
         "ac_id": "1"
       },
       "operators": [
-        {
-          "suffix": "",
-          "label": "校园网"
-        }
+        {"suffix": "", "label": "校园网"}
       ],
-      "contributors": [
-        "@issue-reporter"
-      ],
+      "contributors": ["@issue-reporter"],
       "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/18"
     },
     {
@@ -285,14 +247,9 @@
         "ssid": "LYU-WiFi7"
       },
       "operators": [
-        {
-          "suffix": "",
-          "label": "校园网"
-        }
+        {"suffix": "", "label": "校园网"}
       ],
-      "contributors": [
-        "@YHXJLB"
-      ],
+      "contributors": ["@YHXJLB"],
       "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/19"
     }
   ]

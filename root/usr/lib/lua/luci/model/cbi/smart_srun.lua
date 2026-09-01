@@ -803,7 +803,7 @@ function tables_html.cfgvalue()
             else
                 is_connected = wifi_match and identity_match
             end
-            if is_managed then
+            if is_managed and next(wired_session) ~= nil then
                 is_connected = wired_session.online == true
             end
             local badge_parts = {}

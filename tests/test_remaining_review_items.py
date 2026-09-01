@@ -94,12 +94,31 @@ class NetworkBindIpTests(unittest.TestCase):
         get_ip.assert_called_once_with("wan.v2")
 
     def test_wired_bind_ip_fails_closed_when_selected_interface_has_no_ip(self):
-        cfg = {"campus_access_mode": "wired", "wired_iface": "wan.v2"}
+        cfg = {
+            "campus_access_mode": "wired",
+            "wired_iface": "wan.v2",
+            "_multi_wan_strict_bind": "1",
+        }
         with mock.patch.object(
             network, "get_ipv4_from_network_interface", return_value=None
         ):
             with self.assertRaisesRegex(RuntimeError, "wan.v2"):
                 network.resolve_bind_ip(PORTAL_LOGIN_URL, cfg)
+
+    def test_legacy_wired_config_falls_back_to_route_when_iface_has_no_ip(self):
+        cfg = {"campus_access_mode": "wired", "wired_iface": "wan"}
+        with (
+            mock.patch.object(
+                network, "get_ipv4_from_network_interface", return_value=None
+            ),
+            mock.patch.object(
+                network, "get_local_ip_for_target", return_value=BIND_IP
+            ) as route_ip,
+        ):
+            bind_ip = network.resolve_bind_ip(PORTAL_LOGIN_URL, cfg)
+
+        self.assertEqual(BIND_IP, bind_ip)
+        route_ip.assert_called_once_with(PORTAL_HOST)
 
     def test_get_ipv4_falls_back_to_ip_addr_when_ubus_json_is_invalid(self):
         calls = []
