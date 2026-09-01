@@ -771,7 +771,8 @@ function tables_html.cfgvalue()
             local campus_ssid = tostring(a.ssid or "")
             local campus_bssid = tostring(a.bssid or ""):lower()
             local access_mode = tostring(a.access_mode or "wifi")
-            local ssid_display = access_mode == "wired" and "有线" or tostring(a.ssid or "")
+            local bind_iface = tostring(a.network_interface or "wan")
+            local ssid_display = access_mode == "wired" and ("有线(%s)"):format(bind_iface) or tostring(a.ssid or "")
             local is_active = (aid == active_cid)
             local is_default = (aid == default_cid)
             local wifi_match = current_mode == "campus"
@@ -782,7 +783,7 @@ function tables_html.cfgvalue()
             local wired_match = current_mode == "campus"
                 and current_campus_access_mode == "wired"
                 and access_mode == "wired"
-                and current_iface == "wan"
+                and current_iface == bind_iface
             local identity_match = campus_user ~= "" and online_account_main == campus_user
             local is_connected = false
             if access_mode == "wired" then

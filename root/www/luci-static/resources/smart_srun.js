@@ -390,6 +390,7 @@
     setRowDisabled('jm-ssid-row', 'jm-ssid', wired);
     setRowDisabled('jm-bssid-row', 'jm-bssid', wired);
     setRowDisabled('jm-radio-row', 'jm-radio', wired);
+    setRowDisabled('jm-netif-row', 'jm-netif', !wired);
   }
 
   function showNativeModal(title, bodyHtml, afterOpen, onSave) {
@@ -584,6 +585,7 @@
       user_id: item.user_id || '',
       operator_suffix: item.operator_suffix || '',
       access_mode: item.access_mode || 'wifi',
+      network_interface: item.network_interface || 'wan',
       base_url: item.base_url || '',
       ac_id: item.ac_id || '1',
       n: item.n || '',
@@ -845,6 +847,7 @@
         '<input id="jm-operator_suffix" value="' + escapeHtml(initialValues.operator_suffix) + '" placeholder="">' +
         '<div id="jm-operator-suffix-hint" style="display:none;color:#d97706;font-size:12px;margin-top:.25rem;"></div></div>' +
       '<div class="smart-native-row"><label>接入方式</label><select id="jm-access_mode"><option value="wifi"' + (initialValues.access_mode === 'wifi' ? ' selected' : '') + '>无线</option><option value="wired"' + (initialValues.access_mode === 'wired' ? ' selected' : '') + '>有线（WAN）</option></select></div>' +
+      '<div class="smart-native-row" id="jm-netif-row"><label>绑定网口（仅有线）</label><input id="jm-netif" value="' + escapeHtml(initialValues.network_interface) + '" placeholder="wan"></div>' +
       '<div class="smart-native-row"><label>认证地址</label><input id="jm-base_url" value="' + escapeHtml(initialValues.base_url) + '"></div>' +
       '<div class="smart-native-row"><label>AC_ID</label><span><input id="jm-ac_id" value="' + escapeHtml(initialValues.ac_id) + '"> <button type="button" id="jm-detect-acid" class="btn cbi-button">嗅探</button> <span id="jm-detect-acid-status" style="margin-left:6px;color:#6b7280;"></span></span></div>' +
       '<details class="smart-native-advanced"><summary>高级登录参数</summary>' +
@@ -949,6 +952,7 @@
         'jm-user_id': initialValues.user_id,
         'jm-operator_suffix': '',
         'jm-access_mode': 'wifi',
+        'jm-netif': 'wan',
         'jm-base_url': '',
         'jm-ac_id': '',
         'jm-login-n': DEFAULT_LOGIN_SHAPE.n,
@@ -1072,6 +1076,7 @@
       fd.append('user_id', document.getElementById('jm-user_id').value);
       fd.append('operator_suffix', document.getElementById('jm-operator_suffix').value);
       fd.append('access_mode', document.getElementById('jm-access_mode').value);
+      fd.append('network_interface', document.getElementById('jm-netif').value);
       fd.append('password', getFieldValue('jm-password'));
       fd.append('base_url', document.getElementById('jm-base_url').value);
       fd.append('ac_id', document.getElementById('jm-ac_id').value);

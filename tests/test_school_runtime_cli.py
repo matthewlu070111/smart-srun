@@ -566,6 +566,7 @@ class SchoolRuntimeCliTests(unittest.TestCase):
                     "alice",
                     "hcmcc",
                     "wired",
+                    "wan2",
                     PORTAL_ORIGIN,
                     "4",
                     "128",
@@ -590,6 +591,7 @@ class SchoolRuntimeCliTests(unittest.TestCase):
         self.assertEqual(fields["double_stack"], "1")
         self.assertEqual(fields["login_os"], "windows")
         self.assertEqual(fields["login_name"], "Windows")
+        self.assertEqual(fields["network_interface"], "wan2")
         self.assertEqual(fields["label"], "alice@hcmcc")
 
     def test_config_show_works_when_runtime_resolution_is_broken(self):

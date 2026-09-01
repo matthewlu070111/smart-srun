@@ -13,6 +13,7 @@ from config import (
     apply_default_selection_for_runtime,
     backoff_enabled,
     begin_manual_login_service_guard,
+    campus_network_interface,
     campus_uses_wired,
     clear_log_context,
     get_manual_terminal_check_attempts,
@@ -592,11 +593,12 @@ def clean_slate_for_manual_login(cfg, online_user=""):
             "manual_preclean_done",
             "wired mode: skipping wireless rebuild, using WAN",
         )
+        iface = campus_network_interface(cfg)
         wan_ip = wait_for_network_interface_ipv4(
-            "wan", timeout_seconds=get_switch_ready_timeout_seconds(cfg)
+            iface, timeout_seconds=get_switch_ready_timeout_seconds(cfg)
         )
         if not wan_ip:
-            return False, "有线校园网模式下，WAN 口尚未获取到 IPv4 地址"
+            return False, "有线校园网模式下，%s 口尚未获取到 IPv4 地址" % iface
         return True, ""
 
     active_data = parse_wireless_iface_data()

@@ -605,6 +605,7 @@ function action_enqueue()
                 operator = fv("operator"), operator_suffix = fv("operator_suffix"),
                 password = fv("password"),
                 access_mode = fv("access_mode"),
+                network_interface = fv("network_interface"),
                 base_url = normalize_base_url(fv("base_url")), ac_id = fv("ac_id"),
                 ssid = fv("ssid"), bssid = fv("bssid"), radio = fv("radio"),
                 n = fv("n"), type = fv("type"), enc = fv("enc"),
@@ -619,6 +620,9 @@ function action_enqueue()
                 item.ssid = ""
                 item.bssid = ""
                 item.radio = ""
+            end
+            if item.network_interface == "" then
+                item.network_interface = "wan"
             end
             if item.label == "" then
                 local suffix = item.operator_suffix or ""

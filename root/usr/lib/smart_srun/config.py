@@ -908,6 +908,16 @@ def campus_uses_wired(cfg):
     )
 
 
+def normalize_network_interface(value):
+    """有线接入绑定的 L3 网络接口，默认 wan。"""
+    return str(value or "wan").strip() or "wan"
+
+
+def campus_network_interface(cfg):
+    """返回当前账号有线接入绑定的网络接口（如 wan / wan2）。"""
+    return normalize_network_interface((cfg or {}).get("campus_network_interface"))
+
+
 def _pointer_meta(expect_hotspot):
     if expect_hotspot:
         return {
@@ -1080,6 +1090,9 @@ def resolve_active_items(cfg):
     cfg["base_url"] = normalize_base_url(campus.get("base_url", ""))
     cfg["campus_access_mode"] = normalize_campus_access_mode(
         campus.get("access_mode", "wifi")
+    )
+    cfg["campus_network_interface"] = normalize_network_interface(
+        campus.get("network_interface", "wan")
     )
     cfg["ac_id"] = str(campus.get("ac_id", "1")).strip()
     cfg["campus_ssid"] = str(campus.get("ssid", "")).strip()

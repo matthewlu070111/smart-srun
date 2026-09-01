@@ -981,7 +981,7 @@ def _print_account_table(raw):
         label = acc.get("label", "") or (
             "%s@%s" % (user_id, suffix) if suffix else user_id
         )
-        ssid = acc.get("ssid", "") if mode != "wired" else "-"
+        ssid = acc.get("ssid", "") if mode != "wired" else (acc.get("network_interface", "") or "wan")
         login_shape = "%s/%s/%s/%s" % (
             str(acc.get("n", "") or DEFAULT_LOGIN_N),
             str(acc.get("type", "") or DEFAULT_LOGIN_TYPE),
@@ -1222,6 +1222,9 @@ def _interactive_campus(existing=None):
     fields["password"] = _prompt("密码", item.get("password", ""), password=True)
     fields["access_mode"] = _prompt(
         "接入方式", item.get("access_mode", "wifi"), choices=["wifi", "wired"]
+    )
+    fields["network_interface"] = _prompt(
+        "绑定网口（仅有线模式，默认 wan）", item.get("network_interface", "wan")
     )
     fields["base_url"] = _prompt("认证地址", item.get("base_url", ""))
     fields["ac_id"] = _prompt("AC_ID", item.get("ac_id", "1"))

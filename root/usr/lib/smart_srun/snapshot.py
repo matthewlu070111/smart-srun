@@ -8,6 +8,7 @@ import time
 
 from config import (
     CONNECTIVITY_CACHE_SECONDS,
+    campus_network_interface,
     campus_uses_wired,
     load_runtime_state,
 )
@@ -38,13 +39,15 @@ def build_runtime_snapshot(cfg, state=None):
     ip = get_ipv4_from_network_interface(net) if net else None
     previous = state if state is not None else load_runtime_state()
     wired_mode = campus_uses_wired(cfg)
-    wan_ip = get_ipv4_from_network_interface("wan") if wired_mode else None
+    wan_ip = get_ipv4_from_network_interface(
+        campus_network_interface(cfg)
+    ) if wired_mode else None
     wired_online = False
 
     if wired_mode and wan_ip:
         ssid = "有线接入"
         bssid = ""
-        net = "wan"
+        net = campus_network_interface(cfg)
         ip = wan_ip
 
     connectivity = "未连接"
@@ -122,7 +125,9 @@ def build_runtime_snapshot(cfg, state=None):
 
     current_campus_access_mode = ""
     if mode == "campus":
-        current_campus_access_mode = "wired" if wired_mode and net == "wan" else "wifi"
+        current_campus_access_mode = (
+            "wired" if wired_mode and net == campus_network_interface(cfg) else "wifi"
+        )
 
     return {
         "current_mode": mode,
