@@ -1155,7 +1155,11 @@ def resolve_active_items(cfg):
     cfg["campus_access_mode"] = normalize_campus_access_mode(
         campus.get("access_mode", "wifi")
     )
-    cfg["wired_iface"] = normalize_wired_iface(campus.get("wired_iface", "wan"))
+    # #31 called this wired_iface, #32 called the same thing network_interface.
+    # One field wins; the loser is still read so nothing hand-written is lost.
+    cfg["wired_iface"] = normalize_wired_iface(
+        campus.get("wired_iface") or campus.get("network_interface") or "wan"
+    )
     cfg["campus_auth_enabled"] = normalize_auth_enabled(
         campus.get("auth_enabled", "0")
     )
