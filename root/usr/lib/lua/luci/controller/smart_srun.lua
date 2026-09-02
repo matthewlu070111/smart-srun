@@ -10,6 +10,7 @@ local schema = require "luci.smart_srun.schema"
 local STATE_FILE = "/var/run/smart_srun/state.json"
 local ACTION_FILE = "/var/run/smart_srun/action.json"
 local INFLIGHT_ACTION_FILE = "/var/run/smart_srun/action_inflight.json"
+local DAEMON_LOCK_FILE = "/var/run/smart_srun/daemon.lock"
 local LOG_FILE = "/var/log/smart_srun.log"
 local USER_PRESETS_FILE = "/usr/lib/smart_srun/user_presets.json"
 local USER_PRESETS_MAX_ITEMS = 50
@@ -182,6 +183,20 @@ local function collect_client_pids()
     return pids
 end
 
+-- state.daemon_running 只会被写成 true，守护进程被 SIGKILL / OOM / 断电打断后
+-- 这个标记会一直留着。守护进程持有的 flock 在进程死亡时由内核释放，所以用
+-- 锁文件里的 PID 加 cmdline 校验判断存活，PID 复用也不会误判。
+local function daemon_is_alive()
+    local pid = tostring(fs.readfile(DAEMON_LOCK_FILE) or ""):match("^%s*(%d+)")
+    if not pid then
+        return false
+    end
+
+    local cmdline = fs.readfile("/proc/" .. pid .. "/cmdline") or ""
+    cmdline = cmdline:gsub("%z", " ")
+    return cmdline:find("/usr/lib/smart_srun/client.py", 1, true) ~= nil
+end
+
 local function force_stop_client_processes()
     local pids = collect_client_pids()
     for _, pid in ipairs(pids) do
@@ -241,7 +256,7 @@ local function current_pending_runtime_action()
 
     local state = read_json_file(STATE_FILE)
     if tostring(state.action_result or "") == "pending" then
-        local daemon_running = state.daemon_running and true or false
+        local daemon_running = daemon_is_alive()
         local started_at = tonumber(state.action_started_at) or tonumber(state.last_action_ts) or 0
         if daemon_running or (started_at > 0 and (os.time() - started_at) < 15) then
             return tostring(state.pending_action or state.last_action or "")

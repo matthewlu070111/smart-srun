@@ -572,6 +572,51 @@ def _acquire_daemon_lock(max_wait_seconds=20):
     return lock_handle
 
 
+def _daemon_pid_from_lock():
+    try:
+        with open(DAEMON_LOCK_FILE, "r", encoding="utf-8") as handle:
+            return int((handle.read() or "").strip() or 0)
+    except (OSError, ValueError):
+        return 0
+
+
+def daemon_is_alive():
+    """Whether a daemon process is actually running right now.
+
+    state["daemon_running"] is only ever written True, so an abnormal exit
+    (SIGKILL, OOM, power loss) leaves it set for the rest of the boot and
+    every later status read reports a dead daemon as running. The kernel
+    drops the flock held by run_daemon() when that process dies, so the
+    lock -- not the state flag -- is the authoritative signal.
+    """
+    try:
+        import fcntl
+    except ImportError:
+        fcntl = None
+
+    if fcntl is None:
+        pid = _daemon_pid_from_lock()
+        if pid <= 0:
+            return False
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return False
+        return True
+
+    try:
+        with open(DAEMON_LOCK_FILE, "r", encoding="utf-8") as handle:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                # Still held: a live daemon owns the lock.
+                return True
+            fcntl.flock(handle, fcntl.LOCK_UN)
+    except OSError:
+        return False
+    return False
+
+
 def run_daemon(runtime=None):
     _daemon_lock = _acquire_daemon_lock()
     reconcile_manual_login_service_guard()
@@ -802,7 +847,7 @@ def _show_status(cfg):
     interval = raw.get("interval", "60")
     enabled = raw.get("enabled", "0") == "1"
     in_quiet = state.get("in_quiet", False)
-    daemon_running = state.get("daemon_running", False)
+    daemon_running = daemon_is_alive()
 
     if ok and conn_level == "online":
         status_str = "在线"
