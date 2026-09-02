@@ -1403,7 +1403,19 @@ def load_config():
 def localize_error(message):
     mapping = {
         "challenge_expire_error": "挑战码已过期，请重试。",
-        "no_response_data_error": "网关返回异常（可能已在线）。",
+        # 调用方在报这条之前已经复核过"是否其实已在线"，所以走到本地化时
+        # 一定不是在线态，旧文案的"可能已在线"只会把人带偏（issue #29）。
+        "no_response_data_error": (
+            "网关收到了请求但没返回认证数据，通常是 AC_ID 与实际接入的"
+            "控制器不符。请先用浏览器打开学校认证页，核对地址栏里的 ac_id "
+            "并填回本插件；若浏览器同样打不开认证页，则改用网页认证。"
+        ),
+        "portal_intercept_error": (
+            "认证请求被网页门户拦截，没有到达 SRun 网关。请先用浏览器打开"
+            "任意网页完成网页认证，再回来点登录；如果反复出现，多半是认证"
+            "地址填错了。"
+        ),
+        "not_online_error": "网关显示当前 IP 未在线。",
         "login_error": "认证失败。",
         "sign_error": "签名错误（参数不匹配）。",
         "username_or_password_error": "用户名或密码错误。",

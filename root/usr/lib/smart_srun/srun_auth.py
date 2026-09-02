@@ -136,9 +136,24 @@ def login(profile, srun_portal_api, cfg, ip, i_value, hmd5, chksum, bind_ip=None
         type=cfg.get("type", ""),
     )
     with timed() as t:
-        data = parse_jsonp(
-            http_get(srun_portal_api, params=params, timeout=5, bind_ip=bind_ip)
-        )
+        raw = http_get(srun_portal_api, params=params, timeout=5, bind_ip=bind_ip)
+        try:
+            data = parse_jsonp(raw)
+        except (TypeError, ValueError):
+            # SRun 网关必须回 JSONP。回不出来说明这次请求压根没到网关，绝大多数
+            # 是上游强制门户把它劫成了一张 HTML 认证页。不单独标出来的话，用户
+            # 只会看到一条 JSON 解析异常，不知道要先开浏览器过网页认证。
+            log(
+                "WARN",
+                "srun_login_response",
+                "login response was not JSONP",
+                username=cfg.get("username", ""),
+                ok=False,
+                error_code="portal_intercept_error",
+                duration_ms=t.ms,
+                body_head=str(raw or "")[:80].replace("\n", " "),
+            )
+            return False, "portal_intercept_error"
     ok, message = profile.parse_login_response(data)
     log(
         "INFO" if ok else "WARN",
@@ -311,14 +326,18 @@ def default_login_once(app_ctx):
 
     if (not ok) and ("no_response_data_error" in message.lower()):
         try:
-            online, online_msg = default_query_online_status(
+            online, _online_msg = default_query_online_status(
                 app_ctx, expected_username=cfg["username"], bind_ip=bip
             )
             if online:
                 return True, "已在线"
-            return False, online_msg
         except Exception:
             pass
+        # 这里曾经返回在线查询的结果，于是网关的 no_response_data_error 被一句
+        # not_online_error 覆盖掉：那句话只是复述"你没登上"，把唯一能定位问题
+        # 的错误码丢了，也没告诉用户下一步做什么（issue #29）。保留原始错误码，
+        # 由 localize_error 给出可执行的说明。
+        return False, message
 
     if (not ok) and (
         "already online" in message.lower() or "e2620" in message.lower()
