@@ -346,7 +346,7 @@ class SchoolRuntimeConfigTests(unittest.TestCase):
                     "user_id": "alice",
                     "operator_suffix": "ydyx",
                     "password": "pw",
-                    "base_url": "http://172.16.245.50",
+                    "base_url": PORTAL_ORIGIN,
                     "ac_id": "1",
                     "access_mode": "wired",
                     "wired_iface": "wan.v2",

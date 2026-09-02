@@ -7,9 +7,13 @@ School maintainers can override the placeholders locally without editing test
 files, for example:
 
     SMARTSRUN_TEST_PORTAL_ORIGIN=http://portal.example.edu
-    SMARTSRUN_TEST_DEFAULT_BASE_URL=http://172.17.1.2
     SMARTSRUN_TEST_PORTAL_IPV4_ORIGIN=http://198.51.100.10
     SMARTSRUN_TEST_PORTAL_BARE_HOST=203.0.113.5
+    SMARTSRUN_TEST_WIRED_BIND_IP=192.0.2.20
+
+All defaults are documentation-range addresses (RFC 5737). Keep real campus
+gateways out of this file: they belong in the preset JSON, where a school
+changing its gateway is supposed to show up as a diff.
 """
 
 import os
@@ -50,9 +54,11 @@ PORTAL_BARE_ORIGIN = "http://" + PORTAL_BARE_HOST
 
 CLIENT_IP = os.environ.get("SMARTSRUN_TEST_CLIENT_IP", "192.0.2.8").strip()
 BIND_IP = os.environ.get("SMARTSRUN_TEST_BIND_IP", "192.0.2.9").strip()
-PROJECT_DEFAULT_BASE_URL = _origin(
-    "SMARTSRUN_TEST_DEFAULT_BASE_URL", "http://172.17.1.2"
-)
+
+# The address the pinned WAN hands out in multi-WAN tests. Interface names
+# such as "wan.v2" stay inline: they are an OpenWrt VLAN naming shape that the
+# LuCI editor already shows every user, not a campus address.
+WIRED_BIND_IP = os.environ.get("SMARTSRUN_TEST_WIRED_BIND_IP", "192.0.2.20").strip()
 
 
 def portal_page_url(origin=PORTAL_ORIGIN, acid="1", extra=""):

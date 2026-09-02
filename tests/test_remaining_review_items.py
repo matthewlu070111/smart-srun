@@ -14,7 +14,14 @@ if MODULE_DIR not in sys.path:
     sys.path.insert(0, MODULE_DIR)
 
 
-from _portal_urls import BIND_IP, PORTAL_HOST, PORTAL_LOGIN_URL, PORTAL_PING_URL
+from _portal_urls import (
+    BIND_IP,
+    PORTAL_BARE_HOST,
+    PORTAL_HOST,
+    PORTAL_LOGIN_URL,
+    PORTAL_PING_URL,
+    WIRED_BIND_IP,
+)
 import config
 import daemon
 import network
@@ -25,17 +32,17 @@ import wireless
 class NetworkBindIpTests(unittest.TestCase):
     def test_network_device_is_resolved_from_bound_dhcp_ip(self):
         output = (
-            "33: wan.v2    inet 10.42.12.9/22 brd 10.42.15.255 "
+            "33: wan.v2    inet " + WIRED_BIND_IP + "/22 brd 192.0.2.255 "
             "scope global wan.v2"
         )
         with mock.patch.object(network, "run_cmd", return_value=(True, output)):
-            device = network.get_network_device_for_ip("10.42.12.9")
+            device = network.get_network_device_for_ip(WIRED_BIND_IP)
 
         self.assertEqual(device, "wan.v2")
 
     def test_bound_socket_uses_source_ip_and_so_bindtodevice(self):
         fake_socket = mock.Mock()
-        address = ("172.16.245.50", 80)
+        address = (PORTAL_BARE_HOST, 80)
         addrinfo = [
             (network.socket.AF_INET, network.socket.SOCK_STREAM, 6, "", address)
         ]
@@ -48,13 +55,13 @@ class NetworkBindIpTests(unittest.TestCase):
             result = network._create_bound_connection(
                 address,
                 5,
-                ("10.42.12.9", 0),
+                (WIRED_BIND_IP, 0),
                 "wan.v2",
             )
 
         self.assertIs(result, fake_socket)
         getaddrinfo.assert_called_once_with(
-            b"172.16.245.50", 80, 0, network.socket.SOCK_STREAM
+            PORTAL_BARE_HOST.encode("ascii"), 80, 0, network.socket.SOCK_STREAM
         )
         fake_socket.settimeout.assert_called_once_with(5)
         fake_socket.setsockopt.assert_called_once_with(
@@ -62,7 +69,7 @@ class NetworkBindIpTests(unittest.TestCase):
             getattr(network.socket, "SO_BINDTODEVICE", 25),
             b"wan.v2\0",
         )
-        fake_socket.bind.assert_called_once_with(("10.42.12.9", 0))
+        fake_socket.bind.assert_called_once_with((WIRED_BIND_IP, 0))
         fake_socket.connect.assert_called_once_with(address)
 
     def test_init_ip_falls_back_to_explicit_dhcp_bind_ip(self):
@@ -74,14 +81,14 @@ class NetworkBindIpTests(unittest.TestCase):
                 side_effect=AssertionError("default route must not replace bind IP"),
             ),
         ):
-            ip = srun_auth.init_getip(PORTAL_LOGIN_URL, bind_ip="10.42.12.9")
+            ip = srun_auth.init_getip(PORTAL_LOGIN_URL, bind_ip=WIRED_BIND_IP)
 
-        self.assertEqual(ip, "10.42.12.9")
+        self.assertEqual(ip, WIRED_BIND_IP)
 
     def test_wired_bind_ip_comes_from_selected_virtual_wan(self):
         cfg = {"campus_access_mode": "wired", "wired_iface": "wan.v2"}
         with (
-            mock.patch.object(network, "get_ipv4_from_network_interface", return_value="10.42.12.9") as get_ip,
+            mock.patch.object(network, "get_ipv4_from_network_interface", return_value=WIRED_BIND_IP) as get_ip,
             mock.patch.object(
                 network,
                 "get_local_ip_for_target",
@@ -90,7 +97,7 @@ class NetworkBindIpTests(unittest.TestCase):
         ):
             bind_ip = network.resolve_bind_ip(PORTAL_LOGIN_URL, cfg)
 
-        self.assertEqual(bind_ip, "10.42.12.9")
+        self.assertEqual(bind_ip, WIRED_BIND_IP)
         get_ip.assert_called_once_with("wan.v2")
 
     def test_wired_bind_ip_fails_closed_when_selected_interface_has_no_ip(self):
