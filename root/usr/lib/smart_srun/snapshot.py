@@ -9,6 +9,7 @@ import time
 from config import (
     CONNECTIVITY_CACHE_SECONDS,
     campus_uses_wired,
+    get_wired_iface,
     load_runtime_state,
 )
 from network import (
@@ -38,14 +39,17 @@ def build_runtime_snapshot(cfg, state=None):
     ip = get_ipv4_from_network_interface(net) if net else None
     previous = state if state is not None else load_runtime_state()
     wired_mode = campus_uses_wired(cfg)
-    wan_ip = get_ipv4_from_network_interface("wan") if wired_mode else None
+    wired_iface = get_wired_iface(cfg) if wired_mode else ""
+    wired_ip = (
+        get_ipv4_from_network_interface(wired_iface) if wired_mode else None
+    )
     wired_online = False
 
-    if wired_mode and wan_ip:
+    if wired_mode and wired_ip:
         ssid = "有线接入"
         bssid = ""
-        net = "wan"
-        ip = wan_ip
+        net = wired_iface
+        ip = wired_ip
 
     connectivity = "未连接"
     connectivity_level = "offline"
@@ -83,10 +87,10 @@ def build_runtime_snapshot(cfg, state=None):
     else:
         previous["connectivity_checked_at"] = int(time.time())
 
-    if cfg.get("username") and wired_mode and wan_ip:
+    if cfg.get("username") and wired_mode and wired_ip:
         try:
             online_now, online_user, _ = runtime.query_online_identity(
-                app_ctx, expected_username=cfg.get("username", ""), bind_ip=wan_ip
+                app_ctx, expected_username=cfg.get("username", ""), bind_ip=wired_ip
             )
             if online_now and online_user:
                 wired_online = True
@@ -122,7 +126,9 @@ def build_runtime_snapshot(cfg, state=None):
 
     current_campus_access_mode = ""
     if mode == "campus":
-        current_campus_access_mode = "wired" if wired_mode and net == "wan" else "wifi"
+        current_campus_access_mode = (
+            "wired" if wired_mode and net == wired_iface else "wifi"
+        )
 
     return {
         "current_mode": mode,

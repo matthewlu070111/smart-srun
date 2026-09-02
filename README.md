@@ -111,7 +111,8 @@ apk add --allow-untrusted ./luci-app-smart-srun-bundle-*.apk
 在 LuCI 页面进入 **服务 → SMART SRun**，在「基础设置」标签页中：
 
 - **登录配置**：选择学校
-- **校园网账号**：添加学工号、密码、运营商，支持多账号管理
+- **校园网账号**：添加学工号、密码、运营商，支持多账号管理；有线账号可分别绑定 `wan`、`wan.v2` 等接口
+- **多 WAN 并行认证**：打开全局开关，并在每个有线账号中启用“参与并行守护”，后台会同时维护所有已勾选线路
 - **热点配置**：配置个人热点 SSID 和密码，供夜间自动切换使用
 - **手动登录 / 登出**：随时触发，带进度反馈弹窗
 - **手动切网**：一键切到热点或切回校园网
@@ -213,6 +214,16 @@ srunnet config hotspot edit hotspot-1
 srunnet config hotspot rm hotspot-2
 srunnet config hotspot default hotspot-1
 ```
+
+有线多 WAN 场景下，每个校园网账号还可设置独立的 `wired_iface`。例如校园网
+DHCP 地址位于 `wan.v2`，就在 LuCI 的账号编辑框中选择“有线（指定接口）”并填写
+`wan.v2`；登录时会动态读取该接口的 IPv4，并同时绑定源地址和所属 L3 设备，
+避免策略路由把认证请求送到其它 PPPoE WAN。不应把某次 DHCP 获得的地址写死到配置中。
+
+如需三条 WAN 同时进行 Web 认证：先设置 `multi_wan_enabled=1`，再为三个有线账号
+分别填写接口、学工号、密码和运营商后缀，并把每个账号的 `auth_enabled` 设为 `1`
+（LuCI 中即“参与并行守护”）。每条线路独立查询、登录和退避重试；状态会按账号显示在
+校园网账号表中。关闭全局开关后保持旧版行为，只维护当前默认账号。
 
 ****
 ## License

@@ -13,7 +13,7 @@ import struct
 import subprocess
 import time
 
-from config import campus_uses_wired, log, timed
+from config import campus_uses_wired, get_wired_iface, log, timed
 
 try:
     import http.client as http_client
@@ -258,10 +258,34 @@ def wait_for_network_interface_ipv4(iface_name, timeout_seconds=12, interval_sec
 
 def resolve_bind_ip(url, cfg):
     host = extract_host_from_url(url)
+    wired_mode = campus_uses_wired(cfg)
+
+    # 有线模式优先使用指定接口的 IPv4。多 WAN 守护生成的账号视图会带上
+    # 严格绑定标记，此时缺少接口地址必须失败，不能把认证流量发到其它 WAN；
+    # 存量单有线配置没有该标记，缺地址时继续沿用原来的路由选源逻辑。
+    if wired_mode:
+        iface = get_wired_iface(cfg)
+        bind_ip = get_ipv4_from_network_interface(iface)
+        log(
+            "DEBUG",
+            "bind_ip_resolved",
+            host=host,
+            iface=iface,
+            bind_ip=bind_ip or "",
+            reason="wired_interface" if bind_ip else "wired_interface_no_ip",
+        )
+        if bind_ip:
+            return bind_ip
+        if str(cfg.get("_multi_wan_strict_bind", "0")).strip() == "1":
+            raise RuntimeError("有线接口 %s 尚未获取到 IPv4 地址" % iface)
+
     bind_ip = get_local_ip_for_target(host) if host else None
-    reason = "route_to_host" if bind_ip else "no_route"
+    if wired_mode:
+        reason = "wired_interface_no_ip_route_fallback" if bind_ip else "no_route"
+    else:
+        reason = "route_to_host" if bind_ip else "no_route"
     host_ip = pick_valid_ip(host)
-    if host_ip and not campus_uses_wired(cfg):
+    if host_ip and not wired_mode:
         try:
             if ipaddress.ip_address(host_ip).is_private:
                 from wireless import (
@@ -289,11 +313,69 @@ def resolve_bind_ip(url, cfg):
     return bind_ip
 
 
-def _http_get_via_stdlib(url, timeout, bind_ip):
-    """用 stdlib http.client 发起 GET，可选绑定本机源 IP。
+def get_network_device_for_ip(bind_ip):
+    """Return the L3 device which owns *bind_ip*, if it can be determined."""
+    wanted = pick_valid_ip(bind_ip)
+    if not wanted:
+        return None
+    ok, output = run_cmd(["ip", "-4", "-o", "addr", "show"], timeout=5)
+    if not ok or not output:
+        return None
+    for line in output.splitlines():
+        fields = line.split()
+        if len(fields) < 4 or fields[2] != "inet":
+            continue
+        address = fields[3].split("/", 1)[0]
+        if address != wanted:
+            continue
+        # iproute2 may render stacked devices as "eth0@if5". SO_BINDTODEVICE
+        # expects the local name before the peer suffix.
+        return fields[1].split("@", 1)[0].rstrip(":") or None
+    return None
+
+
+def _create_bound_connection(address, timeout, source_address, bind_device):
+    """socket.create_connection equivalent with optional SO_BINDTODEVICE."""
+    last_error = None
+    lookup_host = address[0]
+    if isinstance(lookup_host, str):
+        try:
+            # OpenWrt python3-light omits the idna codec. Passing an ASCII byte
+            # string keeps IPv4 and ordinary DNS names on libc's resolver path
+            # without importing that optional codec.
+            lookup_host = lookup_host.encode("ascii")
+        except UnicodeEncodeError:
+            pass
+    for af, socktype, proto, _canonname, sockaddr in socket.getaddrinfo(
+        lookup_host, address[1], 0, socket.SOCK_STREAM
+    ):
+        sock = None
+        try:
+            sock = socket.socket(af, socktype, proto)
+            if timeout is not socket._GLOBAL_DEFAULT_TIMEOUT:
+                sock.settimeout(timeout)
+            if bind_device:
+                option = getattr(socket, "SO_BINDTODEVICE", 25)
+                device_bytes = str(bind_device).encode("utf-8") + b"\0"
+                sock.setsockopt(socket.SOL_SOCKET, option, device_bytes)
+            if source_address:
+                sock.bind(source_address)
+            sock.connect(sockaddr)
+            return sock
+        except OSError as exc:
+            last_error = exc
+            if sock is not None:
+                sock.close()
+    if last_error is not None:
+        raise last_error
+    raise OSError("getaddrinfo returns an empty list")
+
+
+def _http_get_via_stdlib(url, timeout, bind_ip, bind_device=None):
+    """用 stdlib http.client 发起 GET，可选绑定源 IP 和所属 L3 设备。
 
     避免依赖 wget --bind-address（BusyBox wget / uclient-fetch 都不支持），
-    在 python3-light 上即可完成源地址绑定。返回 (body, status_code)。
+    在 python3-light 上即可完成多 WAN 绑定。返回 (body, status_code)。
     """
     parts = urllib_parse.urlsplit(url)
     scheme = (parts.scheme or "http").lower()
@@ -304,6 +386,8 @@ def _http_get_via_stdlib(url, timeout, bind_ip):
         path = path + "?" + parts.query
 
     source = (bind_ip, 0) if bind_ip else None
+    if bind_ip and bind_device is None:
+        bind_device = get_network_device_for_ip(bind_ip)
     if scheme == "https":
         if not hasattr(http_client, "HTTPSConnection"):
             raise RuntimeError("当前 Python 缺少 HTTPS 支持，请安装 python3-openssl 后重试")
@@ -313,6 +397,26 @@ def _http_get_via_stdlib(url, timeout, bind_ip):
     else:
         conn = http_client.HTTPConnection(
             host, port, timeout=timeout, source_address=source
+        )
+    if bind_device:
+        # HTTPConnection.connect() delegates socket creation to this instance
+        # attribute. Replacing it lets HTTPSConnection keep its normal TLS wrap
+        # while the underlying TCP socket is pinned to the selected WAN device.
+        def create_connection(address, socket_timeout=socket._GLOBAL_DEFAULT_TIMEOUT,
+                              source_address=None):
+            return _create_bound_connection(
+                address,
+                socket_timeout,
+                source_address,
+                bind_device,
+            )
+
+        conn._create_connection = create_connection
+        log(
+            "DEBUG",
+            "http_bind_device",
+            bind_ip=bind_ip,
+            bind_device=bind_device,
         )
     try:
         conn.request("GET", path, headers=HEADER)
@@ -342,12 +446,15 @@ def http_get(url, params=None, timeout=5, bind_ip=None):
 
     errors = []
     dns_failure_host = ""
+    bind_device = get_network_device_for_ip(bind_ip) if bind_ip else None
 
     with timed() as t:
         if HAVE_URLLIB:
             try:
                 if bind_ip:
-                    body, status_code = _http_get_via_stdlib(url, timeout, bind_ip)
+                    body, status_code = _http_get_via_stdlib(
+                        url, timeout, bind_ip, bind_device=bind_device
+                    )
                     client_name = "http.client(bound)"
                 else:
                     req = urllib_request.Request(url, headers=HEADER, method="GET")
@@ -375,6 +482,15 @@ def http_get(url, params=None, timeout=5, bind_ip=None):
                         or "temporary failure in name resolution" in lower
                         or "getaddrinfo" in lower):
                     dns_failure_host = host
+
+                # Once the source IP has been mapped to an L3 device, falling
+                # back to wget --bind-address would silently lose
+                # SO_BINDTODEVICE and may send campus credentials via another
+                # PPPoE WAN. Fail closed instead.
+                if bind_device:
+                    raise RuntimeError(
+                        "绑定接口 %s 的 HTTP 请求失败：%s" % (bind_device, msg)
+                    )
 
         if bind_ip is None:
             bind_ip = get_local_ip_for_target(host) if host else None

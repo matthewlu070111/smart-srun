@@ -5,6 +5,7 @@
 """
 
 import os
+import re
 import time
 
 from config import (
@@ -15,12 +16,14 @@ from config import (
     DEFAULT_LOGIN_TYPE,
     LOG_FILE,
     build_school_runtime_luci_contract,
+    backoff_enabled,
     log,
     campus_uses_wired,
     clear_inflight_action,
     clear_log_context,
     ensure_parent_dir,
     failover_enabled,
+    get_managed_wired_account_configs,
     in_quiet_window,
     load_config,
     load_inflight_action,
@@ -29,6 +32,7 @@ from config import (
     load_runtime_state,
     localize_error,
     mark_inflight_action,
+    multi_wan_enabled,
     pop_runtime_action,
     requeue_runtime_action,
     save_runtime_status,
@@ -40,6 +44,7 @@ from config import (
 )
 from network import (
     HTTP_EXCEPTIONS,
+    resolve_bind_ip,
 )
 from wireless import (
     build_expected_profile,
@@ -56,6 +61,9 @@ from snapshot import build_runtime_snapshot
 
 DAEMON_LOCK_FILE = "/var/run/smart_srun/daemon.lock"
 ROUTINE_ONLINE_TICK_PREFIX = "在线，下一次检测间隔 "
+ROUTINE_MULTI_WAN_ONLINE_TICK = re.compile(
+    r"^多 WAN 认证：(\d+)/\1 条线路在线$"
+)
 PRESETS_REFRESH_INTERVAL_SECONDS = 24 * 60 * 60
 
 
@@ -71,13 +79,17 @@ def _make_daemon_state():
         "current_mode": "campus",
         "was_online": False,
         "last_switch_ts": 0,
+        "wired_auth_sessions": {},
     }
 
 
 def _should_log_daemon_tick(message, state=None):
     del state
     text = str(message or "")
-    return not text.startswith(ROUTINE_ONLINE_TICK_PREFIX)
+    return not (
+        text.startswith(ROUTINE_ONLINE_TICK_PREFIX)
+        or ROUTINE_MULTI_WAN_ONLINE_TICK.fullmatch(text)
+    )
 
 
 def load_pending_runtime_action():
@@ -357,16 +369,26 @@ def _daemon_tick_quiet(cfg, state, interval):
     if not state["was_in_quiet"]:
         state["quiet_logout_done"] = False
 
+    managed_ok = True
+    managed_message = ""
+    if (not state["quiet_logout_done"]) and multi_wan_enabled(cfg):
+        managed_ok, managed_message = _pause_managed_wired_accounts(cfg, state)
+
     if state["quiet_logout_done"]:
         conn_state = orchestrator.quiet_connection_state(cfg)
         message = "夜间停用（%s）" % conn_state
     else:
-        if runtime_mode == "hotspot":
-            state["quiet_logout_done"] = True
+        if campus_uses_wired(cfg) and multi_wan_enabled(cfg):
+            ok = managed_ok
+            message = managed_message
+        elif runtime_mode == "hotspot":
+            ok = True
             message = "夜间停用（热点已连接）"
         else:
             ok, message = _safe_call(orchestrator.run_quiet_logout, cfg)
-            state["quiet_logout_done"] = ok
+        if managed_message and not (campus_uses_wired(cfg) and multi_wan_enabled(cfg)):
+            message = message + "；" + managed_message
+        state["quiet_logout_done"] = bool(ok and managed_ok)
 
     if failover_enabled(cfg):
         ssid_ok, ssid_msg, state["last_switch_ts"] = ensure_expected_profile(
@@ -397,9 +419,249 @@ def _daemon_tick_quiet(cfg, state, interval):
     return message, min(interval, 60)
 
 
+def _wired_auth_retry_delay(cfg, failures):
+    if not backoff_enabled(cfg):
+        return 0
+    return max(int(orchestrator.calc_backoff_delay_seconds(cfg, failures)), 1)
+
+
+def _maintain_one_wired_account(account_cfg, previous, now=None):
+    """Check/login one explicitly selected wired account and return public state."""
+    now = int(time.time() if now is None else now)
+    account_id = str(account_cfg.get("campus_account_id", "")).strip()
+    label = str(account_cfg.get("campus_account_label", "")).strip() or account_id
+    iface = str(account_cfg.get("wired_iface", "wan")).strip() or "wan"
+    username = str(account_cfg.get("username", "")).strip()
+    entry = dict(previous or {})
+    failures = max(int(entry.get("failures", 0) or 0), 0)
+    next_retry_at = max(int(entry.get("next_retry_at", 0) or 0), 0)
+    bind_ip = ""
+
+    entry.update(
+        {
+            "account_id": account_id,
+            "label": label,
+            "iface": iface,
+            "username": username,
+            "checked_at": now,
+        }
+    )
+
+    if not username:
+        entry.update(
+            {
+                "online": False,
+                "status": "config_error",
+                "message": "未配置学工号",
+                "failures": failures,
+                "next_retry_at": 0,
+                "ip": "",
+            }
+        )
+        return entry
+
+    try:
+        app_ctx = school_runtime.build_app_context(account_cfg)
+        urls = app_ctx["runtime"].build_urls(account_cfg["base_url"])
+        bind_ip = resolve_bind_ip(urls["init_url"], account_cfg)
+        online, online_name, status_message = srun_auth.query_online_identity(
+            app_ctx,
+            expected_username=username,
+            bind_ip=bind_ip,
+        )
+    except Exception as exc:
+        online = False
+        online_name = ""
+        status_message = localize_error(exc)
+
+    entry["ip"] = bind_ip
+    if online:
+        expected_main = username.split("@", 1)[0]
+        online_main = str(online_name or "").split("@", 1)[0]
+        if online_name and expected_main and online_main != expected_main:
+            entry.update(
+                {
+                    "online": False,
+                    "status": "account_mismatch",
+                    "message": "该接口已由其他账号认证: %s" % online_name,
+                    "online_username": str(online_name),
+                    "failures": 0,
+                    "next_retry_at": 0,
+                }
+            )
+            return entry
+        entry.update(
+            {
+                "online": True,
+                "status": "online",
+                "message": "在线",
+                "online_username": str(online_name or username),
+                "failures": 0,
+                "next_retry_at": 0,
+            }
+        )
+        return entry
+
+    entry["online_username"] = ""
+    if next_retry_at > now:
+        wait_seconds = next_retry_at - now
+        entry.update(
+            {
+                "online": False,
+                "status": "retry_wait",
+                "message": "等待 %d 秒后重试；%s"
+                % (wait_seconds, status_message or "离线"),
+                "failures": failures,
+                "next_retry_at": next_retry_at,
+            }
+        )
+        return entry
+
+    ok, login_message = srun_auth.run_once_safe(account_cfg)
+    if ok:
+        entry.update(
+            {
+                "online": True,
+                "status": "online",
+                "message": login_message or "登录成功",
+                "online_username": username,
+                "failures": 0,
+                "next_retry_at": 0,
+            }
+        )
+        return entry
+
+    failures += 1
+    delay = _wired_auth_retry_delay(account_cfg, failures)
+    entry.update(
+        {
+            "online": False,
+            "status": "error",
+            "message": login_message
+            or ("登录失败；状态检测结果: %s" % (status_message or "离线")),
+            "failures": failures,
+            "next_retry_at": now + delay if delay else 0,
+        }
+    )
+    return entry
+
+
+def _maintain_managed_wired_accounts(cfg, state, interval, now=None):
+    """Maintain all wired accounts selected by the LuCI multi-WAN controls."""
+    now = int(time.time() if now is None else now)
+    previous_sessions = state.get("wired_auth_sessions", {})
+    if not isinstance(previous_sessions, dict):
+        previous_sessions = {}
+    sessions = {}
+    account_cfgs = get_managed_wired_account_configs(cfg)
+
+    for account_cfg in account_cfgs:
+        account_id = str(account_cfg.get("campus_account_id", "")).strip()
+        set_log_context(account_id=account_id, wired_iface=account_cfg.get("wired_iface", ""))
+        try:
+            entry = _maintain_one_wired_account(
+                account_cfg, previous_sessions.get(account_id, {}), now=now
+            )
+            sessions[account_id] = entry
+            previous_status = str(
+                (previous_sessions.get(account_id, {}) or {}).get("status", "")
+            )
+            if entry.get("status") != previous_status:
+                log(
+                    "INFO" if entry.get("online") else "WARN",
+                    "multi_wan_session",
+                    entry.get("message", ""),
+                    status=entry.get("status", ""),
+                    bind_ip=entry.get("ip", ""),
+                )
+        finally:
+            clear_log_context("account_id", "wired_iface")
+
+    state["wired_auth_sessions"] = sessions
+    total = len(account_cfgs)
+    online_count = sum(1 for entry in sessions.values() if entry.get("online"))
+    if total == 0:
+        return set(), "多 WAN 并行认证已启用，但没有勾选参与守护的有线账号", interval
+
+    offline_parts = []
+    next_sleep = interval
+    for entry in sessions.values():
+        retry_at = int(entry.get("next_retry_at", 0) or 0)
+        if retry_at > now:
+            next_sleep = min(next_sleep, max(retry_at - now, 1))
+        if not entry.get("online"):
+            offline_parts.append(
+                "%s(%s): %s"
+                % (
+                    entry.get("label", entry.get("account_id", "")),
+                    entry.get("iface", ""),
+                    entry.get("message", "离线"),
+                )
+            )
+
+    message = "多 WAN 认证：%d/%d 条线路在线" % (online_count, total)
+    if offline_parts:
+        message += "；" + "；".join(offline_parts)
+    return set(sessions), message, next_sleep
+
+
+def _pause_managed_wired_accounts(cfg, state):
+    """Pause every managed wired account during quiet hours, logging out if set."""
+    account_cfgs = get_managed_wired_account_configs(cfg)
+    previous_sessions = state.get("wired_auth_sessions", {})
+    if not isinstance(previous_sessions, dict):
+        previous_sessions = {}
+    sessions = {}
+    force_logout = str(cfg.get("force_logout_in_quiet", "0")) == "1"
+    ok_count = 0
+
+    for account_cfg in account_cfgs:
+        account_id = str(account_cfg.get("campus_account_id", "")).strip()
+        label = str(account_cfg.get("campus_account_label", "")).strip() or account_id
+        iface = str(account_cfg.get("wired_iface", "wan")).strip() or "wan"
+        previous = previous_sessions.get(account_id, {}) or {}
+        set_log_context(account_id=account_id, wired_iface=iface)
+        try:
+            if force_logout:
+                ok, message = _safe_call(orchestrator.run_quiet_logout, account_cfg)
+            else:
+                ok, message = True, "夜间暂停守护（保留现有会话）"
+        finally:
+            clear_log_context("account_id", "wired_iface")
+        if ok:
+            ok_count += 1
+        sessions[account_id] = {
+            "account_id": account_id,
+            "label": label,
+            "iface": iface,
+            "username": str(account_cfg.get("username", "")),
+            "ip": str(previous.get("ip", "")),
+            "online": False,
+            "status": "paused" if ok else "error",
+            "message": message,
+            "checked_at": int(time.time()),
+            "failures": 0,
+            "next_retry_at": 0,
+        }
+
+    state["wired_auth_sessions"] = sessions
+    total = len(account_cfgs)
+    if total == 0:
+        return True, "多 WAN 守护未选择账号"
+    action = "已下线" if force_logout else "已暂停"
+    message = "多 WAN 守护：%d/%d 条线路%s" % (ok_count, total, action)
+    if ok_count != total:
+        failed = [entry["label"] for entry in sessions.values() if entry["status"] == "error"]
+        message += "；失败: " + "、".join(failed)
+    return ok_count == total, message
+
+
 def _daemon_tick_active(cfg, state, interval):
     online_interval = interval
     mode_msg = ""
+    managed_ids = set()
+    multi_message = ""
+    multi_sleep = interval
 
     if state["was_in_quiet"]:
         log("INFO", "quiet_exit", "leaving quiet hours, switching back to campus")
@@ -412,6 +674,18 @@ def _daemon_tick_active(cfg, state, interval):
             state["current_mode"] = "campus" if switched else "hotspot"
             if sw_msg:
                 mode_msg = sw_msg
+
+    # 多 WAN 维护必须先于活跃账号的 failover 前置检查。后者在有线模式下
+    # 只检查当前活跃账号的接口；若该接口掉线，不能因此跳过其它托管线路。
+    if multi_wan_enabled(cfg):
+        managed_ids, multi_message, multi_sleep = _maintain_managed_wired_accounts(
+            cfg, state, interval
+        )
+        if campus_uses_wired(cfg) and not managed_ids:
+            state["was_online"] = False
+            return multi_message, multi_sleep
+    else:
+        state["wired_auth_sessions"] = {}
 
     if failover_enabled(cfg):
         ready_ok, ready_msg, state["last_switch_ts"] = ensure_expected_profile(
@@ -429,14 +703,31 @@ def _daemon_tick_active(cfg, state, interval):
             message = "校园网配置未就绪"
             if ready_msg:
                 message = message + "；" + ready_msg
-            return message, min(interval, 30)
+            if multi_message:
+                message = message + "；" + multi_message
+            return message, min(interval, multi_sleep, 30)
 
     if failover_enabled(cfg) and state["current_mode"] == "hotspot":
         state["was_online"] = False
         message = "已切换到热点SSID，校园网SSID恢复后将自动切回"
         if mode_msg:
             message = message + "；" + mode_msg
-        return message, interval
+        if multi_message:
+            message = message + "；" + multi_message
+        return message, min(interval, multi_sleep)
+
+    if multi_wan_enabled(cfg):
+        # In multi-WAN mode every wired account is controlled exclusively by
+        # its own checkbox. Do not let the legacy default-account path log in a
+        # disabled wired row behind the user's back.
+        if campus_uses_wired(cfg):
+            sessions = state.get("wired_auth_sessions", {})
+            active_id = str(cfg.get("campus_account_id", "")).strip()
+            state["was_online"] = bool(
+                isinstance(sessions, dict)
+                and (sessions.get(active_id, {}) or {}).get("online")
+            )
+            return multi_message, multi_sleep
 
     srun_profile = srun_auth.get_profile(cfg)
     next_sleep = interval
@@ -446,8 +737,9 @@ def _daemon_tick_active(cfg, state, interval):
         status_message = ""
         online_name = ""
         if cfg["username"]:
+            bind_ip = resolve_bind_ip(urls["init_url"], cfg)
             online_now, online_name, status_message = srun_auth.query_online_identity(
-                srun_profile, urls["rad_user_info_api"], cfg["username"]
+                srun_profile, urls["rad_user_info_api"], cfg["username"], bind_ip
             )
 
         if online_now:
@@ -520,6 +812,9 @@ def _daemon_tick_active(cfg, state, interval):
         if not ok:
             message = "异常: %s；重连结果: %s" % (localize_error(exc), message)
 
+    if multi_message:
+        message = message + "；" + multi_message
+        next_sleep = min(next_sleep, multi_sleep)
     if mode_msg:
         message = message + "；" + mode_msg
     return message, next_sleep
@@ -1012,10 +1307,20 @@ def _print_account_table(raw):
         return
     # Header
     print(
-        "  %-12s %-20s %-16s %-12s %-6s %-14s %-18s"
-        % ("ID", "Label", "User", "Suffix", "Mode", "SSID", "Login")
+        "  %-12s %-20s %-16s %-12s %-6s %-12s %-7s %-14s %-18s"
+        % (
+            "ID",
+            "Label",
+            "User",
+            "Suffix",
+            "Mode",
+            "Interface",
+            "Guard",
+            "SSID",
+            "Login",
+        )
     )
-    print("  " + "-" * 100)
+    print("  " + "-" * 123)
     for acc in accounts:
         aid = str(acc.get("id", ""))
         is_default = aid == default_campus
@@ -1023,9 +1328,12 @@ def _print_account_table(raw):
         suffix = str(acc.get("operator_suffix", "")).strip()
         suffix_display = suffix or "-"
         mode = "wired" if acc.get("access_mode") == "wired" else "wifi"
+        wired_iface = str(acc.get("wired_iface", "")).strip() or "wan"
         label = acc.get("label", "") or (
             "%s@%s" % (user_id, suffix) if suffix else user_id
         )
+        iface = wired_iface if mode == "wired" else "-"
+        guard = "yes" if str(acc.get("auth_enabled", "0")) == "1" else "no"
         ssid = acc.get("ssid", "") if mode != "wired" else "-"
         login_shape = "%s/%s/%s/%s" % (
             str(acc.get("n", "") or DEFAULT_LOGIN_N),
@@ -1035,13 +1343,15 @@ def _print_account_table(raw):
         )
         marker = " *" if is_default else ""
         print(
-            "  %-12s %-20s %-16s %-12s %-6s %-14s %-18s%s"
+            "  %-12s %-20s %-16s %-12s %-6s %-12s %-7s %-14s %-18s%s"
             % (
                 aid,
                 label[:20],
                 user_id[:16],
                 suffix_display[:12],
                 mode,
+                iface[:12],
+                guard,
                 ssid[:14],
                 login_shape[:18],
                 marker,
@@ -1268,6 +1578,18 @@ def _interactive_campus(existing=None):
     fields["access_mode"] = _prompt(
         "接入方式", item.get("access_mode", "wifi"), choices=["wifi", "wired"]
     )
+    fields["wired_iface"] = str(item.get("wired_iface", "")).strip() or "wan"
+    fields["auth_enabled"] = "0"
+    if fields["access_mode"] == "wired":
+        fields["wired_iface"] = _prompt(
+            "有线接口（OpenWrt 逻辑接口或 Linux 设备名）",
+            fields["wired_iface"],
+        )
+        fields["auth_enabled"] = _prompt(
+            "参与多 WAN 并行守护（需同时设置 multi_wan_enabled=1）",
+            str(item.get("auth_enabled", "0")),
+            choices=["0", "1"],
+        )
     fields["base_url"] = _prompt("认证地址", item.get("base_url", ""))
     fields["ac_id"] = _prompt("AC_ID", item.get("ac_id", "1"))
     fields["n"] = _prompt("高级登录参数 n", item.get("n", ""))

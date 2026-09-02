@@ -47,6 +47,10 @@ def get_logout_username(cfg):
 def init_getip(init_url, bind_ip=None):
     text = http_get(init_url, timeout=5, bind_ip=bind_ip)
     ip = extract_ip_from_text(text)
+    # 门户首页不一定回显 user_ip。显式绑定了多 WAN 源地址时，应继续使用该
+    # DHCP 地址作为 challenge/login 的 ip 参数，不能再次按默认路由选源。
+    if not ip:
+        ip = pick_valid_ip(bind_ip)
     if not ip:
         target_host = init_url.split("://", 1)[-1].split("/", 1)[0]
         ip = get_local_ip_for_target(target_host)
@@ -264,7 +268,10 @@ def default_query_online_identity(app_ctx, expected_username=None, bind_ip=None)
     cfg = app_ctx["cfg"]
     urls = runtime.build_urls(cfg["base_url"])
     expected = expected_username or cfg.get("username", "")
-    return query_online_identity(runtime, urls["rad_user_info_api"], expected, bind_ip)
+    bip = bind_ip
+    if bip is None:
+        bip = resolve_bind_ip(urls["init_url"], cfg)
+    return query_online_identity(runtime, urls["rad_user_info_api"], expected, bip)
 
 
 def default_query_online_status(app_ctx, expected_username=None, bind_ip=None):

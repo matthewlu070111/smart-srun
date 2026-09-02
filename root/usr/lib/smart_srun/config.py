@@ -48,6 +48,7 @@ DEFAULTS_JSON_FILE = os.path.join(
 
 GLOBAL_SCALAR_KEYS = {
     "enabled",
+    "multi_wan_enabled",
     "quiet_hours_enabled",
     "quiet_start",
     "quiet_end",
@@ -144,6 +145,7 @@ def _load_defaults():
         pass
     return {
         "enabled": "0",
+        "multi_wan_enabled": "0",
         "quiet_hours_enabled": "1",
         "quiet_start": "00:00",
         "quiet_end": "06:00",
@@ -902,10 +904,79 @@ def normalize_campus_access_mode(value):
     return mode
 
 
+def normalize_wired_iface(value):
+    """Return the selected OpenWrt logical interface/device for wired auth.
+
+    Older configurations did not store this field and always used ``wan``.
+    Keeping that fallback makes the new per-account setting backward compatible
+    while allowing virtual devices such as ``wan.v2``.
+    """
+    return str(value or "").strip() or "wan"
+
+
+def normalize_auth_enabled(value):
+    return (
+        "1"
+        if str(value or "").strip().lower() in ("1", "true", "yes", "on")
+        else "0"
+    )
+
+
+def multi_wan_enabled(cfg):
+    return str((cfg or {}).get("multi_wan_enabled", "0")).strip() == "1"
+
+
+def campus_account_auth_enabled(account):
+    return normalize_auth_enabled((account or {}).get("auth_enabled", "0")) == "1"
+
+
+def get_wired_iface(cfg):
+    return normalize_wired_iface((cfg or {}).get("wired_iface", "wan"))
+
+
 def campus_uses_wired(cfg):
     return (
         normalize_campus_access_mode((cfg or {}).get("campus_access_mode")) == "wired"
     )
+
+
+def resolve_campus_account_config(cfg, account):
+    """Resolve one account into an isolated runtime configuration.
+
+    The normal configuration exposes only the active/default campus account as
+    scalar fields. Multi-WAN authentication needs several such resolved views
+    at once, without changing selection pointers or mutating the caller.
+    """
+    account_copy = dict(account or {})
+    account_id = str(account_copy.get("id", "")).strip() or "__selected__"
+    resolved = dict(cfg or {})
+    resolved["campus_accounts"] = [account_copy]
+    resolved["active_campus_id"] = account_id
+    resolved["default_campus_id"] = account_id
+    resolved = resolve_active_items(resolved)
+    # 只对多 WAN 守护生成的账号视图启用严格绑定。存量单有线配置仍可在
+    # 指定接口暂时无地址时沿用原来的路由选源逻辑，避免升级后直接失效。
+    resolved["_multi_wan_strict_bind"] = "1"
+    return resolved
+
+
+def get_managed_wired_account_configs(cfg):
+    """Return resolved wired accounts opted into the multi-WAN guard."""
+    if not multi_wan_enabled(cfg):
+        return []
+    accounts = (cfg or {}).get("campus_accounts", [])
+    if not isinstance(accounts, list):
+        return []
+    managed = []
+    for account in accounts:
+        if not isinstance(account, dict):
+            continue
+        if normalize_campus_access_mode(account.get("access_mode")) != "wired":
+            continue
+        if not campus_account_auth_enabled(account):
+            continue
+        managed.append(resolve_campus_account_config(cfg, account))
+    return managed
 
 
 def _pointer_meta(expect_hotspot):
@@ -986,6 +1057,8 @@ def _migrate_legacy_config(raw):
         "id": "campus-1",
         "label": "",
         "access_mode": "wifi",
+        "wired_iface": "wan",
+        "auth_enabled": "0",
         "base_url": normalize_base_url(raw.get("base_url", "http://172.17.1.2")),
         "ac_id": str(raw.get("ac_id", "1")).strip(),
         "user_id": user_id,
@@ -1074,12 +1147,17 @@ def resolve_active_items(cfg):
     campus = get_active_campus_account(cfg)
     hotspot = get_active_hotspot_profile(cfg)
 
+    cfg["campus_account_id"] = str(campus.get("id", "")).strip()
     cfg["user_id"] = str(campus.get("user_id", "")).strip()
     cfg["operator"] = normalize_operator_id(campus.get("operator", ""))
     cfg["password"] = str(campus.get("password", "")).strip()
     cfg["base_url"] = normalize_base_url(campus.get("base_url", ""))
     cfg["campus_access_mode"] = normalize_campus_access_mode(
         campus.get("access_mode", "wifi")
+    )
+    cfg["wired_iface"] = normalize_wired_iface(campus.get("wired_iface", "wan"))
+    cfg["campus_auth_enabled"] = normalize_auth_enabled(
+        campus.get("auth_enabled", "0")
     )
     cfg["ac_id"] = str(campus.get("ac_id", "1")).strip()
     cfg["campus_ssid"] = str(campus.get("ssid", "")).strip()

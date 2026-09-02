@@ -13,6 +13,7 @@ from config import (
     timed,
     campus_uses_wired,
     failover_enabled,
+    get_wired_iface,
     get_switch_ready_timeout_seconds,
     hotspot_failback_enabled,
     normalize_campus_access_mode,
@@ -178,8 +179,10 @@ def detect_runtime_mode(cfg, wireless_data=None):
 
     if ssid and ssid == str(cfg.get("hotspot_ssid", "")).strip():
         return _emit("hotspot", "ssid_match_hotspot")
-    if campus_uses_wired(cfg) and get_ipv4_from_network_interface("wan"):
-        return _emit("campus", "wired_wan_ip")
+    if campus_uses_wired(cfg) and get_ipv4_from_network_interface(
+        get_wired_iface(cfg)
+    ):
+        return _emit("campus", "wired_iface_ip")
     if not section:
         return _emit("unknown", "no_sta_section")
     if ssid and ssid == str(cfg.get("campus_ssid", "")).strip():
@@ -837,12 +840,14 @@ def ensure_runtime_wireless_prerequisites(cfg, expect_hotspot, wireless_data=Non
         data = (
             wireless_data if wireless_data is not None else parse_wireless_iface_data()
         )
-        wan_ip = get_ipv4_from_network_interface("wan")
-        if wan_ip:
-            return True, "检测到有线校园网入口（wan=%s）" % wan_ip, data
+        iface = get_wired_iface(cfg)
+        wired_ip = get_ipv4_from_network_interface(iface)
+        if wired_ip:
+            return True, "检测到有线校园网入口（%s=%s）" % (iface, wired_ip), data
         return (
             False,
-            "当前校园网账号已设为有线接入模式，但 WAN 口还没有可用 IPv4。",
+            "当前校园网账号已设为有线接入模式，但接口 %s 还没有可用 IPv4。"
+            % iface,
             data,
         )
 
@@ -1188,17 +1193,18 @@ def switch_to_hotspot(cfg):
 
 def switch_to_campus(cfg):
     if campus_uses_wired(cfg):
+        iface = get_wired_iface(cfg)
         data = parse_wireless_iface_data()
         disable_managed_sta_sections(cfg, data)
         # 拆掉无线 STA 的 L3 接口，避免残留的 wwan 路由与 WAN 指向同一网关的路由冲突，
         # 否则发往认证网关的包会被路由到已失效的接口并报 EPERM，只能靠重启恢复。
         teardown_managed_sta_interfaces(cfg, data)
-        wan_ip = wait_for_network_interface_ipv4(
-            "wan", timeout_seconds=get_switch_ready_timeout_seconds(cfg)
+        wired_ip = wait_for_network_interface_ipv4(
+            iface, timeout_seconds=get_switch_ready_timeout_seconds(cfg)
         )
-        if wan_ip:
-            return True, "已切换为有线校园网模式（wan, %s）" % wan_ip
-        return False, "已切到有线校园网模式，但 WAN 口暂未获取到 IPv4 地址"
+        if wired_ip:
+            return True, "已切换为有线校园网模式（%s, %s）" % (iface, wired_ip)
+        return False, "已切到有线校园网模式，但接口 %s 暂未获取到 IPv4 地址" % iface
     return switch_sta_profile(cfg, expect_hotspot=False)
 
 
@@ -1212,10 +1218,15 @@ def ensure_expected_profile(cfg, expect_hotspot, last_switch_ts=0):
         return True, "", last_switch_ts
 
     if (not expect_hotspot) and campus_uses_wired(cfg):
-        wan_ip = get_ipv4_from_network_interface("wan")
-        if wan_ip:
+        iface = get_wired_iface(cfg)
+        wired_ip = get_ipv4_from_network_interface(iface)
+        if wired_ip:
             return True, "", last_switch_ts
-        return False, "有线校园网未就绪，WAN 口尚未获取到 IPv4。", last_switch_ts
+        return (
+            False,
+            "有线校园网未就绪，接口 %s 尚未获取到 IPv4。" % iface,
+            last_switch_ts,
+        )
 
     data = parse_wireless_iface_data()
     section = get_sta_section(cfg, data)
