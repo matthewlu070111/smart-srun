@@ -29,7 +29,10 @@ jobs:
           python-version: "3.11"
 
       - name: Install Python tooling
-        run: python -m pip install --upgrade pip pytest ruff
+        # ruff is pinned on purpose: an unpinned install moves the lint gate
+        # every time ruff changes its defaults, which is how main went red
+        # with no code change. Bump it deliberately, alongside ruff.toml.
+        run: python -m pip install --upgrade pip pytest "ruff==0.16.5"
 
       - name: Set up Node
         uses: actions/setup-node@v4
