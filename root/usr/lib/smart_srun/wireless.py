@@ -214,16 +214,40 @@ def get_sta_profile_from_section(section, wireless_data=None):
 # ---------------------------------------------------------------------------
 
 
+def parse_wifi_device_sections(uci_output):
+    """wifi-device 的节名不一定叫 radioN。
+
+    mac80211 用 radio0/radio1，但 MediaTek 闭源 mtwifi（MT798x 等）用的是
+    MT7981_1_1 / MT7981_1_2 这种名字。只能按节类型认，不能按名字猜。
+    """
+    devices = []
+    seen = set()
+    for line in str(uci_output or "").splitlines():
+        match = re.match(r"^wireless\.([^.=]+)=(?:'|\")?wifi-device(?:'|\")?$", line.strip())
+        if not match:
+            continue
+        name = match.group(1)
+        if name not in seen:
+            devices.append(name)
+            seen.add(name)
+    return devices
+
+
 def parse_radio_bands():
     ok, out = run_cmd(["uci", "show", "wireless"])
     if not ok or not out:
         return {}
+
+    devices = set(parse_wifi_device_sections(out))
     bands = {}
     for line in out.splitlines():
-        m = re.match(r"^wireless\.(radio\d+)\.(band|hwmode)=(.+)$", line.strip())
+        m = re.match(r"^wireless\.([^.=]+)\.(band|hwmode)=(.+)$", line.strip())
         if not m:
             continue
         radio, opt, val = m.groups()
+        # 只认真正的 wifi-device 节，别把 wifi-iface 上的同名选项算进来。
+        if devices and radio not in devices:
+            continue
         val = parse_uci_value(val).lower()
         if opt == "band":
             bands[radio] = val
@@ -248,16 +272,8 @@ def get_available_wifi_radios(wireless_data=None):
     if not ok or not out:
         return []
 
-    seen = set()
-    for line in out.splitlines():
-        match = re.match(r"^wireless\.(radio\d+)\.=wifi-device$", line.strip())
-        if not match:
-            continue
-        radio = match.group(1)
-        if radio not in seen:
-            radios.append(radio)
-            seen.add(radio)
-    return radios
+    # 没有 band/hwmode 时退回按节类型枚举。
+    return parse_wifi_device_sections(out)
 
 
 def band_label(band):
