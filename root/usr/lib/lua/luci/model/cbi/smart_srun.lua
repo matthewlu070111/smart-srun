@@ -99,6 +99,8 @@ local function migrate_legacy_config(parsed)
         ac_id = tostring(parsed.ac_id or "1"):match("^%s*(.-)%s*$"),
         user_id = uid, password = tostring(parsed.password or ""):match("^%s*(.-)%s*$"),
         operator = op, operator_suffix = suffix,
+        wired_iface = "wan",
+        auth_enabled = "0",
         ssid = tostring(parsed.campus_ssid or "jxnu_stu"):match("^%s*(.-)%s*$"),
         bssid = tostring(parsed.campus_bssid or ""):match("^%s*(.-)%s*$"),
     }
@@ -686,6 +688,10 @@ enabled = s:taboption("basic", Flag, "enabled", "启用")
 enabled.description = "仅控制后台自动登录守护服务（自动检测、自动重连、按时段自动上下线/切网）。手动登录和手动登出始终可用，不受此开关影响。"
 bind_flag(enabled, "enabled")
 
+multi_wan_enabled = s:taboption("basic", Flag, "multi_wan_enabled", "多 WAN 并行认证")
+multi_wan_enabled.description = "开启后，后台会同时维护账号表中勾选“参与并行守护”的所有有线账号；每个账号使用自己的学工号、密码、运营商后缀和有线接口。"
+bind_flag(multi_wan_enabled, "multi_wan_enabled")
+
 quiet_desc = "当前下线/上线时间：" .. tostring(cfg.quiet_start or "00:00") .. " / " .. tostring(cfg.quiet_end or "06:00")
 
 quiet_hours_enabled = s:taboption("basic", Flag, "quiet_hours_enabled", "按时段自动上/下线", quiet_desc)
@@ -753,6 +759,8 @@ function tables_html.cfgvalue()
     local current_bssid = tostring(state.current_bssid or "")
     local current_iface = tostring(state.current_iface or "")
     local current_campus_access_mode = tostring(state.current_campus_access_mode or "")
+    local multi_wan_on = tostring(cfg.multi_wan_enabled or "0") == "1"
+    local wired_sessions = type(state.wired_auth_sessions) == "table" and state.wired_auth_sessions or {}
 
     local radio_labels = { [""] = "自动" }
     local radio_options = '<option value="">自动</option>'
@@ -771,7 +779,12 @@ function tables_html.cfgvalue()
             local campus_ssid = tostring(a.ssid or "")
             local campus_bssid = tostring(a.bssid or ""):lower()
             local access_mode = tostring(a.access_mode or "wifi")
-            local ssid_display = access_mode == "wired" and "有线" or tostring(a.ssid or "")
+            local wired_iface = tostring(a.wired_iface or "wan")
+            if wired_iface == "" then wired_iface = "wan" end
+            local auth_enabled = tostring(a.auth_enabled or "0") == "1"
+            local is_managed = multi_wan_on and access_mode == "wired" and auth_enabled
+            local wired_session = type(wired_sessions[aid]) == "table" and wired_sessions[aid] or {}
+            local ssid_display = access_mode == "wired" and ("有线 (" .. wired_iface .. ")") or tostring(a.ssid or "")
             local is_active = (aid == active_cid)
             local is_default = (aid == default_cid)
             local wifi_match = current_mode == "campus"
@@ -782,7 +795,7 @@ function tables_html.cfgvalue()
             local wired_match = current_mode == "campus"
                 and current_campus_access_mode == "wired"
                 and access_mode == "wired"
-                and current_iface == "wan"
+                and current_iface == wired_iface
             local identity_match = campus_user ~= "" and online_account_main == campus_user
             local is_connected = false
             if access_mode == "wired" then
@@ -790,9 +803,24 @@ function tables_html.cfgvalue()
             else
                 is_connected = wifi_match and identity_match
             end
+            if is_managed and next(wired_session) ~= nil then
+                is_connected = wired_session.online == true
+            end
             local badge_parts = {}
             if is_connected then
-                badge_parts[#badge_parts + 1] = '<span style="display:inline-block;color:#16a34a;font-weight:700;">已连接</span>'
+                badge_parts[#badge_parts + 1] = '<span style="display:inline-block;color:#16a34a;font-weight:700;">已认证</span>'
+            elseif is_managed then
+                local session_labels = {
+                    retry_wait = "等待重试",
+                    account_mismatch = "账号冲突",
+                    config_error = "配置错误",
+                    error = "认证失败",
+                    paused = "夜间暂停",
+                }
+                local session_status = tostring(wired_session.status or "")
+                local session_label = session_labels[session_status] or "等待检测"
+                local session_color = session_status == "paused" and "#6b7280" or "#dc2626"
+                badge_parts[#badge_parts + 1] = '<span style="display:inline-block;color:' .. session_color .. ';font-weight:700;">' .. util.pcdata(session_label) .. '</span>'
             end
             if is_default then
                 if is_active and not is_connected then
@@ -812,6 +840,7 @@ function tables_html.cfgvalue()
                 .. '<td class="td">' .. util.pcdata(tostring(a.user_id or "")) .. '</td>'
                 .. '<td class="td">' .. util.pcdata(tostring(a.operator_suffix or "")) .. '</td>'
                 .. '<td class="td">' .. util.pcdata(ssid_display) .. '</td>'
+                .. '<td class="td">' .. (auth_enabled and (multi_wan_on and '<span style="color:#16a34a;font-weight:700;">参与</span>' or '<span style="color:#d97706;">待开启全局开关</span>') or '<span style="color:#999;">关闭</span>') .. '</td>'
                 .. '<td class="td">' .. util.pcdata(tostring(a.bssid or "")) .. '</td>'
                 .. '<td class="td">' .. util.pcdata(radio_labels[tostring(a.radio or "")] or tostring(a.radio or "自动")) .. '</td>'
                 .. '<td class="td cbi-section-actions"><div class="smart-action-cell">'
@@ -821,7 +850,7 @@ function tables_html.cfgvalue()
         end
     end
     if campus_rows == "" then
-        campus_rows = '<tr class="tr"><td class="td" colspan="10" style="text-align:center;color:#999;">暂无账号，请点击"新增"添加</td></tr>'
+        campus_rows = '<tr class="tr"><td class="td" colspan="11" style="text-align:center;color:#999;">暂无账号，请点击"新增"添加</td></tr>'
     end
 
     -- 构建热点配置表格行
@@ -895,7 +924,7 @@ function tables_html.cfgvalue()
 <div class="cbi-section cbi-tblsection smart-native-box">
   <h3>校园网账号</h3>
   <table class="table cbi-section-table">
-    <tr class="tr table-titles"><th class="th" style="width:80px;">状态</th><th class="th">标签</th><th class="th">认证地址</th><th class="th">ACID</th><th class="th">学工号</th><th class="th">运营商后缀</th><th class="th">SSID</th><th class="th">BSSID</th><th class="th">频段</th><th class="th cbi-section-actions" style="width:120px;">操作</th></tr>
+    <tr class="tr table-titles"><th class="th" style="width:80px;">状态</th><th class="th">标签</th><th class="th">认证地址</th><th class="th">ACID</th><th class="th">学工号</th><th class="th">运营商后缀</th><th class="th">接入口</th><th class="th">并行守护</th><th class="th">BSSID</th><th class="th">频段</th><th class="th cbi-section-actions" style="width:120px;">操作</th></tr>
     <tbody>]] .. campus_rows .. [[</tbody>
   </table>
   <div class="smart-box-actions">

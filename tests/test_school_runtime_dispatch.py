@@ -362,6 +362,42 @@ class SchoolRuntimeDispatchTests(unittest.TestCase):
             ("query_online_identity", self.cfg["username"], None), self.runtime.calls
         )
 
+    def test_wired_snapshot_uses_selected_virtual_wan_and_its_dhcp_ip(self):
+        wired_cfg = dict(self.cfg)
+        wired_cfg.update(
+            {"campus_access_mode": "wired", "wired_iface": "wan.v2"}
+        )
+        wired_app_ctx = dict(self.app_ctx)
+        wired_app_ctx["cfg"] = wired_cfg
+
+        with (
+            mock.patch.object(
+                snapshot, "build_app_context", return_value=wired_app_ctx, create=True
+            ),
+            mock.patch.object(snapshot, "parse_wireless_iface_data", return_value={}),
+            mock.patch.object(snapshot, "get_runtime_sta_section", return_value=None),
+            mock.patch.object(
+                snapshot, "get_ipv4_from_network_interface", return_value=CLIENT_IP
+            ) as get_ip,
+            mock.patch.object(snapshot, "load_runtime_state", return_value={}),
+            mock.patch.object(
+                snapshot, "test_internet_connectivity", return_value=(True, "ok")
+            ),
+            mock.patch.object(
+                snapshot, "test_portal_reachability", return_value=(False, "offline")
+            ),
+        ):
+            data = snapshot.build_runtime_snapshot(wired_cfg, state={})
+
+        self.assertEqual(data["current_iface"], "wan.v2")
+        self.assertEqual(data["current_ip"], CLIENT_IP)
+        self.assertEqual(data["current_campus_access_mode"], "wired")
+        get_ip.assert_called_once_with("wan.v2")
+        self.assertIn(
+            ("query_online_identity", wired_cfg["username"], CLIENT_IP),
+            self.runtime.calls,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

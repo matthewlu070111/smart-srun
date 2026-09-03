@@ -18,6 +18,7 @@ from config import (
     get_manual_terminal_check_attempts,
     get_manual_terminal_check_interval_seconds,
     get_manual_terminal_check_label,
+    get_wired_iface,
     get_retry_cooldown_seconds,
     get_retry_max_cooldown_seconds,
     get_switch_ready_timeout_seconds,
@@ -467,9 +468,9 @@ def run_manual_logout(cfg, override_user_id=None):
     app_ctx = build_app_context(cfg)
     runtime = app_ctx["runtime"]
     urls = runtime.build_urls(cfg["base_url"])
-    bip = resolve_bind_ip(urls["init_url"], cfg)
 
     try:
+        bip = resolve_bind_ip(urls["init_url"], cfg)
         online_now, online_user, _ = runtime.query_online_identity(app_ctx, bind_ip=bip)
         logout_user = str(override_user_id or online_user or "").strip()
         if not online_now or not logout_user:
@@ -548,6 +549,7 @@ def wait_for_manual_logout_ready(
 
 def clean_slate_for_manual_login(cfg, online_user=""):
     if campus_uses_wired(cfg):
+        iface = get_wired_iface(cfg)
         if online_user:
             log(
                 "INFO",
@@ -590,13 +592,14 @@ def clean_slate_for_manual_login(cfg, online_user=""):
         log(
             "INFO",
             "manual_preclean_done",
-            "wired mode: skipping wireless rebuild, using WAN",
+            "wired mode: skipping wireless rebuild, using selected interface",
+            iface=iface,
         )
-        wan_ip = wait_for_network_interface_ipv4(
-            "wan", timeout_seconds=get_switch_ready_timeout_seconds(cfg)
+        wired_ip = wait_for_network_interface_ipv4(
+            iface, timeout_seconds=get_switch_ready_timeout_seconds(cfg)
         )
-        if not wan_ip:
-            return False, "有线校园网模式下，WAN 口尚未获取到 IPv4 地址"
+        if not wired_ip:
+            return False, "有线校园网模式下，接口 %s 尚未获取到 IPv4 地址" % iface
         return True, ""
 
     active_data = parse_wireless_iface_data()

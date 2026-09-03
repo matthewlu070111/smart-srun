@@ -566,6 +566,8 @@ class SchoolRuntimeCliTests(unittest.TestCase):
                     "alice",
                     "hcmcc",
                     "wired",
+                    "wan.v2",
+                    "1",
                     PORTAL_ORIGIN,
                     "4",
                     "128",
@@ -583,6 +585,8 @@ class SchoolRuntimeCliTests(unittest.TestCase):
 
         self.assertNotIn("operator", fields)
         self.assertEqual(fields["operator_suffix"], "hcmcc")
+        self.assertEqual(fields["wired_iface"], "wan.v2")
+        self.assertEqual(fields["auth_enabled"], "1")
         self.assertEqual(fields["n"], "128")
         self.assertEqual(fields["type"], "3")
         self.assertEqual(fields["enc"], "custom_enc")
@@ -737,6 +741,17 @@ class DaemonStartupStateTests(unittest.TestCase):
     def test_routine_online_tick_updates_state_without_info_log(self):
         self.assertFalse(
             daemon._should_log_daemon_tick("在线，下一次检测间隔 30 秒", {})
+        )
+        self.assertFalse(
+            daemon._should_log_daemon_tick("多 WAN 认证：2/2 条线路在线", {})
+        )
+        self.assertFalse(
+            daemon._should_log_daemon_tick("多 WAN 认证：3/3 条线路在线", {})
+        )
+        self.assertTrue(
+            daemon._should_log_daemon_tick(
+                "多 WAN 认证：1/2 条线路在线；wan.v2: 登录失败", {}
+            )
         )
         self.assertTrue(daemon._should_log_daemon_tick("校园网配置未就绪", {}))
 
@@ -896,6 +911,22 @@ class ForceClosePluginSourceTests(unittest.TestCase):
 
 
 class LuciSourceHardeningTests(unittest.TestCase):
+    def test_luci_wired_accounts_submit_and_match_the_selected_interface(self):
+        model_source = read_repo_text(
+            "root", "usr", "lib", "lua", "luci", "model", "cbi", "smart_srun.lua"
+        )
+        controller_source = read_repo_text(
+            "root", "usr", "lib", "lua", "luci", "controller", "smart_srun.lua"
+        )
+        js_source = read_repo_text(
+            "root", "www", "luci-static", "resources", "smart_srun.js"
+        )
+
+        self.assertIn('id="jm-wired_iface"', js_source)
+        self.assertIn("fd.append('wired_iface'", js_source)
+        self.assertIn('wired_iface = fv("wired_iface")', controller_source)
+        self.assertIn('current_iface == wired_iface', model_source)
+
     def test_cbi_model_uses_escaped_hidden_json_payloads_and_static_js_asset(self):
         source = read_repo_text(
             "root", "usr", "lib", "lua", "luci", "model", "cbi", "smart_srun.lua"

@@ -296,6 +296,7 @@ function action_status()
         campus_bssid = tostring(data.campus_bssid or ""),
         connectivity = tostring(data.connectivity or ""),
         connectivity_level = tostring(data.connectivity_level or "offline"),
+        wired_auth_sessions = type(data.wired_auth_sessions) == "table" and data.wired_auth_sessions or {},
         last_action = tostring(data.last_action or ""),
         action_result = tostring(data.action_result or ""),
         last_action_ts = tonumber(data.last_action_ts) or 0,
@@ -433,6 +434,7 @@ local function sanitize_user_preset(raw)
             ac_id = tostring(defaults_raw.ac_id or ""),
             ssid = tostring(defaults_raw.ssid or ""),
             access_mode = tostring(defaults_raw.access_mode or ""),
+            wired_iface = tostring(defaults_raw.wired_iface or ""),
         },
         observed_login_shape = {
             n = tostring(shape_raw.n or ""),
@@ -620,6 +622,8 @@ function action_enqueue()
                 operator = fv("operator"), operator_suffix = fv("operator_suffix"),
                 password = fv("password"),
                 access_mode = fv("access_mode"),
+                wired_iface = fv("wired_iface"),
+                auth_enabled = fv("auth_enabled") == "1" and "1" or "0",
                 base_url = normalize_base_url(fv("base_url")), ac_id = fv("ac_id"),
                 ssid = fv("ssid"), bssid = fv("bssid"), radio = fv("radio"),
                 n = fv("n"), type = fv("type"), enc = fv("enc"),
@@ -629,6 +633,10 @@ function action_enqueue()
             }
             if item.access_mode ~= "wired" then
                 item.access_mode = "wifi"
+                item.auth_enabled = "0"
+            end
+            if item.wired_iface == "" then
+                item.wired_iface = "wan"
             end
             if item.access_mode == "wired" then
                 item.ssid = ""

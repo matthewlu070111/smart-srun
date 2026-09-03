@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
+*.har
 .DS_Store
 .cache/
 .pytest_cache/
