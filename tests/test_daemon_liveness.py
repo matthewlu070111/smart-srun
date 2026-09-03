@@ -21,6 +21,7 @@ if MODULE_ROOT not in sys.path:
     sys.path.insert(0, MODULE_ROOT)
 
 
+from _portal_urls import CLIENT_IP
 import daemon
 
 
@@ -71,7 +72,7 @@ class DaemonLivenessTests(unittest.TestCase):
             "daemon_running": True,
             "connectivity": "互联网可达",
             "connectivity_level": "online",
-            "current_ip": "10.0.0.2",
+            "current_ip": CLIENT_IP,
             "current_ssid": "campus",
             "mode_label": "校园网模式",
             "campus_account_label": "someone",

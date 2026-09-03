@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from _portal_urls import PORTAL_ORIGIN
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LUA_ROOT = REPO_ROOT / "root" / "usr" / "lib" / "lua" / "luci"
@@ -141,8 +143,8 @@ cbi = function(value) return value end
 dofile(%s)
 local controller = package.loaded["luci.controller.smart_srun"]
 assert(controller and controller.friendly_line)
-local out = controller.friendly_line('[2026-06-01 22:00:00] INFO http_fetch_result url="http://example/login" status_code=200 duration_ms=123 password=*** | ok')
-assert(out:find("URL=http://example/login", 1, true), out)
+local out = controller.friendly_line(%s)
+assert(out:find(%s, 1, true), out)
 assert(out:find("状态码=200", 1, true), out)
 assert(out:find("耗时=123ms", 1, true), out)
 assert(not out:find("password", 1, true), out)
@@ -153,6 +155,12 @@ assert(not out:find("***", 1, true), out)
                 lua_string(LUA_ROOT.parent),
                 lua_string(LUA_ROOT.parent),
                 lua_string(CONTROLLER_FILE),
+                lua_string(
+                    '[2026-06-01 22:00:00] INFO http_fetch_result url="'
+                    + PORTAL_ORIGIN
+                    + '/login" status_code=200 duration_ms=123 password=*** | ok'
+                ),
+                lua_string("URL=" + PORTAL_ORIGIN + "/login"),
             )
             script_path = Path(temp_dir) / "friendly_probe.lua"
             script_path.write_text(script, encoding="utf-8")

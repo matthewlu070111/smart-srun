@@ -122,7 +122,13 @@ apk add --allow-untrusted ./luci-app-smart-srun-bundle-*.apk
 ## 获取学校预设与环境真实字段值
 
 ### 学校预设
-正常情况下，软件包会自动通过 `https://srun.edu-publish.site/school-presets.json` 拉取远端最新学校预设，无需手动填写
+插件优先通过 [srun.guiguisocute.com](https://srun.guiguisocute.com/school-presets.json) 获取学校预设。
+
+备用来源依次为官方 Pages 域名 `smart-srun--cloudflare-pages.pages.dev`、GitHub 原始文件、旧域名 `srun.edu-publish.site`；网络来源不可用时使用本地缓存和随包清单。
+
+学校预设只填入已知参数，账号仍需自行填写。
+
+已补录 Issue #28 的北京中医药大学参数；投稿未提供接入方式与 SSID，应用后请核对。Issue #29 的浙江工业大学采集信息保留为草稿，待插件认证复测通过后再加入默认选项。
 
 ### 环境真实字段值
 **👉 [smart_srun_school_preset_capture.user](https://github.com/guiguisocute/smart_srun_school_preset_capture.user)**（含一键安装链接和详细说明）
@@ -224,6 +230,13 @@ DHCP 地址位于 `wan.v2`，就在 LuCI 的账号编辑框中选择“有线（
 分别填写接口、学工号、密码和运营商后缀，并把每个账号的 `auth_enabled` 设为 `1`
 （LuCI 中即“参与并行守护”）。每条线路独立查询、登录和退避重试；状态会按账号显示在
 校园网账号表中。关闭全局开关后保持旧版行为，只维护当前默认账号。
+
+托管线路缺少地址、设备或无法完成接口绑定时，该线路会报告失败，避免认证请求
+经其他 WAN 发出。静默时段会暂停守护；若开启强制下线，也会处理当前活动的有线
+账号，即使它没有勾选“参与并行守护”。
+
+手动登录失败时，进度弹窗保留这次操作的具体结果，并可打开当前配置的学校认证页。
+“认证网关可达”只说明网关能访问；请结合错误提示核对认证地址、AC_ID 与账号参数。
 
 ****
 ## License

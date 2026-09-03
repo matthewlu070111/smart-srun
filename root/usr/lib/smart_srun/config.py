@@ -86,6 +86,7 @@ POINTER_KEYS = {
 }
 
 LIST_KEYS = {"campus_accounts", "hotspot_profiles"}
+LEGACY_LOGIN_SHAPE_KEYS = ("n", "type", "enc")
 
 SCHOOL_EXTRA_KEY = "school_extra"
 
@@ -295,14 +296,23 @@ def load_json_raw_config():
 
 def _normalize_json_raw_config(raw_cfg):
     payload = {}
+    legacy_shape = raw_cfg.get("_legacy_login_shape")
+    if not isinstance(legacy_shape, dict):
+        legacy_shape = {}
     for key in GLOBAL_SCALAR_KEYS:
         default_val = DEFAULTS.get(key, "")
-        payload[key] = str(raw_cfg.get(key, default_val))
+        value = raw_cfg.get(key, default_val)
+        if key in LEGACY_LOGIN_SHAPE_KEYS and key in legacy_shape:
+            value = legacy_shape[key]
+        payload[key] = str(value)
     for key in POINTER_KEYS:
         payload[key] = str(raw_cfg.get(key, ""))
     for key in LIST_KEYS:
         val = raw_cfg.get(key)
         payload[key] = val if isinstance(val, list) else []
+    payload["campus_accounts"] = _normalize_campus_accounts(
+        payload["campus_accounts"]
+    )
     payload[SCHOOL_EXTRA_KEY] = _normalize_declared_school_extra(raw_cfg)
     return payload
 
@@ -821,33 +831,41 @@ def _normalize_info_prefix(value, default_value=DEFAULT_INFO_PREFIX):
 
 def _apply_login_shape(cfg, campus):
     # 账号字段存为空字符串时视同未设置，回落到 legacy 全局值，保持
-    # account > legacy global > default 三级优先级。
+    # account > legacy global > default 三级优先级。第一次解析时保留真正的
+    # 全局值，避免切换账号或派生多 WAN 配置时把上一账号的值当作全局兜底。
+    legacy_shape = cfg.get("_legacy_login_shape")
+    if not isinstance(legacy_shape, dict):
+        legacy_shape = {
+            key: cfg.get(key, DEFAULTS.get(key, ""))
+            for key in LEGACY_LOGIN_SHAPE_KEYS
+        }
+    cfg["_legacy_login_shape"] = dict(legacy_shape)
     cfg["n"] = _login_shape_number(
-        campus.get("n") or cfg.get("n", ""),
+        str(campus.get("n") or "").strip() or legacy_shape.get("n", ""),
         DEFAULT_LOGIN_N,
     )
     cfg["type"] = _login_shape_number(
-        campus.get("type") or cfg.get("type", ""),
+        str(campus.get("type") or "").strip() or legacy_shape.get("type", ""),
         DEFAULT_LOGIN_TYPE,
     )
     cfg["enc"] = _login_shape_text(
-        campus.get("enc") or cfg.get("enc", ""),
+        str(campus.get("enc") or "").strip() or legacy_shape.get("enc", ""),
         DEFAULT_LOGIN_ENC,
     )
     cfg["info_prefix"] = _normalize_info_prefix(
-        campus.get("info_prefix") or cfg.get("info_prefix", ""),
+        campus.get("info_prefix"),
         DEFAULT_INFO_PREFIX,
     )
     cfg["double_stack"] = _login_shape_number(
-        campus.get("double_stack") or cfg.get("double_stack", ""),
+        campus.get("double_stack"),
         DEFAULT_DOUBLE_STACK,
     )
     cfg["login_os"] = _login_shape_text(
-        campus.get("login_os") or cfg.get("login_os", ""),
+        campus.get("login_os"),
         DEFAULT_LOGIN_OS,
     )
     cfg["login_name"] = _login_shape_text(
-        campus.get("login_name") or cfg.get("login_name", ""),
+        campus.get("login_name"),
         DEFAULT_LOGIN_NAME,
     )
     return cfg
@@ -922,6 +940,27 @@ def normalize_auth_enabled(value):
     )
 
 
+def normalize_campus_account(account):
+    """Copy one account into the canonical persisted/editor field shape."""
+    normalized = dict(account or {})
+    iface = str(normalized.get("wired_iface") or "").strip()
+    legacy_iface = str(normalized.pop("network_interface", "") or "").strip()
+    normalized["wired_iface"] = normalize_wired_iface(iface or legacy_iface)
+    normalized["auth_enabled"] = (
+        normalize_auth_enabled(normalized.get("auth_enabled"))
+        if normalize_campus_access_mode(normalized.get("access_mode")) == "wired"
+        else "0"
+    )
+    return normalized
+
+
+def _normalize_campus_accounts(accounts):
+    return [
+        normalize_campus_account(account) if isinstance(account, dict) else account
+        for account in accounts
+    ]
+
+
 def multi_wan_enabled(cfg):
     return str((cfg or {}).get("multi_wan_enabled", "0")).strip() == "1"
 
@@ -947,7 +986,7 @@ def resolve_campus_account_config(cfg, account):
     scalar fields. Multi-WAN authentication needs several such resolved views
     at once, without changing selection pointers or mutating the caller.
     """
-    account_copy = dict(account or {})
+    account_copy = normalize_campus_account(account)
     account_id = str(account_copy.get("id", "")).strip() or "__selected__"
     resolved = dict(cfg or {})
     resolved["campus_accounts"] = [account_copy]
@@ -1144,7 +1183,7 @@ def get_active_hotspot_profile(cfg):
 
 
 def resolve_active_items(cfg):
-    campus = get_active_campus_account(cfg)
+    campus = normalize_campus_account(get_active_campus_account(cfg))
     hotspot = get_active_hotspot_profile(cfg)
 
     cfg["campus_account_id"] = str(campus.get("id", "")).strip()
@@ -1155,11 +1194,7 @@ def resolve_active_items(cfg):
     cfg["campus_access_mode"] = normalize_campus_access_mode(
         campus.get("access_mode", "wifi")
     )
-    # #31 called this wired_iface, #32 called the same thing network_interface.
-    # One field wins; the loser is still read so nothing hand-written is lost.
-    cfg["wired_iface"] = normalize_wired_iface(
-        campus.get("wired_iface") or campus.get("network_interface") or "wan"
-    )
+    cfg["wired_iface"] = campus["wired_iface"]
     cfg["campus_auth_enabled"] = normalize_auth_enabled(
         campus.get("auth_enabled", "0")
     )
@@ -1315,6 +1350,7 @@ def load_config():
     for key in LIST_KEYS:
         val = raw.get(key)
         cfg[key] = val if isinstance(val, list) else []
+    cfg["campus_accounts"] = _normalize_campus_accounts(cfg["campus_accounts"])
     cfg[SCHOOL_EXTRA_KEY] = _normalize_declared_school_extra(raw)
 
     if str(raw.get("retry_cooldown_seconds", "")).strip() == "":
@@ -1403,17 +1439,21 @@ def load_config():
 def localize_error(message):
     mapping = {
         "challenge_expire_error": "挑战码已过期，请重试。",
-        # 调用方在报这条之前已经复核过"是否其实已在线"，所以走到本地化时
-        # 一定不是在线态，旧文案的"可能已在线"只会把人带偏（issue #29）。
         "no_response_data_error": (
-            "网关收到了请求但没返回认证数据，通常是 AC_ID 与实际接入的"
-            "控制器不符。请先用浏览器打开学校认证页，核对地址栏里的 ac_id "
-            "并填回本插件；若浏览器同样打不开认证页，则改用网页认证。"
+            "网关未返回认证数据。请核对认证地址、AC_ID 和账号参数；"
+            "也可打开学校认证页确认当前网络状态。"
         ),
         "portal_intercept_error": (
-            "认证请求被网页门户拦截，没有到达 SRun 网关。请先用浏览器打开"
-            "任意网页完成网页认证，再回来点登录；如果反复出现，多半是认证"
-            "地址填错了。"
+            "认证接口返回了网页，未获得认证结果。请检查认证地址，"
+            "也可尝试用浏览器打开学校认证页。"
+        ),
+        "auth_html_response_error": (
+            "认证接口返回了网页，未获得认证结果。请检查认证地址，"
+            "也可尝试用浏览器打开学校认证页。"
+        ),
+        "auth_response_parse_error": (
+            "认证接口返回的数据格式异常，未获得有效认证结果。"
+            "请稍后重试或检查认证地址。"
         ),
         "not_online_error": "网关显示当前 IP 未在线。",
         "login_error": "认证失败。",

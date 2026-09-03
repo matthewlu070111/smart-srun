@@ -29,9 +29,8 @@ jobs:
           python-version: "3.11"
 
       - name: Install Python tooling
-        # ruff is pinned on purpose: an unpinned install moves the lint gate
-        # every time ruff changes its defaults, which is how main went red
-        # with no code change. Bump it deliberately, alongside ruff.toml.
+        # Keep the lint tool reproducible. Update this pin deliberately,
+        # alongside the accepted rule set in ruff.toml.
         run: python -m pip install --upgrade pip pytest "ruff==0.16.5"
 
       - name: Set up Node

@@ -688,6 +688,7 @@ class HotUpdateScriptTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {}, clear=True):
             hot_update = load_hot_update_module(self)
 
+        # This asserts the deploy script's shipped default, not a test connection.
         self.assertEqual(hot_update.ROUTER_HOST, "10.0.0.1")
         self.assertIsNone(hot_update.ROUTER_PASSWORD)
         with self.assertRaises(RuntimeError) as exc:
@@ -924,7 +925,7 @@ class LuciSourceHardeningTests(unittest.TestCase):
 
         self.assertIn('id="jm-wired_iface"', js_source)
         self.assertIn("fd.append('wired_iface'", js_source)
-        self.assertIn('wired_iface = fv("wired_iface")', controller_source)
+        self.assertIn('wired_iface = util.trim(fv("wired_iface"))', controller_source)
         self.assertIn('current_iface == wired_iface', model_source)
 
     def test_cbi_model_uses_escaped_hidden_json_payloads_and_static_js_asset(self):

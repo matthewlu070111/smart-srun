@@ -14,13 +14,20 @@ except ImportError:  # OpenWrt python3-light may omit urllib.
 
 
 SCHEMA_VERSION = 1
-MIRROR_PRESETS_URL = "https://srun.edu-publish.site/school-presets.json"
+MIRROR_PRESETS_URL = "https://srun.guiguisocute.com/school-presets.json"
+PAGES_PRESETS_URL = "https://smart-srun--cloudflare-pages.pages.dev/school-presets.json"
+LEGACY_PRESETS_URL = "https://srun.edu-publish.site/school-presets.json"
 GITHUB_PRESETS_URL = (
     "https://raw.githubusercontent.com/matthewlu070111/"
     "smart-srun/main/doc/school-presets.json"
 )
 REMOTE_PRESETS_URL = MIRROR_PRESETS_URL
-REMOTE_PRESETS_URLS = (MIRROR_PRESETS_URL, GITHUB_PRESETS_URL)
+REMOTE_PRESETS_URLS = (
+    MIRROR_PRESETS_URL,
+    PAGES_PRESETS_URL,
+    GITHUB_PRESETS_URL,
+    LEGACY_PRESETS_URL,
+)
 MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 FALLBACK_PRESETS_FILE = os.path.join(MODULE_DIR, "school_presets_fallback.json")
 CACHE_PRESETS_FILE = os.path.join(MODULE_DIR, "school_presets_cache.json")
@@ -32,6 +39,33 @@ DEFAULT_OPERATORS = [
     {"suffix": "cucc", "label": "中国联通"},
     {"suffix": "", "label": "校园网"},
 ]
+
+_PRESET_FIELD_ORDER = {
+    "payload": ("schema_version", "updated_at", "source", "schools", "_source_url", "_cached_at"),
+    "schools": (
+        "id", "short_name", "name", "status", "description", "doc_url", "defaults",
+        "observed_login_shape", "operators", "contributors", "source_issue",
+    ),
+    "defaults": ("base_url", "ac_id", "ssid", "access_mode"),
+    "observed_login_shape": ("n", "type", "enc", "info_prefix", "double_stack", "os", "name"),
+    "operators": ("suffix", "id", "label"),
+}
+
+
+def _ordered_preset_json(value, section="payload"):
+    if isinstance(value, list):
+        return [_ordered_preset_json(item, section) for item in value]
+    if not isinstance(value, dict):
+        return value
+    known = _PRESET_FIELD_ORDER.get(section, ())
+    keys = [key for key in known if key in value]
+    keys.extend(sorted(key for key in value if key not in known))
+    return {key: _ordered_preset_json(value[key], key) for key in keys}
+
+
+def format_preset_payload(payload):
+    """Format catalogue/cache JSON without adding or changing school data."""
+    return json.dumps(_ordered_preset_json(payload), ensure_ascii=False, indent=2) + "\n"
 
 
 def _read_json(path):
@@ -48,9 +82,8 @@ def _write_json(path, payload):
     if parent and not os.path.exists(parent):
         os.makedirs(parent)
     tmp_path = path + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
-        handle.write("\n")
+    with open(tmp_path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(format_preset_payload(payload))
     os.replace(tmp_path, path)
 
 
@@ -245,9 +278,12 @@ def normalize_payload(payload, include_draft=False):
         return []
     if schema_version != SCHEMA_VERSION:
         return []
+    schools = payload.get("schools") or []
+    if not isinstance(schools, list):
+        return []
     out = []
     seen = set()
-    for raw in payload.get("schools") or []:
+    for raw in schools:
         item = normalize_school(raw)
         if not item:
             continue
@@ -319,6 +355,9 @@ def _fetch_remote_payload_with_source(url=None, timeout=REMOTE_TIMEOUT_SECONDS):
                 "%s: remote school presets must be a JSON object" % candidate_url
             )
             continue
+        if not _payload_schema_ok(data):
+            errors.append("%s: invalid school preset schema or schools list" % candidate_url)
+            continue
         return data, candidate_url
     raise RuntimeError("failed to fetch school presets: %s" % "; ".join(errors))
 
@@ -338,7 +377,8 @@ def _payload_schema_ok(payload):
     if not isinstance(payload, dict):
         return False
     try:
-        return int(payload.get("schema_version") or 0) == SCHEMA_VERSION
+        return (int(payload.get("schema_version") or 0) == SCHEMA_VERSION
+                and isinstance(payload.get("schools", []), list))
     except (TypeError, ValueError):
         return False
 
@@ -348,17 +388,18 @@ def refresh_remote_presets(url=None, timeout=REMOTE_TIMEOUT_SECONDS):
     # 先校验再落盘：非法 schema_version 的远端发布不写入缓存，否则会毒化本地
     # 缓存，此后每次 list_presets 都从坏缓存崩溃且无法自愈（连内置 fallback 一起丢）。
     if not _payload_schema_ok(payload):
-        raise RuntimeError("远端预设 schema_version 非法，已拒绝缓存")
+        raise RuntimeError("远端预设 schema_version 或 schools 列表非法，已拒绝缓存")
     cached = _read_json(CACHE_PRESETS_FILE)
     remote_version = _payload_updated_at(payload)
     cached_version = _payload_updated_at(cached)
-    if cached_version and remote_version and remote_version <= cached_version:
+    if (_payload_schema_ok(cached) and cached_version and remote_version
+            and remote_version < cached_version):
         cached["_source_url"] = cached.get("_source_url") or source_url
         return {
             "ok": True,
             "source_url": cached["_source_url"],
             "cached_at": int(cached.get("_cached_at") or 0),
-            "schools": normalize_payload(cached, include_draft=True),
+            "schools": list_presets(),
         }
     payload["_cached_at"] = int(time.time())
     payload["_source_url"] = source_url
@@ -367,23 +408,18 @@ def refresh_remote_presets(url=None, timeout=REMOTE_TIMEOUT_SECONDS):
         "ok": True,
         "source_url": source_url,
         "cached_at": payload["_cached_at"],
-        "schools": normalize_payload(payload, include_draft=True),
+        # 刷新结果直接供 LuCI 使用，与初始列表保持相同的合并和状态规则。
+        # 缓存仍保存完整采集数据，草稿可通过 include_draft=True 检查。
+        "schools": list_presets(),
     }
 
 
 def _refresh_remote_payload_for_list():
     try:
-        payload, source_url = _fetch_remote_payload_with_source(
-            timeout=REMOTE_TIMEOUT_SECONDS
-        )
+        refresh_remote_presets(timeout=REMOTE_TIMEOUT_SECONDS)
     except Exception:
         return {}
-    if not _payload_schema_ok(payload):
-        return {}
-    payload["_cached_at"] = int(time.time())
-    payload["_source_url"] = source_url
-    _write_json(CACHE_PRESETS_FILE, payload)
-    return payload
+    return _read_json(CACHE_PRESETS_FILE)
 
 
 def _merge_presets(base_items, override_items):

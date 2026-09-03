@@ -237,8 +237,28 @@
 
   window.smartFetchJson = fetchJson;
 
+  function renderPortalGuidance(container, url) {
+    if (!container) return;
+    container.textContent = '';
+    container.style.display = 'none';
+    url = String(url || '');
+    // Only open a configured HTTP(S) school page on an explicit user click.
+    if (!/^https?:\/\//i.test(url) || /[\s\\]/.test(url)) return;
+    var link = document.createElement('a');
+    link.href = url;
+    if ((link.protocol !== 'http:' && link.protocol !== 'https:') || !link.host) return;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = '打开学校认证页';
+    container.appendChild(link);
+    container.appendChild(document.createTextNode('，确认网络状态后可返回重试。'));
+    container.style.display = '';
+  }
+
   function openBlockingFeedback(action, requestedAt) {
     var result = document.getElementById('smart-srun-manual-result') || document.getElementById('smart-srun-switch-result');
+    var resultPortal = document.getElementById('smart-srun-manual-portal');
+    renderPortalGuidance(resultPortal, '');
     var logBox = E('pre', {
       'style': 'max-height:18rem;overflow:auto;margin:0;padding:.75rem;border:1px solid rgba(127,127,127,.28);background:rgba(127,127,127,.08);white-space:pre-wrap;word-break:break-word;'
     }, '等待后端反馈...');
@@ -255,6 +275,7 @@
       switch_campus: '正在切换回校园网，请稍候。'
     };
     var tip = E('p', { 'style': 'margin:.5rem 0 1rem 0;' }, tips[action] || '正在执行网络动作，请稍候。');
+    var portalHelp = E('div', { 'style': 'display:none;margin:.75rem 0;' });
     var footer = E('div', { 'class': 'right' });
     var closed = false;
     var timer = null;
@@ -306,11 +327,14 @@
       forceButton.disabled = true;
     }
 
-    function unlock(text, success) {
+    function unlock(text, success, portalUrl) {
       if (closed) return;
       closed = true;
       if (timer) window.clearInterval(timer);
       setTerminalFooter();
+      tip.textContent = text || (success ? '操作完成' : '执行失败');
+      renderPortalGuidance(portalHelp, success ? '' : portalUrl);
+      renderPortalGuidance(resultPortal, success ? '' : portalUrl);
       if (result && text) result.textContent = text + (success ? ' 🎉' : ' ⚠');
     }
 
@@ -319,15 +343,15 @@
       if (statusData.last_action !== action) return false;
       if ((statusData.last_action_ts || 0) < requestedAt) return false;
       if (statusData.action_result === 'forced') {
-        unlock(statusData.status || '已强制停止', false);
+        unlock(statusData.last_action_message || statusData.status || '已强制停止', false);
         return true;
       }
       if (statusData.action_result === 'error') {
-        unlock(statusData.status || '执行失败', false);
+        unlock(statusData.last_action_message || statusData.status || '执行失败', false, statusData.last_action_portal_url);
         return true;
       }
       if (statusData.action_result === 'ok') {
-        unlock(statusData.status || '操作完成', true);
+        unlock(statusData.last_action_message || statusData.status || '操作完成', true);
         return true;
       }
       return false;
@@ -347,7 +371,7 @@
       });
     }
 
-    L.showModal(titles[action] || '正在执行动作', [ tip, logBox, footer ], 'cbi-modal');
+    L.showModal(titles[action] || '正在执行动作', [ tip, logBox, portalHelp, footer ], 'cbi-modal');
     timer = window.setInterval(poll, 1000);
     poll();
   }
@@ -434,7 +458,11 @@
   function schoolPresetList() {
     // 不再内置任何学校的兜底预设：预设列表完全来自后端（远端/缓存/打包 fallback）。
     var items = readJson('smart-school-preset-data', []);
-    return (items && items.length) ? items : [];
+    var active = [];
+    for (var i = 0; items && i < items.length; i++) {
+      if (items[i] && items[i].status === 'active') active.push(items[i]);
+    }
+    return active;
   }
 
   function refreshSchoolPresets() {
@@ -442,7 +470,7 @@
     if (!node || window.__smartPresetsRefresh) return;
     window.__smartPresetsRefresh = true;
     fetchJson('/cgi-bin/luci/admin/services/smart_srun/presets_refresh?_=' + Date.now(), function(err, data) {
-      if (err || !data || !data.ok || !data.schools || !data.schools.length) return;
+      if (err || !data || !data.ok || !data.schools) return;
       node.value = JSON.stringify(data.schools);
       node.textContent = node.value;
     });
@@ -586,7 +614,7 @@
       user_id: item.user_id || '',
       operator_suffix: item.operator_suffix || '',
       access_mode: item.access_mode || 'wifi',
-      wired_iface: item.wired_iface || 'wan',
+      wired_iface: String(item.wired_iface || '').replace(/^\s+|\s+$/g, '') || String(item.network_interface || '').replace(/^\s+|\s+$/g, '') || 'wan',
       auth_enabled: String(item.auth_enabled || '0'),
       base_url: item.base_url || '',
       ac_id: item.ac_id || '1',

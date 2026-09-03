@@ -20,6 +20,7 @@ local LOG_TAIL_SOURCE_LINES = 2000
 
 local NETWORK_EVENTS = {
     bind_ip_resolved = true,
+    http_bind_device = true,
     http_fetch = true,
     http_fetch_result = true,
     connectivity_probe_begin = true,
@@ -29,6 +30,7 @@ local NETWORK_EVENTS = {
     srun_challenge_result = true,
     srun_login_submit = true,
     srun_login_response = true,
+    srun_logout_response = true,
     srun_online_query = true,
     srun_online_result = true,
     ip_wait_progress = true,
@@ -219,6 +221,8 @@ local function handle_force_stop()
     local state = read_json_file(STATE_FILE)
     restore_manual_guarded_enabled(state)
     state.message = "已强制关闭插件并停止服务"
+    state.last_action_message = state.message
+    state.last_action_portal_url = ""
     state.pending_action = ""
     state.last_action = "force_stop"
     state.last_action_ts = os.time()
@@ -298,6 +302,8 @@ function action_status()
         connectivity_level = tostring(data.connectivity_level or "offline"),
         wired_auth_sessions = type(data.wired_auth_sessions) == "table" and data.wired_auth_sessions or {},
         last_action = tostring(data.last_action or ""),
+        last_action_message = tostring(data.last_action_message or ""),
+        last_action_portal_url = tostring(data.last_action_portal_url or ""),
         action_result = tostring(data.action_result or ""),
         last_action_ts = tonumber(data.last_action_ts) or 0,
         action_started_at = tonumber(data.action_started_at) or 0,
@@ -593,6 +599,8 @@ function action_enqueue()
             requested_at = requested_at,
         })
         state.message = action_message
+        state.last_action_message = ""
+        state.last_action_portal_url = ""
         state.pending_action = action
         state.last_action = action
         state.last_action_ts = requested_at
@@ -622,7 +630,7 @@ function action_enqueue()
                 operator = fv("operator"), operator_suffix = fv("operator_suffix"),
                 password = fv("password"),
                 access_mode = fv("access_mode"),
-                wired_iface = fv("wired_iface"),
+                wired_iface = util.trim(fv("wired_iface")),
                 auth_enabled = fv("auth_enabled") == "1" and "1" or "0",
                 base_url = normalize_base_url(fv("base_url")), ac_id = fv("ac_id"),
                 ssid = fv("ssid"), bssid = fv("bssid"), radio = fv("radio"),
@@ -636,7 +644,8 @@ function action_enqueue()
                 item.auth_enabled = "0"
             end
             if item.wired_iface == "" then
-                item.wired_iface = "wan"
+                item.wired_iface = util.trim(fv("network_interface"))
+                if item.wired_iface == "" then item.wired_iface = "wan" end
             end
             if item.access_mode == "wired" then
                 item.ssid = ""
@@ -663,6 +672,7 @@ function action_enqueue()
                     local merged = cfg.campus_accounts[idx]
                     if type(merged) ~= "table" then merged = {} end
                     for k, v in pairs(item) do merged[k] = v end
+                    merged.network_interface = nil
                     cfg.campus_accounts[idx] = merged
                     ok = true; message = "已更新"; need_restart = true
                 else
@@ -800,6 +810,7 @@ local event_zh = {
     disconnect_detected = "检测到断线",
     status_check_error  = "状态检测异常",
     online_account_mismatch = "在线账号与配置不符",
+    multi_wan_session   = "有线账号认证状态",
     logout_request      = "正在登出",
     logout_success      = "登出成功",
     logout_failed       = "登出失败",
@@ -842,6 +853,7 @@ local event_zh = {
     tick_begin          = "守护进程心跳",
     -- 网络底层
     bind_ip_resolved    = "绑定 IP 已解析",
+    http_bind_device    = "认证连接已绑定到设备",
     http_fetch          = "发起 HTTP 请求",
     http_fetch_result   = "HTTP 请求结果",
     connectivity_probe_begin = "开始连通性探测",
@@ -863,6 +875,7 @@ local event_zh = {
     srun_challenge_result = "SRun 挑战码结果",
     srun_login_submit   = "提交 SRun 登录",
     srun_login_response = "SRun 登录响应",
+    srun_logout_response = "SRun 登出响应",
     srun_online_query   = "查询 SRun 在线状态",
     srun_online_result  = "SRun 在线状态结果",
     -- 学校运行时
@@ -871,7 +884,7 @@ local event_zh = {
     runtime_dispatch    = "学校运行时派发",
 }
 
--- Error reason translation (reuses server-side mapping)
+-- Error reason translation for raw structured log codes.
 local reason_zh = {
     username_or_password_error = "用户名或密码错误",
     ip_already_online_error    = "IP已在线",
@@ -879,6 +892,11 @@ local reason_zh = {
     sign_error                 = "签名错误",
     radius_error               = "RADIUS认证失败",
     login_error                = "认证失败",
+    no_response_data_error     = "网关未返回认证数据，请核对认证地址、AC_ID 和账号参数",
+    not_online_error           = "网关显示当前 IP 未在线",
+    portal_intercept_error     = "认证接口返回了网页，请检查认证地址或尝试网页登录",
+    auth_html_response_error   = "认证接口返回了网页，请检查认证地址或尝试网页登录",
+    auth_response_parse_error  = "认证接口返回的数据格式异常",
 }
 
 -- Parse structured log line: "[ts] LEVEL EVENT k=v ... | msg"
@@ -1053,6 +1071,11 @@ local friendly_field_labels = {
     source = "来源",
     runtime_type = "运行时",
     hook = "钩子",
+    account_id = "账号ID",
+    wired_iface = "有线接口",
+    bind_device = "绑定设备",
+    response_type = "响应类型",
+    strict = "严格绑定",
     school = "学校",
     mode = "模式",
     pid = "PID",

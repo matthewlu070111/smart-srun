@@ -681,6 +681,7 @@ function manual_login.cfgvalue()
   <button id="smart-srun-manual-logout" type="button" class="cbi-button cbi-button-reset">立即登出</button>
   <span id="smart-srun-manual-result" style="color:#666;"></span>
 </div>
+<div id="smart-srun-manual-portal" style="display:none;margin-top:.5rem;"></div>
 ]]
 end
 
@@ -779,7 +780,8 @@ function tables_html.cfgvalue()
             local campus_ssid = tostring(a.ssid or "")
             local campus_bssid = tostring(a.bssid or ""):lower()
             local access_mode = tostring(a.access_mode or "wifi")
-            local wired_iface = tostring(a.wired_iface or "wan")
+            local wired_iface = util.trim(tostring(a.wired_iface or ""))
+            if wired_iface == "" then wired_iface = util.trim(tostring(a.network_interface or "")) end
             if wired_iface == "" then wired_iface = "wan" end
             local auth_enabled = tostring(a.auth_enabled or "0") == "1"
             local is_managed = multi_wan_on and access_mode == "wired" and auth_enabled

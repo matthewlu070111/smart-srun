@@ -147,3 +147,11 @@ endef
 $(eval $(call BuildPackage,smart-srun))
 $(eval $(call BuildPackage,luci-app-smart-srun))
 $(eval $(call BuildPackage,luci-app-smart-srun-bundle))
+
+# The APK backend in OpenWrt 25.12 does not emit CONFLICTS. Add its negative
+# runtime dependencies after BuildPackage captures the Kconfig/build graph.
+# Keep CONFLICTS above for IPK; the split pair remains installable together.
+ifneq ($(CONFIG_USE_APK),)
+Package/luci-app-smart-srun/DEPENDS += , !luci-app-smart-srun-bundle
+Package/luci-app-smart-srun-bundle/DEPENDS += , !smart-srun, !luci-app-smart-srun
+endif

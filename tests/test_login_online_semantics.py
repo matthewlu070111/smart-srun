@@ -3,7 +3,7 @@
 覆盖两类现场常见语义：
 1. E2620 "You are already online" 必须按成功处理——srun 会话按 IP 记，
    路由器重启后旧会话仍在，把它当失败会让守护带着退避无限重试。
-2. 部分学校 rad_user_info 返回带后缀的完整账号（user@stu.example.edu），
+2. 部分学校 rad_user_info 返回带后缀的完整账号（user@stu.example.test），
    在线判定与账号匹配都要按去后缀主体比对。
 
 测试账号、门户与客户端 IP 均为占位符，不对应真实账号或校园网环境。
@@ -30,7 +30,7 @@ from schools._base import SchoolProfile  # noqa: E402
 
 # Synthetic fixtures — not real campus accounts.
 FAKE_USER_ID = "student001"
-FAKE_USER_SUFFIX = "stu.example.edu"
+FAKE_USER_SUFFIX = "stu.example.test"
 FAKE_USERNAME = FAKE_USER_ID + "@" + FAKE_USER_SUFFIX
 FAKE_USERNAME_CMCC = FAKE_USER_ID + "@cmcc"
 FAKE_OTHER_USERNAME = "otheruser@" + FAKE_USER_SUFFIX

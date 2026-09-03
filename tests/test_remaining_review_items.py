@@ -134,12 +134,12 @@ class NetworkBindIpTests(unittest.TestCase):
             calls.append(cmd)
             if cmd[:3] == ["ubus", "call", "network.interface.wan"]:
                 return True, "{not-json"
-            return True, "2: eth0    inet 10.0.0.9/24 brd 10.0.0.255 scope global eth0"
+            return True, f"2: eth0    inet {BIND_IP}/24 scope global eth0"
 
         with mock.patch.object(network, "run_cmd", side_effect=fake_run):
             ip = network.get_ipv4_from_network_interface("wan")
 
-        self.assertEqual(ip, "10.0.0.9")
+        self.assertEqual(ip, BIND_IP)
         self.assertEqual(
             calls[-1],
             ["ip", "-4", "-o", "addr", "show", "dev", "wan"],

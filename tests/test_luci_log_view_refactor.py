@@ -177,7 +177,7 @@ class LuciLogViewRefactorTests(unittest.TestCase):
 
     def test_apply_school_preset_replaces_operator_choices_not_merges(self):
         # Switching school A -> school B must drop A's operators (e.g. nchu
-        # "学生用户"/stu.nchu.edu.cn) and install B's list; custom entries stay.
+        # "学生用户") and install B's list; custom entries stay.
         self.assertIn("function replacePresetOperators(preset)", self.js_text)
         self.assertIn("var nextOperators = replacePresetOperators(preset)", self.js_text)
         self.assertNotIn("function mergePresetOperators", self.js_text)

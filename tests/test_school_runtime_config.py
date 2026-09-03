@@ -530,6 +530,113 @@ class SchoolRuntimeConfigTests(unittest.TestCase):
         self.assertEqual("Windows 10", loaded["login_os"])
         self.assertEqual("Windows", loaded["login_name"])
 
+    def _multi_wan_login_shape_config(self):
+        return {
+            "school": "default",
+            "multi_wan_enabled": "1",
+            "n": "199",
+            "type": "2",
+            "enc": "legacy_enc",
+            "active_campus_id": "campus-1",
+            "default_campus_id": "campus-1",
+            "campus_accounts": [
+                {
+                    "id": "campus-1",
+                    "user_id": "alice",
+                    "access_mode": "wired",
+                    "auth_enabled": "1",
+                    "wired_iface": "wan",
+                    "n": "128",
+                    "type": "3",
+                    "enc": "account_enc",
+                    "info_prefix": "{CUSTOM}",
+                    "double_stack": "1",
+                    "login_os": "account_os",
+                    "login_name": "account_name",
+                },
+                {
+                    "id": "campus-2",
+                    "user_id": "bob",
+                    "access_mode": "wired",
+                    "auth_enabled": "1",
+                    "wired_iface": "wan2",
+                    "n": "",
+                    "type": "  ",
+                    "enc": "",
+                },
+            ],
+            "hotspot_profiles": [],
+        }
+
+    def _assert_legacy_login_shape(self, resolved):
+        self.assertEqual("199", resolved["n"])
+        self.assertEqual("2", resolved["type"])
+        self.assertEqual("legacy_enc", resolved["enc"])
+        self.assertEqual("SRBX1", resolved["info_prefix"])
+        self.assertEqual("0", resolved["double_stack"])
+        self.assertEqual("Windows 10", resolved["login_os"])
+        self.assertEqual("Windows", resolved["login_name"])
+
+    def test_loaded_multi_wan_accounts_keep_independent_login_shape_fallbacks(self):
+        config.save_json_raw_config(self._multi_wan_login_shape_config())
+        loaded = config.load_config()
+
+        managed = config.get_managed_wired_account_configs(loaded)
+
+        self.assertEqual("128", loaded["n"])
+        self.assertEqual("CUSTOM", managed[0]["info_prefix"])
+        self._assert_legacy_login_shape(managed[1])
+        self.assertEqual("campus-1", loaded["active_campus_id"])
+        self.assertEqual(2, len(loaded["campus_accounts"]))
+        # A derived view may itself be used to select another account.
+        derived = config.resolve_campus_account_config(
+            managed[0], loaded["campus_accounts"][1]
+        )
+        self._assert_legacy_login_shape(derived)
+
+    def test_multi_wan_account_without_legacy_globals_uses_builtin_defaults(self):
+        raw = self._multi_wan_login_shape_config()
+        for key in ("n", "type", "enc"):
+            raw.pop(key)
+        config.save_json_raw_config(raw)
+        loaded = config.load_config()
+
+        account = config.get_managed_wired_account_configs(loaded)[1]
+
+        self.assertEqual("200", account["n"])
+        self.assertEqual("1", account["type"])
+        self.assertEqual("srun_bx1", account["enc"])
+        self.assertEqual("SRBX1", account["info_prefix"])
+
+    def test_reselecting_active_account_does_not_reuse_previous_login_shape(self):
+        cfg = self._multi_wan_login_shape_config()
+        config.resolve_active_items(cfg)
+        cfg["active_campus_id"] = "campus-2"
+
+        config.resolve_active_items(cfg)
+
+        self._assert_legacy_login_shape(cfg)
+
+    def test_saving_resolved_config_keeps_legacy_values_without_runtime_metadata(self):
+        config.save_json_raw_config(self._multi_wan_login_shape_config())
+        loaded = config.load_config()
+        loaded["_multi_wan_strict_bind"] = "1"
+
+        config.save_json_raw_config(loaded)
+        saved = config.load_json_raw_config()
+
+        self.assertEqual("199", saved["n"])
+        self.assertEqual("2", saved["type"])
+        self.assertEqual("legacy_enc", saved["enc"])
+        self.assertEqual("128", saved["campus_accounts"][0]["n"])
+        self.assertFalse(any(key.startswith("_") for key in saved))
+        self.assertNotIn("info_prefix", saved)
+        reloaded = config.load_config()
+        self.assertEqual("128", reloaded["n"])
+        self._assert_legacy_login_shape(
+            config.get_managed_wired_account_configs(reloaded)[1]
+        )
+
     def test_school_metadata_lookup_error_falls_back_to_minimal_metadata(self):
         with mock.patch(
             "schools.get_school_metadata",

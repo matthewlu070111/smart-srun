@@ -1,17 +1,12 @@
 # Lint gate for root/usr/lib/smart_srun/ (see .github/workflows/ci.yml).
 #
-# Without this file `ruff check` runs whatever rule set the installed ruff
-# defaults to. ruff widened that default, so `main` went red with 298 findings
-# without a single line of runtime code changing. The set below is ruff's
-# historical default and is clean at zero findings; the CI workflow pins the
-# ruff version so the gate only moves when we move it.
+# Keep the accepted rule set explicit and the tool version pinned in CI.
+# Change both deliberately so local and CI runs use a reproducible lint gate.
 #
 # Deliberately not enabled yet, with the reason:
-#   UP031  (215) percent formatting -- a repo-wide rewrite of the same modules
-#                #31 / #32 are about to land in. Do it after multi-WAN merges,
-#                not before, or both forks lose their rebase.
-#   BLE001  (37) blind except -- the daemon catches broadly on purpose.
-#   I001    (14) import sorting -- modules import bare names off a sys.path
+#   UP031 percent formatting -- mechanical style changes are a separate task.
+#   BLE001 blind except -- the daemon catches broadly on purpose.
+#   I001 import sorting -- modules import bare names off a sys.path
 #                entry (see CLAUDE.md); resorting imports is not free here.
 
 [lint]

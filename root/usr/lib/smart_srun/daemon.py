@@ -23,6 +23,7 @@ from config import (
     clear_log_context,
     ensure_parent_dir,
     failover_enabled,
+    get_active_campus_account,
     get_managed_wired_account_configs,
     in_quiet_window,
     load_config,
@@ -33,11 +34,13 @@ from config import (
     localize_error,
     mark_inflight_action,
     multi_wan_enabled,
+    normalize_campus_account,
     pop_runtime_action,
     requeue_runtime_action,
     save_runtime_status,
     reconcile_manual_login_service_guard,
     restore_switch_service_guard,
+    resolve_campus_account_config,
     set_log_context,
     timed,
     wifi_key_required,
@@ -56,7 +59,7 @@ import orchestrator
 import school_presets
 import school_runtime
 import srun_auth
-from snapshot import build_runtime_snapshot
+from snapshot import build_runtime_snapshot, cached_connectivity_matches
 
 
 DAEMON_LOCK_FILE = "/var/run/smart_srun/daemon.lock"
@@ -76,6 +79,8 @@ def _make_daemon_state():
     return {
         "was_in_quiet": False,
         "quiet_logout_done": False,
+        "quiet_completed_accounts": [],
+        "quiet_active_logout_done": False,
         "current_mode": "campus",
         "was_online": False,
         "last_switch_ts": 0,
@@ -149,6 +154,8 @@ def _build_startup_status_payload():
                 "last_action": str(runtime_state.get("last_action") or queued_name),
                 "last_action_ts": requested_at,
                 "action_result": "pending",
+                "last_action_message": "",
+                "last_action_portal_url": "",
                 "action_started_at": requested_at,
                 "pending_action": queued_name,
             },
@@ -171,6 +178,8 @@ def _build_startup_status_payload():
                 "last_action": stale_pending,
                 "last_action_ts": int(runtime_state.get("last_action_ts") or 0),
                 "action_result": "error",
+                "last_action_message": "上次动作 %s 未执行完成（守护进程重启），请重试" % stale_pending,
+                "last_action_portal_url": "",
                 "action_started_at": 0,
                 "pending_action": "",
             },
@@ -182,6 +191,8 @@ def _build_startup_status_payload():
             "last_action": "",
             "last_action_ts": 0,
             "action_result": "",
+            "last_action_message": "",
+            "last_action_portal_url": "",
             "action_started_at": 0,
             "pending_action": "",
         },
@@ -273,6 +284,19 @@ def _handle_runtime_action_core(app_ctx, state, action):
     return ok, message
 
 
+def _manual_login_feedback(cfg, message):
+    """Attach a configured portal link without delaying action completion."""
+    url = school_presets.normalize_base_url(cfg.get("base_url", ""))
+    # Keep the link an HTTP origin: no credentials, control characters or
+    # browser-dependent backslash parsing. Response bodies never supply URLs.
+    if not re.fullmatch(r"https?://(?:\[[0-9A-Fa-f:]+\]|[A-Za-z0-9.-]+)(?::[0-9]{1,5})?", url):
+        url = ""
+    prior = load_runtime_state()
+    if cached_connectivity_matches(cfg, prior) and prior.get("connectivity_level") == "portal":
+        message += "；最近检测到本账号认证网关可达，但尚未联网，可尝试网页认证。"
+    return message, url
+
+
 def handle_runtime_action(cfg, state, runtime=None, app_ctx=None):
     payload = pop_runtime_action()
     action = str(payload.get("action", "")).strip()
@@ -303,6 +327,8 @@ def handle_runtime_action(cfg, state, runtime=None, app_ctx=None):
             last_action=action,
             last_action_ts=action_started_at,
             action_result="pending",
+            last_action_message="",
+            last_action_portal_url="",
             pending_action=action,
             action_started_at=action_started_at,
         )
@@ -316,6 +342,9 @@ def handle_runtime_action(cfg, state, runtime=None, app_ctx=None):
             ok = False
             message = "动作执行异常: " + localize_error(exc)
         action_result = "ok" if ok else "error"
+        portal_url = ""
+        if action == "manual_login" and not ok:
+            message, portal_url = _manual_login_feedback(cfg, message)
         if message.startswith("忽略未知动作:"):
             action_result = "ignored"
         if action.startswith("switch_") and ok:
@@ -340,6 +369,8 @@ def handle_runtime_action(cfg, state, runtime=None, app_ctx=None):
             last_action=action,
             last_action_ts=int(time.time()),
             action_result=action_result,
+            last_action_message=message,
+            last_action_portal_url=portal_url,
             action_started_at=0,
             pending_action="",
         )
@@ -366,8 +397,24 @@ def _daemon_tick_quiet(cfg, state, interval):
     mode_msg = ""
     runtime_mode = detect_runtime_mode(cfg)
 
-    if not state["was_in_quiet"]:
+    quiet_accounts = _quiet_wired_account_configs(cfg) if multi_wan_enabled(cfg) else []
+    quiet_policy = {
+        "force_logout": str(cfg.get("force_logout_in_quiet", "0")),
+        "multi_wan": multi_wan_enabled(cfg),
+        "active_account": [str(cfg.get("campus_account_id", "")),
+                           str(cfg.get("username", "")),
+                           str(cfg.get("campus_access_mode", ""))],
+        "accounts": [
+            [item.get("campus_account_id", ""), item.get("wired_iface", ""),
+             item.get("username", ""), item.get("base_url", "")]
+            for item in quiet_accounts
+        ],
+    }
+    if not state["was_in_quiet"] or state.get("quiet_policy") != quiet_policy:
         state["quiet_logout_done"] = False
+        state["quiet_completed_accounts"] = []
+        state["quiet_active_logout_done"] = False
+    state["quiet_policy"] = quiet_policy
 
     managed_ok = True
     managed_message = ""
@@ -384,8 +431,11 @@ def _daemon_tick_quiet(cfg, state, interval):
         elif runtime_mode == "hotspot":
             ok = True
             message = "夜间停用（热点已连接）"
+        elif state.get("quiet_active_logout_done"):
+            ok, message = True, "夜间停用（当前账号已处理）"
         else:
             ok, message = _safe_call(orchestrator.run_quiet_logout, cfg)
+            state["quiet_active_logout_done"] = bool(ok)
         if managed_message and not (campus_uses_wired(cfg) and multi_wan_enabled(cfg)):
             message = message + "；" + managed_message
         state["quiet_logout_done"] = bool(ok and managed_ok)
@@ -605,14 +655,26 @@ def _maintain_managed_wired_accounts(cfg, state, interval, now=None):
     return set(sessions), message, next_sleep
 
 
+def _quiet_wired_account_configs(cfg):
+    """Include the active wired session even when it is not opted into guarding."""
+    accounts = get_managed_wired_account_configs(cfg)
+    if campus_uses_wired(cfg):
+        active = get_active_campus_account(cfg)
+        active_id = str(active.get("id", "")).strip()
+        if active and active_id not in {item.get("campus_account_id") for item in accounts}:
+            accounts.append(resolve_campus_account_config(cfg, active))
+    return accounts
+
+
 def _pause_managed_wired_accounts(cfg, state):
-    """Pause every managed wired account during quiet hours, logging out if set."""
-    account_cfgs = get_managed_wired_account_configs(cfg)
+    """Pause managed and active wired sessions without repeating successful logout."""
+    account_cfgs = _quiet_wired_account_configs(cfg)
     previous_sessions = state.get("wired_auth_sessions", {})
     if not isinstance(previous_sessions, dict):
         previous_sessions = {}
     sessions = {}
     force_logout = str(cfg.get("force_logout_in_quiet", "0")) == "1"
+    completed = set(state.get("quiet_completed_accounts", []))
     ok_count = 0
 
     for account_cfg in account_cfgs:
@@ -622,8 +684,12 @@ def _pause_managed_wired_accounts(cfg, state):
         previous = previous_sessions.get(account_id, {}) or {}
         set_log_context(account_id=account_id, wired_iface=iface)
         try:
-            if force_logout:
+            if force_logout and account_id not in completed:
                 ok, message = _safe_call(orchestrator.run_quiet_logout, account_cfg)
+                if ok:
+                    completed.add(account_id)
+            elif force_logout:
+                ok, message = True, "夜间已下线"
             else:
                 ok, message = True, "夜间暂停守护（保留现有会话）"
         finally:
@@ -645,6 +711,7 @@ def _pause_managed_wired_accounts(cfg, state):
         }
 
     state["wired_auth_sessions"] = sessions
+    state["quiet_completed_accounts"] = sorted(completed)
     total = len(account_cfgs)
     if total == 0:
         return True, "多 WAN 守护未选择账号"
@@ -666,6 +733,8 @@ def _daemon_tick_active(cfg, state, interval):
     if state["was_in_quiet"]:
         log("INFO", "quiet_exit", "leaving quiet hours, switching back to campus")
         state["quiet_logout_done"] = False
+        state["quiet_completed_accounts"] = []
+        state["quiet_active_logout_done"] = False
         state["was_in_quiet"] = False
         state["was_online"] = False
         state["last_switch_ts"] = 0
@@ -1322,6 +1391,7 @@ def _print_account_table(raw):
     )
     print("  " + "-" * 123)
     for acc in accounts:
+        acc = normalize_campus_account(acc)
         aid = str(acc.get("id", ""))
         is_default = aid == default_campus
         user_id = acc.get("user_id", "")
@@ -1541,7 +1611,7 @@ def _prompt(label, default="", choices=None, password=False):
 
 def _interactive_campus(existing=None):
     """Interactive prompts for campus account fields. Returns dict."""
-    item = existing or {}
+    item = normalize_campus_account(existing)
     fields = {}
     profile = _get_current_profile()
     op_suffixes, op_labels = _get_operator_choices(profile)
