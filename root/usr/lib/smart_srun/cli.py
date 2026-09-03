@@ -443,6 +443,7 @@ SMART SRun (srunnet)(1) -- OpenWrt 智慧深澜校园网认证客户端
 
 主要配置项（标量，UCI 风格字符串）
     enabled                       守护进程总开关（"0"/"1"）
+    multi_wan_enabled             多 WAN 按账号并行认证（"0"/"1"）
     school                        当前学校短名（如 "default"）
     interval                      守护循环间隔（秒）
     log_level                     日志等级 ALL / DEBUG / INFO / WARN / ERROR

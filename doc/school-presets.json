@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-07-20",
+  "updated_at": "2026-08-31",
   "source": "https://github.com/matthewlu070111/smart-srun/issues",
   "schools": [
     {
@@ -30,6 +30,52 @@
         {"suffix": "", "label": "校园网"}
       ],
       "contributors": ["@matthewlu070111", "@guiguisocute"],
+      "source_issue": ""
+    },
+    {
+      "id": "swpu",
+      "name": "西南石油大学",
+      "status": "active",
+      "description": "西南石油大学校园网预设，客户端 IP 必须从所选 DHCP 接口动态获取。",
+      "defaults": {
+        "base_url": "http://172.16.245.50",
+        "ac_id": "1",
+        "access_mode": "wired"
+      },
+      "observed_login_shape": {
+        "n": "200",
+        "type": "1",
+        "enc": "srun_bx1",
+        "info_prefix": "SRBX1",
+        "double_stack": "0",
+        "os": "Windows 10",
+        "name": "Windows"
+      },
+      "operators": [
+        {
+          "suffix": "dxwx",
+          "label": "电信"
+        },
+        {
+          "suffix": "stu",
+          "label": "学生"
+        },
+        {
+          "suffix": "tch",
+          "label": "教师"
+        },
+        {
+          "suffix": "yd",
+          "label": "移动无线"
+        },
+        {
+          "suffix": "ydyx",
+          "label": "移动有线"
+        }
+      ],
+      "contributors": [
+        "@haohaoget"
+      ],
       "source_issue": ""
     },
     {

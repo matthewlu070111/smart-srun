@@ -1,4 +1,10 @@
-"""Unit tests for binding campus accounts to different network interfaces."""
+"""Unit tests for binding campus accounts to different network interfaces.
+
+Originally written against #32's ``network_interface`` field. #31 shipped the
+same concept as ``wired_iface`` and also binds the socket to the owning device,
+so the two were merged onto ``wired_iface``. These tests keep #32's coverage --
+including the read-side fallback that still accepts the old spelling.
+"""
 
 import sys
 import unittest
@@ -17,9 +23,9 @@ import wireless  # noqa: E402
 
 class CampusNetworkInterfaceTests(unittest.TestCase):
     def test_normalize_defaults_to_wan(self):
-        self.assertEqual(config.normalize_network_interface(""), "wan")
-        self.assertEqual(config.normalize_network_interface(None), "wan")
-        self.assertEqual(config.normalize_network_interface("wan2"), "wan2")
+        self.assertEqual(config.normalize_wired_iface(""), "wan")
+        self.assertEqual(config.normalize_wired_iface(None), "wan")
+        self.assertEqual(config.normalize_wired_iface("wan2"), "wan2")
 
     def test_resolve_active_items_uses_account_interface(self):
         raw = {
@@ -27,7 +33,7 @@ class CampusNetworkInterfaceTests(unittest.TestCase):
                 {
                     "id": "c1",
                     "access_mode": "wired",
-                    "network_interface": "wan2",
+                    "wired_iface": "wan2",
                     "user_id": "u1",
                     "operator_suffix": "",
                 }
@@ -37,7 +43,41 @@ class CampusNetworkInterfaceTests(unittest.TestCase):
         }
         resolved = config.resolve_active_items(raw)
         self.assertEqual(resolved["campus_access_mode"], "wired")
-        self.assertEqual(resolved["campus_network_interface"], "wan2")
+        self.assertEqual(resolved["wired_iface"], "wan2")
+
+    def test_resolve_active_items_accepts_legacy_network_interface(self):
+        """#32's spelling still resolves, so hand-written configs keep working."""
+        raw = {
+            "campus_accounts": [
+                {
+                    "id": "c1",
+                    "access_mode": "wired",
+                    "network_interface": "wan2",
+                    "user_id": "u1",
+                }
+            ],
+            "active_campus_id": "c1",
+            "default_campus_id": "c1",
+        }
+        resolved = config.resolve_active_items(raw)
+        self.assertEqual(resolved["wired_iface"], "wan2")
+
+    def test_wired_iface_wins_when_both_spellings_are_present(self):
+        raw = {
+            "campus_accounts": [
+                {
+                    "id": "c1",
+                    "access_mode": "wired",
+                    "wired_iface": "wan.v2",
+                    "network_interface": "wan2",
+                    "user_id": "u1",
+                }
+            ],
+            "active_campus_id": "c1",
+            "default_campus_id": "c1",
+        }
+        resolved = config.resolve_active_items(raw)
+        self.assertEqual(resolved["wired_iface"], "wan.v2")
 
     def test_resolve_active_items_defaults_to_wan(self):
         raw = {
@@ -48,17 +88,14 @@ class CampusNetworkInterfaceTests(unittest.TestCase):
             "default_campus_id": "c1",
         }
         resolved = config.resolve_active_items(raw)
-        self.assertEqual(resolved["campus_network_interface"], "wan")
+        self.assertEqual(resolved["wired_iface"], "wan")
 
-    def test_campus_network_interface_wireless_still_defaults_wan(self):
-        self.assertEqual(config.campus_network_interface({}), "wan")
-        self.assertEqual(
-            config.campus_network_interface({"campus_network_interface": "wan6"}),
-            "wan6",
-        )
+    def test_get_wired_iface_defaults_to_wan(self):
+        self.assertEqual(config.get_wired_iface({}), "wan")
+        self.assertEqual(config.get_wired_iface({"wired_iface": "wan6"}), "wan6")
 
     def test_switch_to_campus_uses_bound_interface(self):
-        cfg = {"campus_access_mode": "wired", "campus_network_interface": "wan2"}
+        cfg = {"campus_access_mode": "wired", "wired_iface": "wan2"}
         with (
             mock.patch.object(wireless, "campus_uses_wired", return_value=True),
             mock.patch.object(wireless, "parse_wireless_iface_data", return_value={}),

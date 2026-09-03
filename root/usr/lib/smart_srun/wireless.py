@@ -11,9 +11,9 @@ import time
 from config import (
     log,
     timed,
-    campus_network_interface,
     campus_uses_wired,
     failover_enabled,
+    get_wired_iface,
     get_switch_ready_timeout_seconds,
     hotspot_failback_enabled,
     normalize_campus_access_mode,
@@ -180,9 +180,9 @@ def detect_runtime_mode(cfg, wireless_data=None):
     if ssid and ssid == str(cfg.get("hotspot_ssid", "")).strip():
         return _emit("hotspot", "ssid_match_hotspot")
     if campus_uses_wired(cfg) and get_ipv4_from_network_interface(
-        campus_network_interface(cfg)
+        get_wired_iface(cfg)
     ):
-        return _emit("campus", "wired_wan_ip")
+        return _emit("campus", "wired_iface_ip")
     if not section:
         return _emit("unknown", "no_sta_section")
     if ssid and ssid == str(cfg.get("campus_ssid", "")).strip():
@@ -217,16 +217,40 @@ def get_sta_profile_from_section(section, wireless_data=None):
 # ---------------------------------------------------------------------------
 
 
+def parse_wifi_device_sections(uci_output):
+    """wifi-device 的节名不一定叫 radioN。
+
+    mac80211 用 radio0/radio1，但 MediaTek 闭源 mtwifi（MT798x 等）用的是
+    MT7981_1_1 / MT7981_1_2 这种名字。只能按节类型认，不能按名字猜。
+    """
+    devices = []
+    seen = set()
+    for line in str(uci_output or "").splitlines():
+        match = re.match(r"^wireless\.([^.=]+)=(?:'|\")?wifi-device(?:'|\")?$", line.strip())
+        if not match:
+            continue
+        name = match.group(1)
+        if name not in seen:
+            devices.append(name)
+            seen.add(name)
+    return devices
+
+
 def parse_radio_bands():
     ok, out = run_cmd(["uci", "show", "wireless"])
     if not ok or not out:
         return {}
+
+    devices = set(parse_wifi_device_sections(out))
     bands = {}
     for line in out.splitlines():
-        m = re.match(r"^wireless\.(radio\d+)\.(band|hwmode)=(.+)$", line.strip())
+        m = re.match(r"^wireless\.([^.=]+)\.(band|hwmode)=(.+)$", line.strip())
         if not m:
             continue
         radio, opt, val = m.groups()
+        # 只认真正的 wifi-device 节，别把 wifi-iface 上的同名选项算进来。
+        if devices and radio not in devices:
+            continue
         val = parse_uci_value(val).lower()
         if opt == "band":
             bands[radio] = val
@@ -251,16 +275,8 @@ def get_available_wifi_radios(wireless_data=None):
     if not ok or not out:
         return []
 
-    seen = set()
-    for line in out.splitlines():
-        match = re.match(r"^wireless\.(radio\d+)\.=wifi-device$", line.strip())
-        if not match:
-            continue
-        radio = match.group(1)
-        if radio not in seen:
-            radios.append(radio)
-            seen.add(radio)
-    return radios
+    # 没有 band/hwmode 时退回按节类型枚举。
+    return parse_wifi_device_sections(out)
 
 
 def band_label(band):
@@ -824,13 +840,14 @@ def ensure_runtime_wireless_prerequisites(cfg, expect_hotspot, wireless_data=Non
         data = (
             wireless_data if wireless_data is not None else parse_wireless_iface_data()
         )
-        iface = campus_network_interface(cfg)
-        wan_ip = get_ipv4_from_network_interface(iface)
-        if wan_ip:
-            return True, "检测到有线校园网入口（%s=%s）" % (iface, wan_ip), data
+        iface = get_wired_iface(cfg)
+        wired_ip = get_ipv4_from_network_interface(iface)
+        if wired_ip:
+            return True, "检测到有线校园网入口（%s=%s）" % (iface, wired_ip), data
         return (
             False,
-            "当前校园网账号已设为有线接入模式，但 WAN 口还没有可用 IPv4。",
+            "当前校园网账号已设为有线接入模式，但接口 %s 还没有可用 IPv4。"
+            % iface,
             data,
         )
 
@@ -1176,18 +1193,18 @@ def switch_to_hotspot(cfg):
 
 def switch_to_campus(cfg):
     if campus_uses_wired(cfg):
+        iface = get_wired_iface(cfg)
         data = parse_wireless_iface_data()
         disable_managed_sta_sections(cfg, data)
         # 拆掉无线 STA 的 L3 接口，避免残留的 wwan 路由与 WAN 指向同一网关的路由冲突，
         # 否则发往认证网关的包会被路由到已失效的接口并报 EPERM，只能靠重启恢复。
         teardown_managed_sta_interfaces(cfg, data)
-        iface = campus_network_interface(cfg)
-        wan_ip = wait_for_network_interface_ipv4(
+        wired_ip = wait_for_network_interface_ipv4(
             iface, timeout_seconds=get_switch_ready_timeout_seconds(cfg)
         )
-        if wan_ip:
-            return True, "已切换为有线校园网模式（%s, %s）" % (iface, wan_ip)
-        return False, "已切到有线校园网模式，但 %s 口暂未获取到 IPv4 地址" % iface
+        if wired_ip:
+            return True, "已切换为有线校园网模式（%s, %s）" % (iface, wired_ip)
+        return False, "已切到有线校园网模式，但接口 %s 暂未获取到 IPv4 地址" % iface
     return switch_sta_profile(cfg, expect_hotspot=False)
 
 
@@ -1201,11 +1218,15 @@ def ensure_expected_profile(cfg, expect_hotspot, last_switch_ts=0):
         return True, "", last_switch_ts
 
     if (not expect_hotspot) and campus_uses_wired(cfg):
-        iface = campus_network_interface(cfg)
-        wan_ip = get_ipv4_from_network_interface(iface)
-        if wan_ip:
+        iface = get_wired_iface(cfg)
+        wired_ip = get_ipv4_from_network_interface(iface)
+        if wired_ip:
             return True, "", last_switch_ts
-        return False, "有线校园网未就绪，%s 口尚未获取到 IPv4。" % iface, last_switch_ts
+        return (
+            False,
+            "有线校园网未就绪，接口 %s 尚未获取到 IPv4。" % iface,
+            last_switch_ts,
+        )
 
     data = parse_wireless_iface_data()
     section = get_sta_section(cfg, data)

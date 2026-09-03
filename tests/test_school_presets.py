@@ -50,6 +50,7 @@ class SchoolPresetTests(unittest.TestCase):
         school_ids = {item["short_name"] for item in items}
 
         self.assertIn("jxnu", school_ids)
+        self.assertIn("swpu", school_ids)
         self.assertTrue(all(item["status"] == "active" for item in items))
 
         jxnu = school_presets.get_preset("jxnu")
@@ -67,6 +68,22 @@ class SchoolPresetTests(unittest.TestCase):
         self.assertNotIn("no_suffix_operators", jxnu)
         for operator in jxnu["operators"]:
             self.assertNotIn("operator_suffix", operator)
+
+        swpu = school_presets.get_preset("swpu")
+        self.assertEqual(swpu["defaults"]["base_url"], "http://172.16.245.50")
+        self.assertEqual(swpu["defaults"]["ac_id"], "1")
+        self.assertEqual(swpu["defaults"]["access_mode"], "wired")
+        self.assertEqual(
+            swpu["operators"],
+            [
+                {"suffix": "dxwx", "label": "电信"},
+                {"suffix": "stu", "label": "学生"},
+                {"suffix": "tch", "label": "教师"},
+                {"suffix": "yd", "label": "移动无线"},
+                {"suffix": "ydyx", "label": "移动有线"},
+            ],
+        )
+        self.assertEqual(swpu["observed_login_shape"]["info_prefix"], "SRBX1")
 
     def test_bundled_fallback_is_synced_with_doc_presets(self):
         with open(DOC_PRESETS_FILE, "r", encoding="utf-8") as handle:

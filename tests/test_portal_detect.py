@@ -62,5 +62,69 @@ class PortalDetectTests(unittest.TestCase):
         self.assertIn("python3-openssl", message)
 
 
+class PortalDetectIdnaFallbackTests(unittest.TestCase):
+    """python3-light ships urllib but usually omits the idna codec.
+
+    Hostname encoding then raises LookupError before any network IO, which
+    used to surface as 'unknown encoding: idna' instead of probing AC_ID.
+    """
+
+    def test_stdlib_probe_reports_unusable_when_urllib_missing(self):
+        with mock.patch.object(portal_detect, "HAVE_URLLIB", False):
+            self.assertFalse(portal_detect._stdlib_http_is_usable())
+
+        with mock.patch.object(portal_detect, "urllib_request", None):
+            self.assertFalse(portal_detect._stdlib_http_is_usable())
+
+    def test_stdlib_probe_reports_usable_when_idna_codec_present(self):
+        self.assertTrue("example.com".encode("idna"))
+        self.assertTrue(portal_detect._stdlib_http_is_usable())
+
+    def test_fetch_once_falls_back_to_system_client_without_idna(self):
+        with mock.patch.object(
+            portal_detect, "_stdlib_http_is_usable", return_value=False
+        ), mock.patch.object(
+            portal_detect, "http_get", return_value='<input name="ac_id" value="12">'
+        ) as fake_get:
+            status, headers, body = portal_detect._fetch_once(PORTAL_ORIGIN, 5)
+
+        fake_get.assert_called_once_with(PORTAL_ORIGIN, timeout=5)
+        self.assertEqual(status, 200)
+        self.assertEqual(headers, {})
+        self.assertIn("ac_id", body)
+
+    def test_detect_acid_succeeds_via_system_client_without_idna(self):
+        with mock.patch.object(
+            portal_detect, "_stdlib_http_is_usable", return_value=False
+        ), mock.patch.object(
+            portal_detect, "http_get", return_value='<input name="ac_id" value="12">'
+        ):
+            payload = portal_detect.detect_acid(PORTAL_ORIGIN)
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["acid"], "12")
+        self.assertEqual(payload["source"], "html")
+        self.assertNotIn("idna", payload["message"])
+
+    def test_late_lookup_error_falls_back_instead_of_raising(self):
+        class _Opener:
+            def open(self, *args, **kwargs):
+                raise LookupError("unknown encoding: idna")
+
+        with mock.patch.object(
+            portal_detect, "_stdlib_http_is_usable", return_value=True
+        ), mock.patch.object(
+            portal_detect.urllib_request, "build_opener", return_value=_Opener()
+        ), mock.patch.object(
+            portal_detect, "http_get", return_value='<input name="ac_id" value="7">'
+        ) as fake_get:
+            status, headers, body = portal_detect._fetch_once(PORTAL_ORIGIN, 5)
+
+        fake_get.assert_called_once_with(PORTAL_ORIGIN, timeout=5)
+        self.assertEqual(status, 200)
+        self.assertEqual(headers, {})
+        self.assertIn("ac_id", body)
+
+
 if __name__ == "__main__":
     unittest.main()

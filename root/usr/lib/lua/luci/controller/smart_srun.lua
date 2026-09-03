@@ -10,6 +10,7 @@ local schema = require "luci.smart_srun.schema"
 local STATE_FILE = "/var/run/smart_srun/state.json"
 local ACTION_FILE = "/var/run/smart_srun/action.json"
 local INFLIGHT_ACTION_FILE = "/var/run/smart_srun/action_inflight.json"
+local DAEMON_LOCK_FILE = "/var/run/smart_srun/daemon.lock"
 local LOG_FILE = "/var/log/smart_srun.log"
 local USER_PRESETS_FILE = "/usr/lib/smart_srun/user_presets.json"
 local USER_PRESETS_MAX_ITEMS = 50
@@ -182,6 +183,20 @@ local function collect_client_pids()
     return pids
 end
 
+-- state.daemon_running 只会被写成 true，守护进程被 SIGKILL / OOM / 断电打断后
+-- 这个标记会一直留着。守护进程持有的 flock 在进程死亡时由内核释放，所以用
+-- 锁文件里的 PID 加 cmdline 校验判断存活，PID 复用也不会误判。
+local function daemon_is_alive()
+    local pid = tostring(fs.readfile(DAEMON_LOCK_FILE) or ""):match("^%s*(%d+)")
+    if not pid then
+        return false
+    end
+
+    local cmdline = fs.readfile("/proc/" .. pid .. "/cmdline") or ""
+    cmdline = cmdline:gsub("%z", " ")
+    return cmdline:find("/usr/lib/smart_srun/client.py", 1, true) ~= nil
+end
+
 local function force_stop_client_processes()
     local pids = collect_client_pids()
     for _, pid in ipairs(pids) do
@@ -241,7 +256,7 @@ local function current_pending_runtime_action()
 
     local state = read_json_file(STATE_FILE)
     if tostring(state.action_result or "") == "pending" then
-        local daemon_running = state.daemon_running and true or false
+        local daemon_running = daemon_is_alive()
         local started_at = tonumber(state.action_started_at) or tonumber(state.last_action_ts) or 0
         if daemon_running or (started_at > 0 and (os.time() - started_at) < 15) then
             return tostring(state.pending_action or state.last_action or "")
@@ -281,6 +296,7 @@ function action_status()
         campus_bssid = tostring(data.campus_bssid or ""),
         connectivity = tostring(data.connectivity or ""),
         connectivity_level = tostring(data.connectivity_level or "offline"),
+        wired_auth_sessions = type(data.wired_auth_sessions) == "table" and data.wired_auth_sessions or {},
         last_action = tostring(data.last_action or ""),
         action_result = tostring(data.action_result or ""),
         last_action_ts = tonumber(data.last_action_ts) or 0,
@@ -418,6 +434,7 @@ local function sanitize_user_preset(raw)
             ac_id = tostring(defaults_raw.ac_id or ""),
             ssid = tostring(defaults_raw.ssid or ""),
             access_mode = tostring(defaults_raw.access_mode or ""),
+            wired_iface = tostring(defaults_raw.wired_iface or ""),
         },
         observed_login_shape = {
             n = tostring(shape_raw.n or ""),
@@ -605,7 +622,8 @@ function action_enqueue()
                 operator = fv("operator"), operator_suffix = fv("operator_suffix"),
                 password = fv("password"),
                 access_mode = fv("access_mode"),
-                network_interface = fv("network_interface"),
+                wired_iface = fv("wired_iface"),
+                auth_enabled = fv("auth_enabled") == "1" and "1" or "0",
                 base_url = normalize_base_url(fv("base_url")), ac_id = fv("ac_id"),
                 ssid = fv("ssid"), bssid = fv("bssid"), radio = fv("radio"),
                 n = fv("n"), type = fv("type"), enc = fv("enc"),
@@ -615,14 +633,15 @@ function action_enqueue()
             }
             if item.access_mode ~= "wired" then
                 item.access_mode = "wifi"
+                item.auth_enabled = "0"
+            end
+            if item.wired_iface == "" then
+                item.wired_iface = "wan"
             end
             if item.access_mode == "wired" then
                 item.ssid = ""
                 item.bssid = ""
                 item.radio = ""
-            end
-            if item.network_interface == "" then
-                item.network_interface = "wan"
             end
             if item.label == "" then
                 local suffix = item.operator_suffix or ""

@@ -387,10 +387,11 @@
     var mode = document.getElementById('jm-access_mode');
     if (!mode) return;
     var wired = mode.value === 'wired';
+    setRowDisabled('jm-wired-iface-row', 'jm-wired_iface', !wired);
+    setRowDisabled('jm-auth-enabled-row', 'jm-auth_enabled', !wired);
     setRowDisabled('jm-ssid-row', 'jm-ssid', wired);
     setRowDisabled('jm-bssid-row', 'jm-bssid', wired);
     setRowDisabled('jm-radio-row', 'jm-radio', wired);
-    setRowDisabled('jm-netif-row', 'jm-netif', !wired);
   }
 
   function showNativeModal(title, bodyHtml, afterOpen, onSave) {
@@ -585,7 +586,8 @@
       user_id: item.user_id || '',
       operator_suffix: item.operator_suffix || '',
       access_mode: item.access_mode || 'wifi',
-      network_interface: item.network_interface || 'wan',
+      wired_iface: item.wired_iface || 'wan',
+      auth_enabled: String(item.auth_enabled || '0'),
       base_url: item.base_url || '',
       ac_id: item.ac_id || '1',
       n: item.n || '',
@@ -773,7 +775,8 @@
           base_url: formFieldValue('jm-base_url'),
           ac_id: formFieldValue('jm-ac_id'),
           ssid: formFieldValue('jm-ssid'),
-          access_mode: formFieldValue('jm-access_mode')
+          access_mode: formFieldValue('jm-access_mode'),
+          wired_iface: formFieldValue('jm-wired_iface')
         },
         observed_login_shape: {
           n: formFieldValue('jm-login-n'),
@@ -846,8 +849,9 @@
         '</span>' +
         '<input id="jm-operator_suffix" value="' + escapeHtml(initialValues.operator_suffix) + '" placeholder="">' +
         '<div id="jm-operator-suffix-hint" style="display:none;color:#d97706;font-size:12px;margin-top:.25rem;"></div></div>' +
-      '<div class="smart-native-row"><label>接入方式</label><select id="jm-access_mode"><option value="wifi"' + (initialValues.access_mode === 'wifi' ? ' selected' : '') + '>无线</option><option value="wired"' + (initialValues.access_mode === 'wired' ? ' selected' : '') + '>有线（WAN）</option></select></div>' +
-      '<div class="smart-native-row" id="jm-netif-row"><label>绑定网口（仅有线）</label><input id="jm-netif" value="' + escapeHtml(initialValues.network_interface) + '" placeholder="wan"></div>' +
+      '<div class="smart-native-row"><label>接入方式</label><select id="jm-access_mode"><option value="wifi"' + (initialValues.access_mode === 'wifi' ? ' selected' : '') + '>无线</option><option value="wired"' + (initialValues.access_mode === 'wired' ? ' selected' : '') + '>有线（指定接口）</option></select></div>' +
+      '<div class="smart-native-row" id="jm-wired-iface-row"><label>有线接口</label><input id="jm-wired_iface" value="' + escapeHtml(initialValues.wired_iface) + '" placeholder="wan.v2"><div style="color:#6b7280;font-size:12px;margin-top:.25rem;">填写 OpenWrt 逻辑接口名或 Linux 设备名；留空兼容旧配置，使用 wan。</div></div>' +
+      '<div class="smart-native-row" id="jm-auth-enabled-row"><label>参与并行守护</label><select id="jm-auth_enabled"><option value="0"' + (initialValues.auth_enabled !== '1' ? ' selected' : '') + '>关闭</option><option value="1"' + (initialValues.auth_enabled === '1' ? ' selected' : '') + '>启用</option></select><div style="color:#6b7280;font-size:12px;margin-top:.25rem;">需同时开启页面上方“多 WAN 并行认证”；守护进程会按本账号的接口、学工号、密码和后缀独立认证。</div></div>' +
       '<div class="smart-native-row"><label>认证地址</label><input id="jm-base_url" value="' + escapeHtml(initialValues.base_url) + '"></div>' +
       '<div class="smart-native-row"><label>AC_ID</label><span><input id="jm-ac_id" value="' + escapeHtml(initialValues.ac_id) + '"> <button type="button" id="jm-detect-acid" class="btn cbi-button">嗅探</button> <span id="jm-detect-acid-status" style="margin-left:6px;color:#6b7280;"></span></span></div>' +
       '<details class="smart-native-advanced"><summary>高级登录参数</summary>' +
@@ -909,6 +913,10 @@
         var fallbackModeSel = document.getElementById('jm-access_mode');
         if (fallbackModeSel && selectedPresetId === NO_PRESET_ID) fallbackModeSel.value = 'wifi';
       }
+      if (schoolDefaults.wired_iface !== undefined && schoolDefaults.wired_iface !== null) {
+        var ifaceInput = document.getElementById('jm-wired_iface');
+        if (ifaceInput) ifaceInput.value = String(schoolDefaults.wired_iface || 'wan');
+      }
       updateCampusAccessModeUI();
     }
 
@@ -952,7 +960,8 @@
         'jm-user_id': initialValues.user_id,
         'jm-operator_suffix': '',
         'jm-access_mode': 'wifi',
-        'jm-netif': 'wan',
+        'jm-wired_iface': initialValues.wired_iface || 'wan',
+        'jm-auth_enabled': '0',
         'jm-base_url': '',
         'jm-ac_id': '',
         'jm-login-n': DEFAULT_LOGIN_SHAPE.n,
@@ -1076,7 +1085,8 @@
       fd.append('user_id', document.getElementById('jm-user_id').value);
       fd.append('operator_suffix', document.getElementById('jm-operator_suffix').value);
       fd.append('access_mode', document.getElementById('jm-access_mode').value);
-      fd.append('network_interface', document.getElementById('jm-netif').value);
+      fd.append('wired_iface', document.getElementById('jm-wired_iface').value);
+      fd.append('auth_enabled', document.getElementById('jm-auth_enabled').value);
       fd.append('password', getFieldValue('jm-password'));
       fd.append('base_url', document.getElementById('jm-base_url').value);
       fd.append('ac_id', document.getElementById('jm-ac_id').value);

@@ -335,6 +335,83 @@ class SchoolRuntimeConfigTests(unittest.TestCase):
         self.assertEqual("alice@hcmcc", loaded["username"])
         self.assertEqual("hcmcc", loaded["operator"])
 
+    def test_wired_account_selects_its_own_virtual_wan_interface(self):
+        raw_cfg = {
+            "school": "runtime-school",
+            "active_campus_id": "campus-1",
+            "default_campus_id": "campus-1",
+            "campus_accounts": [
+                {
+                    "id": "campus-1",
+                    "user_id": "alice",
+                    "operator_suffix": "ydyx",
+                    "password": "pw",
+                    "base_url": "http://172.16.245.50",
+                    "ac_id": "1",
+                    "access_mode": "wired",
+                    "wired_iface": "wan.v2",
+                }
+            ],
+            "hotspot_profiles": [],
+        }
+
+        with (
+            mock.patch.object(config, "load_json_raw_config", return_value=raw_cfg),
+            mock.patch(
+                "schools.get_school_metadata",
+                return_value=self._school_metadata(),
+            ),
+        ):
+            loaded = config.load_config()
+
+        self.assertEqual("alice@ydyx", loaded["username"])
+        self.assertEqual("wired", loaded["campus_access_mode"])
+        self.assertEqual("wan.v2", loaded["wired_iface"])
+
+    def test_wired_account_without_interface_keeps_legacy_wan_default(self):
+        resolved = config.resolve_active_items(
+            {
+                "active_campus_id": "campus-1",
+                "campus_accounts": [
+                    {"id": "campus-1", "access_mode": "wired"}
+                ],
+                "hotspot_profiles": [],
+            }
+        )
+
+        self.assertEqual("wan", resolved["wired_iface"])
+
+    def test_switching_active_account_switches_credentials_suffix_and_wan_together(self):
+        resolved = config.resolve_active_items(
+            {
+                "active_campus_id": "campus-2",
+                "default_campus_id": "campus-1",
+                "campus_accounts": [
+                    {
+                        "id": "campus-1",
+                        "user_id": "alice",
+                        "operator_suffix": "ydyx",
+                        "password": "first",
+                        "access_mode": "wired",
+                        "wired_iface": "wan.v2",
+                    },
+                    {
+                        "id": "campus-2",
+                        "user_id": "bob",
+                        "operator_suffix": "cmcc",
+                        "password": "second",
+                        "access_mode": "wired",
+                        "wired_iface": "wan.v4",
+                    },
+                ],
+                "hotspot_profiles": [],
+            }
+        )
+
+        self.assertEqual("bob@cmcc", resolved["username"])
+        self.assertEqual("second", resolved["password"])
+        self.assertEqual("wan.v4", resolved["wired_iface"])
+
     def test_custom_operator_id_is_preserved_but_blank_suffix_stays_plain(self):
         raw_cfg = {
             "school": "runtime-school",
