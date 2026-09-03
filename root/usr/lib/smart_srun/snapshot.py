@@ -4,6 +4,7 @@
 从 daemon.py 中提取，消除 orchestrator→daemon 的循环依赖。
 """
 
+import json
 import time
 
 from config import (
@@ -14,6 +15,8 @@ from config import (
 )
 from network import (
     get_ipv4_from_network_interface,
+    resolve_http_binding,
+    resolve_wired_binding,
     test_internet_connectivity,
     test_portal_reachability,
 )
@@ -25,6 +28,39 @@ from wireless import (
 )
 import srun_auth  # noqa: F401
 from school_runtime import build_app_context
+
+
+def _connectivity_account_id(cfg):
+    return str(cfg.get("campus_account_id") or cfg.get("active_campus_id") or "")
+
+
+def cached_connectivity_matches(cfg, state, now=None):
+    """Whether a saved probe still describes this account and interface.
+
+    This is a read-only freshness check: callers may use existing evidence
+    for progress messages without performing another network probe.
+    """
+    if not isinstance(cfg, dict) or not isinstance(state, dict):
+        return False
+    try:
+        key = json.loads(state.get("connectivity_cache_key", ""))
+        checked_at = int(state.get("connectivity_checked_at", 0) or 0)
+        age = (time.time() if now is None else now) - checked_at
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(key, list) or len(key) != 9 or not 0 <= age <= CONNECTIVITY_CACHE_SECONDS:
+        return False
+    wired = campus_uses_wired(cfg)
+    strict = wired and str(cfg.get("_multi_wan_strict_bind", "0")).strip() == "1"
+    if key[0:2] != [_connectivity_account_id(cfg), str(cfg.get("username", ""))]:
+        return False
+    if key[5:7] != [str(cfg.get("base_url", "")), str(cfg.get("school", ""))] or key[8] != strict:
+        return False
+    if not key[4] or key[4] != state.get("current_ip") or key[2] != state.get("current_iface"):
+        return False
+    if wired and key[2] != get_wired_iface(cfg):
+        return False
+    return bool(state.get("connectivity_level") and state.get("connectivity"))
 
 
 def build_runtime_snapshot(cfg, state=None):
@@ -40,13 +76,31 @@ def build_runtime_snapshot(cfg, state=None):
     previous = state if state is not None else load_runtime_state()
     wired_mode = campus_uses_wired(cfg)
     wired_iface = get_wired_iface(cfg) if wired_mode else ""
+    strict = wired_mode and str(cfg.get("_multi_wan_strict_bind", "0")).strip() == "1"
     wired_ip = (
-        get_ipv4_from_network_interface(wired_iface) if wired_mode else None
+        get_ipv4_from_network_interface(wired_iface) if wired_mode and not strict else None
     )
+    binding = {}
+    binding_error = ""
+    if strict:
+        try:
+            binding = resolve_http_binding(cfg.get("base_url", ""), cfg)
+            wired_ip = binding["bind_ip"]
+            app_ctx["_http_binding"] = dict(binding)
+        except RuntimeError as exc:
+            wired_ip = None
+            binding_error = str(exc)
+    elif wired_mode and wired_ip:
+        binding = {"bind_ip": wired_ip}
+        try:
+            wired_ip, device = resolve_wired_binding(cfg)
+            binding = {"bind_ip": wired_ip, "bind_device": device}
+        except RuntimeError:
+            pass
     wired_online = False
 
-    if wired_mode and wired_ip:
-        ssid = "有线接入"
+    if wired_mode and (wired_ip or strict):
+        ssid = "有线接入" if wired_ip else ""
         bssid = ""
         net = wired_iface
         ip = wired_ip
@@ -54,6 +108,11 @@ def build_runtime_snapshot(cfg, state=None):
     connectivity = "未连接"
     connectivity_level = "offline"
     online_account_label = ""
+    cache_key = json.dumps([
+        _connectivity_account_id(cfg), str(cfg.get("username", "")),
+        str(net or ""), str(binding.get("bind_device", "")), str(ip or ""),
+        str(cfg.get("base_url", "")), str(cfg.get("school", "")), bssid, strict,
+    ], ensure_ascii=False, separators=(",", ":"))
     if ip:
         now_ts = int(time.time())
         cache_ip = str(previous.get("current_ip", "")).strip()
@@ -62,20 +121,26 @@ def build_runtime_snapshot(cfg, state=None):
         cache_ts = int(previous.get("connectivity_checked_at", 0) or 0)
         cache_valid = (
             cache_ip == ip
+            and previous.get("connectivity_cache_key") == cache_key
             and cache_level
             and cache_text
-            and (now_ts - cache_ts) <= CONNECTIVITY_CACHE_SECONDS
+            and 0 <= (now_ts - cache_ts) <= CONNECTIVITY_CACHE_SECONDS
         )
         if cache_valid:
             connectivity = cache_text
             connectivity_level = cache_level
         else:
-            internet_ok, internet_msg = test_internet_connectivity(timeout=2)
+            if binding:
+                internet_ok, internet_msg = test_internet_connectivity(
+                    timeout=2, iface=wired_iface, **binding
+                )
+            else:
+                internet_ok, internet_msg = test_internet_connectivity(timeout=2)
             if internet_ok:
                 connectivity = "互联网可达"
                 connectivity_level = "online"
             else:
-                portal_ok, portal_msg = test_portal_reachability(cfg, timeout=2)
+                portal_ok, portal_msg = test_portal_reachability(cfg, timeout=2, **binding)
                 if portal_ok:
                     connectivity = "认证网关可达"
                     connectivity_level = "portal"
@@ -86,6 +151,8 @@ def build_runtime_snapshot(cfg, state=None):
             previous["connectivity_checked_at"] = now_ts
     else:
         previous["connectivity_checked_at"] = int(time.time())
+        if binding_error:
+            connectivity = binding_error
 
     if cfg.get("username") and wired_mode and wired_ip:
         try:
@@ -107,7 +174,7 @@ def build_runtime_snapshot(cfg, state=None):
     else:
         mode = "unknown"
 
-    if mode != "hotspot" and cfg.get("username") and not wired_online:
+    if mode != "hotspot" and cfg.get("username") and not wired_mode:
         try:
             online_now, online_user, _ = runtime.query_online_identity(
                 app_ctx, expected_username=cfg.get("username", "")
@@ -141,6 +208,7 @@ def build_runtime_snapshot(cfg, state=None):
         "connectivity": connectivity,
         "connectivity_level": connectivity_level,
         "connectivity_checked_at": int(previous.get("connectivity_checked_at", 0) or 0),
+        "connectivity_cache_key": cache_key,
         "campus_account_label": str(cfg.get("campus_account_label", "")),
         "campus_access_mode": str(cfg.get("campus_access_mode", "wifi")),
         "current_campus_access_mode": current_campus_access_mode,

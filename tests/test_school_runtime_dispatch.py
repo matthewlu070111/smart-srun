@@ -69,7 +69,7 @@ class SchoolRuntimeDispatchTests(unittest.TestCase):
         self.cfg = {
             "school": "custom",
             "base_url": PORTAL_HTTPS_ORIGIN,
-            "username": "20230001@cmcc",
+            "username": "student-a@cmcc",
             "password": "secret",
             "ac_id": "1",
             "enc": "srun_bx1",
@@ -229,11 +229,11 @@ class SchoolRuntimeDispatchTests(unittest.TestCase):
             ),
         ):
             ok, message = srun_auth.run_logout_once(
-                self.cfg, override_user_id="20230001"
+                self.cfg, override_user_id="student-a"
             )
 
         self.assertEqual((ok, message), (True, "runtime-logout"))
-        self.assertIn(("logout_once", "20230001", None), self.runtime.calls)
+        self.assertIn(("logout_once", "student-a", None), self.runtime.calls)
 
     def test_online_query_uses_runtime_override(self):
         with mock.patch.object(

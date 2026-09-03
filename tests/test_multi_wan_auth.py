@@ -12,7 +12,7 @@ if MODULE_DIR not in sys.path:
     sys.path.insert(0, MODULE_DIR)
 
 
-from _portal_urls import PORTAL_ORIGIN
+from _portal_urls import BIND_IP, CLIENT_IP, PORTAL_ORIGIN, WIRED_BIND_IP
 import config
 import daemon
 
@@ -94,9 +94,9 @@ class MultiWanDaemonTests(unittest.TestCase):
         ]
         self.cfg = _cfg(self.accounts)
         self.ips = {
-            "wan": "192.0.2.11",
-            "wan.v2": "192.0.2.12",
-            "wan.v3": "192.0.2.13",
+            "wan": CLIENT_IP,
+            "wan.v2": BIND_IP,
+            "wan.v3": WIRED_BIND_IP,
         }
 
     def test_daemon_maintains_three_bound_sessions_independently(self):
@@ -135,9 +135,9 @@ class MultiWanDaemonTests(unittest.TestCase):
         self.assertEqual({"campus-1", "campus-2", "campus-3"}, ids)
         self.assertEqual(
             [
-                ("1001@carrier-a", "192.0.2.11"),
-                ("1002@carrier-b", "192.0.2.12"),
-                ("1003@carrier-c", "192.0.2.13"),
+                ("1001@carrier-a", CLIENT_IP),
+                ("1002@carrier-b", BIND_IP),
+                ("1003@carrier-c", WIRED_BIND_IP),
             ],
             queried,
         )
@@ -165,7 +165,7 @@ class MultiWanDaemonTests(unittest.TestCase):
                 "build_app_context",
                 return_value={"runtime": _FakeRuntime()},
             ),
-            mock.patch.object(daemon, "resolve_bind_ip", return_value="192.0.2.12"),
+            mock.patch.object(daemon, "resolve_bind_ip", return_value=BIND_IP),
             mock.patch.object(
                 daemon.srun_auth,
                 "query_online_identity",

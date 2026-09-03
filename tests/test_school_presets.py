@@ -18,9 +18,10 @@ if MODULE_ROOT not in sys.path:
     sys.path.insert(0, MODULE_ROOT)
 
 
-import config
-import school_presets
-from _portal_urls import (
+# Runtime modules use bare imports after the local source path is installed.
+import config  # noqa: E402
+import school_presets  # noqa: E402
+from _portal_urls import (  # noqa: E402
     PORTAL_ACID1_PAGE_URL,
     PORTAL_BARE_ACID1_PAGE_URL,
     PORTAL_BARE_ORIGIN,
@@ -138,7 +139,7 @@ class SchoolPresetTests(unittest.TestCase):
             },
         )
 
-    def test_refresh_remote_presets_prefers_mirror_and_falls_back_to_github(self):
+    def test_refresh_remote_presets_uses_each_source_in_priority_order(self):
         payload = {
             "schema_version": 1,
             "schools": [
@@ -150,41 +151,182 @@ class SchoolPresetTests(unittest.TestCase):
                 }
             ],
         }
-        calls = []
+        self.assertEqual(
+            school_presets.REMOTE_PRESETS_URLS,
+            (
+                "https://srun.guiguisocute.com/school-presets.json",
+                "https://smart-srun--cloudflare-pages.pages.dev/school-presets.json",
+                "https://raw.githubusercontent.com/matthewlu070111/smart-srun/main/doc/school-presets.json",
+                "https://srun.edu-publish.site/school-presets.json",
+            ),
+        )
+        for index, chosen in enumerate(school_presets.REMOTE_PRESETS_URLS):
+            calls = []
 
-        def fake_fetch(url, timeout):
-            calls.append(url)
-            if url == school_presets.MIRROR_PRESETS_URL:
-                raise RuntimeError("mirror unavailable")
-            return json.dumps(payload)
+            def fake_fetch(url, timeout):
+                calls.append(url)
+                if url != chosen:
+                    raise RuntimeError("source unavailable")
+                return json.dumps(payload)
 
+            with self.subTest(source=chosen), tempfile.TemporaryDirectory() as tmp:
+                cache_path = os.path.join(tmp, "school_presets_cache.json")
+                with (
+                    mock.patch.object(school_presets, "CACHE_PRESETS_FILE", cache_path),
+                    mock.patch.object(school_presets, "_fetch_via_urllib", side_effect=fake_fetch),
+                    mock.patch.object(school_presets, "_fetch_via_system_client",
+                                      side_effect=RuntimeError("no system fetcher")),
+                ):
+                    result = school_presets.refresh_remote_presets()
+                    with open(cache_path, "r", encoding="utf-8") as handle:
+                        cached = json.load(handle)
+                self.assertEqual(calls, list(school_presets.REMOTE_PRESETS_URLS[:index + 1]))
+                self.assertEqual(result["source_url"], chosen)
+                self.assertEqual(cached["_source_url"], chosen)
+                self.assertIn("mirror-fallback", {item["short_name"] for item in result["schools"]})
+
+    def test_invalid_source_responses_continue_to_the_next_source(self):
+        valid = {"schema_version": 1, "schools": []}
+        invalid = (
+            "<html>not a preset</html>", "[]", "{}",
+            '{"schema_version":1,"updated_at":"2026-09-04"}',
+            '{"schema_version":2,"schools":[]}',
+            '{"schema_version":1,"schools":{}}',
+        )
+        for body in invalid:
+            with self.subTest(body=body), mock.patch.object(
+                school_presets, "_fetch_via_urllib",
+                side_effect=[body, json.dumps(valid)],
+            ) as fetcher:
+                payload, source = school_presets._fetch_remote_payload_with_source()
+            self.assertEqual(payload, valid)
+            self.assertEqual(source, school_presets.PAGES_PRESETS_URL)
+            self.assertEqual(fetcher.call_count, 2)
+
+    def test_empty_school_list_is_a_valid_remote_payload(self):
+        payload = {"schema_version": 1, "updated_at": "2026-09-04", "schools": []}
         with tempfile.TemporaryDirectory() as tmp:
-            cache_path = os.path.join(tmp, "school_presets_cache.json")
+            cache_path = os.path.join(tmp, "cache.json")
             with (
                 mock.patch.object(school_presets, "CACHE_PRESETS_FILE", cache_path),
-                mock.patch.object(
-                    school_presets, "_fetch_via_urllib", side_effect=fake_fetch
-                ),
-                mock.patch.object(
-                    school_presets,
-                    "_fetch_via_system_client",
-                    side_effect=RuntimeError("no system fetcher"),
-                ),
+                mock.patch.object(school_presets, "_fetch_via_urllib",
+                                  return_value=json.dumps(payload)) as fetcher,
             ):
                 result = school_presets.refresh_remote_presets()
-                with open(cache_path, "r", encoding="utf-8") as handle:
+                with open(cache_path, encoding="utf-8") as handle:
                     cached = json.load(handle)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["source_url"], school_presets.MIRROR_PRESETS_URL)
+        self.assertEqual(fetcher.call_count, 1)
+        self.assertEqual(cached["schools"], [])
 
-        self.assertEqual(
-            calls,
-            [
-                school_presets.MIRROR_PRESETS_URL,
-                school_presets.GITHUB_PRESETS_URL,
+    def test_missing_school_list_preserves_cache_and_deprecated_status(self):
+        bundled = {
+            "schema_version": 1,
+            "schools": [{"id": "retired-campus", "status": "active"}],
+        }
+        cached = {
+            "schema_version": 1,
+            "updated_at": "2026-09-03",
+            "schools": [
+                {"id": "retired-campus", "status": "deprecated"},
+                {"id": "cached-campus", "status": "active"},
             ],
-        )
-        self.assertEqual(result["source_url"], school_presets.GITHUB_PRESETS_URL)
-        self.assertEqual(cached["_source_url"], school_presets.GITHUB_PRESETS_URL)
-        self.assertEqual(result["schools"][0]["short_name"], "mirror-fallback")
+        }
+        invalid = {"schema_version": 1, "updated_at": "2026-09-04"}
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_path = os.path.join(tmp, "cache.json")
+            bundled_path = os.path.join(tmp, "bundled.json")
+            original_bytes = json.dumps(cached).encode("utf-8")
+            with open(cache_path, "wb") as handle:
+                handle.write(original_bytes)
+            with open(bundled_path, "w", encoding="utf-8") as handle:
+                json.dump(bundled, handle)
+            with (
+                mock.patch.object(school_presets, "CACHE_PRESETS_FILE", cache_path),
+                mock.patch.object(school_presets, "FALLBACK_PRESETS_FILE", bundled_path),
+                mock.patch.object(school_presets, "_fetch_via_urllib",
+                                  return_value=json.dumps(invalid)) as fetcher,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "invalid school preset schema"):
+                    school_presets.refresh_remote_presets()
+                self.assertEqual(fetcher.call_count, len(school_presets.REMOTE_PRESETS_URLS))
+                visible = school_presets.list_presets(refresh=True)
+                all_schools = school_presets.list_presets(include_draft=True)
+            with open(cache_path, "rb") as handle:
+                self.assertEqual(handle.read(), original_bytes)
+        self.assertEqual([school["short_name"] for school in visible], ["cached-campus"])
+        self.assertEqual(all_schools[0]["status"], "deprecated")
+
+    def test_explicit_source_does_not_silently_fetch_a_different_source(self):
+        with (
+            mock.patch.object(school_presets, "_fetch_via_urllib",
+                              side_effect=RuntimeError("unavailable")) as fetcher,
+            mock.patch.object(school_presets, "_fetch_via_system_client",
+                              side_effect=RuntimeError("unavailable")),
+        ):
+            with self.assertRaises(RuntimeError):
+                school_presets.fetch_remote_payload(url=PORTAL_ORIGIN + "/presets.json")
+        self.assertEqual(fetcher.call_count, 1)
+
+    def test_malformed_cached_school_list_does_not_crash_normalization(self):
+        for value in (42, "schools", {"campus": {}}):
+            with self.subTest(value=value):
+                self.assertEqual(
+                    school_presets.normalize_payload({"schema_version": 1, "schools": value}),
+                    [],
+                )
+
+    def test_all_sources_unavailable_preserves_cache_and_bundled_schools(self):
+        payload = {
+            "schema_version": 1,
+            "schools": [{"id": "cached-campus", "status": "active"}],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_path = os.path.join(tmp, "presets.json")
+            with open(cache_path, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle)
+            with (
+                mock.patch.object(school_presets, "CACHE_PRESETS_FILE", cache_path),
+                mock.patch.object(school_presets, "_fetch_via_urllib",
+                                  side_effect=RuntimeError("offline")),
+                mock.patch.object(school_presets, "_fetch_via_system_client",
+                                  side_effect=RuntimeError("offline")),
+            ):
+                schools = school_presets.list_presets(refresh=True)
+                with open(cache_path, "r", encoding="utf-8") as handle:
+                    self.assertEqual(json.load(handle), payload)
+                os.unlink(cache_path)
+                bundled = school_presets.list_presets(refresh=True)
+        self.assertIn("cached-campus", {item["short_name"] for item in schools})
+        self.assertIn("jxnu", {item["short_name"] for item in schools})
+        self.assertIn("jxnu", {item["short_name"] for item in bundled})
+
+    def test_same_day_catalogue_and_source_changes_are_saved(self):
+        cached = {
+            "schema_version": 1, "updated_at": "2026-09-03",
+            "_source_url": school_presets.LEGACY_PRESETS_URL,
+            "schools": [{"id": "existing", "status": "active"}],
+        }
+        remote = {
+            "schema_version": 1, "updated_at": "2026-09-03",
+            "schools": cached["schools"] + [{"id": "new-campus", "status": "active"}],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "cache.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(cached, handle)
+            with (
+                mock.patch.object(school_presets, "CACHE_PRESETS_FILE", path),
+                mock.patch.object(school_presets, "_fetch_remote_payload_with_source",
+                                  return_value=(remote, school_presets.MIRROR_PRESETS_URL)),
+            ):
+                result = school_presets.refresh_remote_presets()
+                with open(path, "r", encoding="utf-8") as handle:
+                    persisted = json.load(handle)
+        self.assertEqual(result["source_url"], school_presets.MIRROR_PRESETS_URL)
+        self.assertEqual(persisted["_source_url"], school_presets.MIRROR_PRESETS_URL)
+        self.assertIn("new-campus", {item["id"] for item in persisted["schools"]})
 
     def test_refresh_remote_presets_keeps_newer_cached_payload(self):
         cached_payload = {
@@ -217,11 +359,48 @@ class SchoolPresetTests(unittest.TestCase):
                 ),
             ):
                 result = school_presets.refresh_remote_presets()
+                listed = school_presets.list_presets(refresh=True)
                 with open(cache_path, "r", encoding="utf-8") as handle:
                     persisted = json.load(handle)
 
-        self.assertEqual(result["schools"][0]["short_name"], "cached-campus")
+        self.assertIn("cached-campus", {item["short_name"] for item in result["schools"]})
         self.assertEqual(persisted["updated_at"], "2026-06-30")
+        self.assertIn("cached-campus", {item["short_name"] for item in listed})
+        self.assertNotIn("old-campus", {item["short_name"] for item in listed})
+
+    def test_refresh_matches_public_list_and_preserves_drafts_in_cache(self):
+        catalogue = {
+            "schema_version": 1,
+            "updated_at": "2026-09-03",
+            "schools": [
+                {"id": "remote-active", "status": "active"},
+                {"id": "remote-draft", "status": "draft"},
+                {"id": "jxnu", "status": "deprecated"},
+            ],
+        }
+        for remote_date in ("2026-09-03", "2026-09-02"):
+            with self.subTest(remote_date=remote_date), tempfile.TemporaryDirectory() as tmp:
+                path = os.path.join(tmp, "cache.json")
+                with open(path, "w", encoding="utf-8") as handle:
+                    json.dump(catalogue, handle)
+                remote = dict(catalogue, updated_at=remote_date)
+                with (
+                    mock.patch.object(school_presets, "CACHE_PRESETS_FILE", path),
+                    mock.patch.object(school_presets, "_fetch_remote_payload_with_source",
+                                      return_value=(remote, school_presets.MIRROR_PRESETS_URL)),
+                ):
+                    result = school_presets.refresh_remote_presets()
+                    self.assertEqual(result["schools"], school_presets.list_presets())
+                    public_ids = {item["short_name"] for item in result["schools"]}
+                    all_ids = {item["short_name"] for item in school_presets.list_presets(include_draft=True)}
+                with open(path, "r", encoding="utf-8") as handle:
+                    persisted = json.load(handle)
+                self.assertIn("remote-active", public_ids)
+                self.assertIn("swpu", public_ids)  # Preserve bundled-only schools.
+                self.assertNotIn("remote-draft", public_ids)
+                self.assertNotIn("jxnu", public_ids)  # A remote demotion overrides bundled active.
+                self.assertIn("remote-draft", all_ids)
+                self.assertEqual(persisted["schools"], catalogue["schools"])
 
     def test_legacy_verified_preset_cache_is_accepted_but_not_exported(self):
         payload = {
@@ -309,7 +488,7 @@ class SchoolPresetConfigTests(unittest.TestCase):
             "campus_accounts": [
                 {
                     "id": "campus-1",
-                    "user_id": "20260001",
+                    "user_id": "student-a",
                     "password": "secret",
                 }
             ],
@@ -331,7 +510,7 @@ class SchoolPresetConfigTests(unittest.TestCase):
         self.assertEqual(resolved["base_url"], "")
         self.assertEqual(resolved["ac_id"], "1")
         self.assertEqual(resolved["campus_access_mode"], "wifi")
-        self.assertEqual(resolved["username"], "20260001")
+        self.assertEqual(resolved["username"], "student-a")
 
     def test_resolve_active_items_still_normalizes_user_supplied_portal_origin(self):
         cfg = {

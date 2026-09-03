@@ -256,6 +256,70 @@ def wait_for_network_interface_ipv4(iface_name, timeout_seconds=12, interval_sec
     return None
 
 
+def _valid_ipv4(value):
+    candidate = pick_valid_ip(value)
+    return candidate if candidate and ":" not in candidate else None
+
+
+def _network_device_name(value):
+    device = str(value or "").strip().split("@", 1)[0].rstrip(":")
+    if not re.match(r"^[A-Za-z0-9_.:-]{1,15}$", device):
+        return None
+    return device
+
+
+def resolve_wired_binding(cfg):
+    """Resolve one selected interface to its IPv4 and L3 device together.
+
+    A global address lookup cannot disambiguate overlapping campus subnets.
+    Prefer netifd's interface identity; only a literal Linux device may use
+    the device-scoped ip-address fallback.
+    """
+    iface = get_wired_iface(cfg)
+    ok, output = run_cmd(
+        ["ubus", "call", "network.interface.%s" % iface, "status"], timeout=5
+    )
+    data = _parse_network_interface_status(output) if ok else {}
+    if data:
+        device = _network_device_name(data.get("l3_device") or data.get("device"))
+        if not device:
+            raise RuntimeError("有线接口 %s 无法确定 L3 设备" % iface)
+        if data.get("up") is False:
+            raise RuntimeError("有线接口 %s 尚未就绪" % iface)
+        addresses = data.get("ipv4-address") or data.get("ipv4_address") or []
+        if isinstance(addresses, list):
+            for item in addresses:
+                address = _valid_ipv4(item.get("address")) if isinstance(item, dict) else None
+                if address:
+                    return address, device
+    else:
+        device = _network_device_name(iface)
+    if not device:
+        raise RuntimeError("有线接口 %s 无法确定 L3 设备" % iface)
+    ok, output = run_cmd(["ip", "-4", "-o", "addr", "show", "dev", device], timeout=5)
+    if ok:
+        for line in output.splitlines():
+            fields = line.split()
+            if (len(fields) >= 4 and fields[2] == "inet"
+                    and _network_device_name(fields[1]) == device):
+                address = _valid_ipv4(fields[3].split("/", 1)[0])
+                if address:
+                    return address, device
+    raise RuntimeError("有线接口 %s 尚未获取到 IPv4 地址" % iface)
+
+
+def resolve_http_binding(url, cfg, bind_ip=None):
+    """HTTP keyword arguments; legacy callers retain source-only behavior."""
+    strict = campus_uses_wired(cfg) and str(cfg.get("_multi_wan_strict_bind", "0")).strip() == "1"
+    if not strict:
+        return {"bind_ip": bind_ip or resolve_bind_ip(url, cfg)}
+    address, device = resolve_wired_binding(cfg)
+    if bind_ip and str(bind_ip) != address:
+        raise RuntimeError("有线接口 %s 的 IPv4 地址已变化，请重新检查线路" % get_wired_iface(cfg))
+    return {"bind_ip": address, "bind_device": device, "strict": True,
+            "bind_iface": get_wired_iface(cfg)}
+
+
 def resolve_bind_ip(url, cfg):
     host = extract_host_from_url(url)
     wired_mode = campus_uses_wired(cfg)
@@ -265,6 +329,8 @@ def resolve_bind_ip(url, cfg):
     # 存量单有线配置没有该标记，缺地址时继续沿用原来的路由选源逻辑。
     if wired_mode:
         iface = get_wired_iface(cfg)
+        if str(cfg.get("_multi_wan_strict_bind", "0")).strip() == "1":
+            return resolve_wired_binding(cfg)[0]
         bind_ip = get_ipv4_from_network_interface(iface)
         log(
             "DEBUG",
@@ -276,8 +342,6 @@ def resolve_bind_ip(url, cfg):
         )
         if bind_ip:
             return bind_ip
-        if str(cfg.get("_multi_wan_strict_bind", "0")).strip() == "1":
-            raise RuntimeError("有线接口 %s 尚未获取到 IPv4 地址" % iface)
 
     bind_ip = get_local_ip_for_target(host) if host else None
     if wired_mode:
@@ -321,6 +385,7 @@ def get_network_device_for_ip(bind_ip):
     ok, output = run_cmd(["ip", "-4", "-o", "addr", "show"], timeout=5)
     if not ok or not output:
         return None
+    devices = set()
     for line in output.splitlines():
         fields = line.split()
         if len(fields) < 4 or fields[2] != "inet":
@@ -330,11 +395,34 @@ def get_network_device_for_ip(bind_ip):
             continue
         # iproute2 may render stacked devices as "eth0@if5". SO_BINDTODEVICE
         # expects the local name before the peer suffix.
-        return fields[1].split("@", 1)[0].rstrip(":") or None
-    return None
+        device = _network_device_name(fields[1])
+        if device:
+            devices.add(device)
+    return next(iter(devices)) if len(devices) == 1 else None
 
 
-def _create_bound_connection(address, timeout, source_address, bind_device):
+def validate_ip_device_binding(bind_ip, bind_device):
+    """Reject stale DHCP addresses even if another device still owns the IP.
+
+    Linux bind(source_ip) validates addresses across the whole namespace, not
+    just SO_BINDTODEVICE's device. Check their association before sending.
+    """
+    address = _valid_ipv4(bind_ip)
+    device = _network_device_name(bind_device)
+    if not address or not device:
+        raise RuntimeError("严格绑定缺少有效 IPv4 或 L3 设备")
+    ok, output = run_cmd(["ip", "-4", "-o", "addr", "show", "dev", device], timeout=5)
+    if ok:
+        for line in output.splitlines():
+            fields = line.split()
+            if (len(fields) >= 4 and fields[2] == "inet"
+                    and _network_device_name(fields[1]) == device
+                    and fields[3].split("/", 1)[0] == address):
+                return
+    raise RuntimeError("绑定接口 %s 已不再持有 IPv4 地址 %s，请重新检查线路" % (device, address))
+
+
+def _create_bound_connection(address, timeout, source_address, bind_device, strict=False, bind_iface=None):
     """socket.create_connection equivalent with optional SO_BINDTODEVICE."""
     last_error = None
     lookup_host = address[0]
@@ -346,9 +434,17 @@ def _create_bound_connection(address, timeout, source_address, bind_device):
             lookup_host = lookup_host.encode("ascii")
         except UnicodeEncodeError:
             pass
-    for af, socktype, proto, _canonname, sockaddr in socket.getaddrinfo(
-        lookup_host, address[1], 0, socket.SOCK_STREAM
-    ):
+    if strict:
+        source_ip = source_address[0] if source_address else None
+        validate_ip_device_binding(source_ip, bind_device)
+        host = lookup_host.decode("ascii") if isinstance(lookup_host, bytes) else lookup_host
+        dns_timeout = timeout if isinstance(timeout, (int, float)) else 5
+        ips = _resolve_probe_ips(host, dns_timeout, bind_ip=source_ip,
+                                 bind_device=bind_device, iface=bind_iface, strict=True)
+        addresses = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", (ip, address[1])) for ip in ips]
+    else:
+        addresses = socket.getaddrinfo(lookup_host, address[1], 0, socket.SOCK_STREAM)
+    for af, socktype, proto, _canonname, sockaddr in addresses:
         sock = None
         try:
             sock = socket.socket(af, socktype, proto)
@@ -371,7 +467,7 @@ def _create_bound_connection(address, timeout, source_address, bind_device):
     raise OSError("getaddrinfo returns an empty list")
 
 
-def _http_get_via_stdlib(url, timeout, bind_ip, bind_device=None):
+def _http_get_via_stdlib(url, timeout, bind_ip, bind_device=None, strict=False, bind_iface=None):
     """用 stdlib http.client 发起 GET，可选绑定源 IP 和所属 L3 设备。
 
     避免依赖 wget --bind-address（BusyBox wget / uclient-fetch 都不支持），
@@ -409,6 +505,8 @@ def _http_get_via_stdlib(url, timeout, bind_ip, bind_device=None):
                 socket_timeout,
                 source_address,
                 bind_device,
+                strict=strict,
+                bind_iface=bind_iface,
             )
 
         conn._create_connection = create_connection
@@ -427,7 +525,7 @@ def _http_get_via_stdlib(url, timeout, bind_ip, bind_device=None):
         conn.close()
 
 
-def http_get(url, params=None, timeout=5, bind_ip=None):
+def http_get(url, params=None, timeout=5, bind_ip=None, bind_device=None, strict=False, bind_iface=None):
     if params:
         query = _urlencode(params)
         url = url + ("&" if "?" in url else "?") + query
@@ -446,15 +544,29 @@ def http_get(url, params=None, timeout=5, bind_ip=None):
 
     errors = []
     dns_failure_host = ""
-    bind_device = get_network_device_for_ip(bind_ip) if bind_ip else None
+    if strict and not _valid_ipv4(bind_ip):
+        raise RuntimeError("严格绑定的 HTTP 请求缺少有效 IPv4 地址")
+    if strict and not _network_device_name(bind_device):
+        raise RuntimeError("严格绑定的 HTTP 请求缺少明确 L3 设备")
+    if bind_device:
+        bind_device = _network_device_name(bind_device)
+        if not bind_device:
+            raise RuntimeError("HTTP 请求的 L3 设备名称无效")
+    if bind_device is None:
+        bind_device = get_network_device_for_ip(bind_ip) if bind_ip else None
+    if (strict or bind_device) and not HAVE_URLLIB:
+        raise RuntimeError("绑定接口 %s 需要 Python HTTP 客户端，不能降级为 wget" % bind_device)
+    if strict:
+        validate_ip_device_binding(bind_ip, bind_device)
 
     with timed() as t:
         if HAVE_URLLIB:
             try:
-                if bind_ip:
-                    body, status_code = _http_get_via_stdlib(
-                        url, timeout, bind_ip, bind_device=bind_device
-                    )
+                if bind_ip or bind_device:
+                    bound_kwargs = {"bind_device": bind_device}
+                    if strict:
+                        bound_kwargs.update(strict=True, bind_iface=bind_iface)
+                    body, status_code = _http_get_via_stdlib(url, timeout, bind_ip, **bound_kwargs)
                     client_name = "http.client(bound)"
                 else:
                     req = urllib_request.Request(url, headers=HEADER, method="GET")
@@ -475,7 +587,7 @@ def http_get(url, params=None, timeout=5, bind_ip=None):
                 return body
             except Exception as exc:
                 msg = str(exc)
-                errors.append("%s: %s" % ("http.client" if bind_ip else "urllib", msg))
+                errors.append("%s: %s" % ("http.client" if bind_ip or bind_device else "urllib", msg))
                 lower = msg.lower()
                 if ("name or service not known" in lower
                         or "nodename nor servname" in lower
@@ -487,7 +599,7 @@ def http_get(url, params=None, timeout=5, bind_ip=None):
                 # back to wget --bind-address would silently lose
                 # SO_BINDTODEVICE and may send campus credentials via another
                 # PPPoE WAN. Fail closed instead.
-                if bind_device:
+                if strict or bind_device:
                     raise RuntimeError(
                         "绑定接口 %s 的 HTTP 请求失败：%s" % (bind_device, msg)
                     )
@@ -591,7 +703,7 @@ def _split_http_url(url):
     return host, port, "/" + path
 
 
-def _uplink_dns_servers():
+def _uplink_dns_servers(iface=None, strict=False):
     """上行接口 DHCP 下发的 DNS 服务器（仅 IPv4）。
 
     连通性探测必须绕开本机 dnsmasq/代理解析链：路由器跑透明代理（如
@@ -599,9 +711,11 @@ def _uplink_dns_servers():
     是好的；只有直接问上行 DNS 才测得到真实连通性。
     """
     servers = []
-    for iface in ("wwan", "wan"):
+    if strict and not iface:
+        return servers
+    for selected_iface in ((iface,) if iface else ("wwan", "wan")):
         ok, output = run_cmd(
-            ["ubus", "-S", "call", "network.interface.%s" % iface, "status"],
+            ["ubus", "-S", "call", "network.interface.%s" % selected_iface, "status"],
             timeout=5,
         )
         if not ok:
@@ -610,11 +724,13 @@ def _uplink_dns_servers():
             payload = json.loads(output or "{}")
         except ValueError:
             continue
+        if not isinstance(payload, dict):
+            continue
         for item in payload.get("dns-server", []):
             item = str(item).strip()
             if item and ":" not in item and item not in servers:
                 servers.append(item)
-    if not servers:
+    if not servers and not strict:
         try:
             with open("/tmp/resolv.conf.d/resolv.conf.auto", "r") as handle:
                 for line in handle:
@@ -631,7 +747,19 @@ def _uplink_dns_servers():
     return servers
 
 
-def _dns_query_a(host, server, timeout):
+def _bind_probe_socket(sock, bind_ip=None, bind_device=None, strict=False):
+    if strict and (not _valid_ipv4(bind_ip) or not _network_device_name(bind_device)):
+        raise RuntimeError("严格绑定的连通性探测缺少 IPv4 或 L3 设备")
+    if strict:
+        validate_ip_device_binding(bind_ip, bind_device)
+    if bind_device:
+        sock.setsockopt(socket.SOL_SOCKET, getattr(socket, "SO_BINDTODEVICE", 25),
+                        str(bind_device).encode("utf-8") + b"\0")
+    if bind_ip:
+        sock.bind((bind_ip, 0))
+
+
+def _dns_query_a(host, server, timeout, bind_ip=None, bind_device=None, strict=False):
     """向指定 DNS 服务器发原始 UDP A 记录查询，返回 IPv4 列表。"""
     txid = os.urandom(2)
     header = txid + struct.pack(">HHHHH", 0x0100, 1, 0, 0, 0)
@@ -643,6 +771,7 @@ def _dns_query_a(host, server, timeout):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(timeout)
     try:
+        _bind_probe_socket(sock, bind_ip, bind_device, strict)
         sock.sendto(packet, (server, 53))
         data, _ = sock.recvfrom(1024)
     finally:
@@ -674,18 +803,25 @@ def _dns_query_a(host, server, timeout):
     return ips
 
 
-def _resolve_probe_ips(host, timeout):
+def _resolve_probe_ips(host, timeout, bind_ip=None, bind_device=None, iface=None, strict=False):
     try:
         socket.inet_aton(host)
         return [host]
     except OSError:
         pass
     dns_timeout = max(1.0, min(2.0, timeout / 2.0))
-    for server in _uplink_dns_servers()[:2]:
+    scoped = bool(bind_ip or bind_device or iface or strict)
+    servers = _uplink_dns_servers(iface=iface, strict=strict) if scoped else _uplink_dns_servers()
+    for server in servers[:2]:
         try:
+            if scoped:
+                return _dns_query_a(host, server, dns_timeout, bind_ip=bind_ip,
+                                    bind_device=bind_device, strict=strict)
             return _dns_query_a(host, server, dns_timeout)
         except Exception:
             continue
+    if strict:
+        raise OSError("所选接口的 DNS 不可用")
     # 上行 DNS 不可得时退回本机解析链。bytes 主机名直接走 C 解析器：
     # python3-light 缺 unicodedata 时 str 主机名会因 idna 编解码器不可用
     # 抛 LookupError。仅取 IPv4，避免 v6 黑洞路由拖满连接超时。
@@ -695,7 +831,7 @@ def _resolve_probe_ips(host, timeout):
     return [info[4][0] for info in infos]
 
 
-def _probe_http_status(url, timeout):
+def _probe_http_status(url, timeout, bind_ip=None, bind_device=None, iface=None, strict=False):
     """裸 socket 发 HTTP GET 并只读状态行，返回状态码。仅支持 http。
 
     刻意不用 urllib/http.client（缺 idna 编解码器的设备上 stdlib 解析直接
@@ -703,10 +839,19 @@ def _probe_http_status(url, timeout):
     """
     host, port, path = _split_http_url(url)
     last_error = None
-    for ip in _resolve_probe_ips(host, timeout)[:2]:
+    if strict and (not _valid_ipv4(bind_ip) or not _network_device_name(bind_device)):
+        raise RuntimeError("严格绑定的连通性探测缺少 IPv4 或 L3 设备")
+    scoped = bool(bind_ip or bind_device or iface or strict)
+    if scoped:
+        addresses = _resolve_probe_ips(host, timeout, bind_ip=bind_ip,
+                                       bind_device=bind_device, iface=iface, strict=strict)
+    else:
+        addresses = _resolve_probe_ips(host, timeout)
+    for ip in addresses[:2]:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(timeout)
         try:
+            _bind_probe_socket(sock, bind_ip, bind_device, strict)
             sock.connect((ip, port))
             request = (
                 "GET %s HTTP/1.1\r\n"
@@ -734,17 +879,24 @@ def _probe_http_status(url, timeout):
     raise last_error if last_error else OSError("无可用探测地址")
 
 
-def test_internet_connectivity(timeout=5):
+def test_internet_connectivity(timeout=5, bind_ip=None, bind_device=None, iface=None, strict=False, bind_iface=None):
     # 连通性探测必须快速失败且零依赖：裸 socket 单次请求读真实状态码判定——
     # generate_204 只有直连时才返回 204，被门户劫持时是 302/200，比"响应字节
     # 数<64"的启发式可靠。绝不落 http_get 的 wget/uclient-fetch 兜底链：外网
     # 被墙时该链每个 URL 会串行拖满多个子进程硬超时（实测 20s+），把登录成功
     # 后的终态校验整个拖死。
+    iface = bind_iface or iface
     for url in CONNECTIVITY_CHECK_URLS:
         log("DEBUG", "connectivity_probe_begin", url=url, timeout=timeout)
         with timed() as t:
             try:
-                status_code = _probe_http_status(url, timeout)
+                if bind_ip or bind_device or iface or strict:
+                    status_code = _probe_http_status(
+                        url, timeout, bind_ip=bind_ip, bind_device=bind_device,
+                        iface=iface, strict=strict,
+                    )
+                else:
+                    status_code = _probe_http_status(url, timeout)
             except Exception as exc:
                 log(
                     "DEBUG",
@@ -777,12 +929,24 @@ def test_internet_connectivity(timeout=5):
     return False, "无法访问连通性检测服务器"
 
 
-def test_portal_reachability(cfg, timeout=3):
+def test_portal_reachability(cfg, timeout=3, bind_ip=None, bind_device=None, strict=False, bind_iface=None):
     base_url = str(cfg.get("base_url", "")).strip()
     if not base_url:
         return False, "认证网关地址未配置"
     try:
-        http_get(base_url, timeout=timeout)
+        if strict or bind_device:
+            binding = {"bind_ip": bind_ip, "bind_device": bind_device, "strict": strict}
+            if bind_iface:
+                binding["bind_iface"] = bind_iface
+            http_get(base_url, timeout=timeout, **binding)
+        elif campus_uses_wired(cfg) and str(cfg.get("_multi_wan_strict_bind", "0")).strip() == "1":
+            http_get(base_url, timeout=timeout, **resolve_http_binding(base_url, cfg, bind_ip))
+        elif bind_ip:
+            http_get(base_url, timeout=timeout, bind_ip=bind_ip)
+        elif campus_uses_wired(cfg):
+            http_get(base_url, timeout=timeout, **resolve_http_binding(base_url, cfg))
+        else:
+            http_get(base_url, timeout=timeout)
         return True, ""
     except Exception as exc:
         detail = str(exc)

@@ -24,7 +24,7 @@ root/
 │   └── schools/
 │       ├── __init__.py            # 学校模块自动发现与元数据
 │       ├── _base.py               # legacy SchoolProfile 基类
-│       └── jxnu.py                # 默认 legacy Profile
+│       └── default.py             # 默认学校运行时
 ├── usr/lib/lua/luci/
 │   ├── controller/smart_srun.lua  # LuCI endpoints、日志翻译、动作接口
 │   ├── model/cbi/smart_srun.lua   # LuCI 配置页 SSR
@@ -39,7 +39,7 @@ root/
 - `scripts/hot_update.py`：开发态热更新脚本，显式上传 shipped 文件。
 - 网页登录诊断与学校预设采集油猴脚本：独立仓库 [guiguisocute/smart_srun_school_preset_capture.user](https://github.com/guiguisocute/smart_srun_school_preset_capture.user)，本仓库不再保留副本。
 - `doc/school-presets.json`：机器可读学校预设主文件。
-- `srun.edu-publish.site` 学校预设镜像站代码：独立仓库 [guiguisocute/smart_srun-_cloudflare_pages](https://github.com/guiguisocute/smart_srun-_cloudflare_pages)，本仓库不再保留副本。
+- `srun.guiguisocute.com` 学校预设镜像站代码：独立仓库 [guiguisocute/smart_srun-_cloudflare_pages](https://github.com/guiguisocute/smart_srun-_cloudflare_pages)，官方 Pages 域名与旧域名仍提供 fallback，本仓库不保留站点副本。
 
 ## 运行环境约束
 
@@ -52,10 +52,21 @@ root/
 
 ## 提交前验证
 
+### 多 WAN 配置与状态契约
+
+- 全局 `multi_wan_enabled` 与账号 `auth_enabled` 都使用 `"0"` / `"1"`；只有开启全局开关且勾选的有线账号参与守护。托管集合为空时，白天不自动认证默认有线账号。
+- 账号 `wired_iface` 指定 OpenWrt 逻辑接口或 Linux 设备。兼容读取旧 `network_interface`，有效的 `wired_iface` 优先；编辑保存统一写 `wired_iface`。
+- 每个账号独立解析认证参数：账号值优先，`n/type/enc` 兼容真正的旧全局值，其余缺省字段使用内置默认。派生账号不得继承当前活动账号的参数。
+- `_legacy_login_shape` 和 `_multi_wan_strict_bind` 是运行态辅助信息，不能写入持久配置。严格绑定必须保留指定接口对应的设备与源 IP；缺地址、缺设备或客户端无法保证绑定时停止该线路请求。
+- 静默窗口暂停托管有线账号及当前活动的有线账号；开启强制下线时按账号去重，仅重试失败项。未勾选守护不代表免于当前会话的强制夜间下线。
+- `last_action_message` / `last_action_portal_url` 与动作结果一起保存，供 LuCI 终态弹窗使用；后续守护概况不能覆盖它们。Portal 状态表示网关可达但互联网探测失败，不是具体根因的确诊。
+
+### 本地检查
+
 建议本机安装：
 
 ```sh
-python -m pip install pytest ruff paramiko
+python -m pip install pytest "ruff==0.16.5" paramiko
 ```
 
 常用验证：
@@ -71,11 +82,11 @@ python -m pytest tests/test_lua_syntax.py -v
 学校门户相关测试的占位地址统一在 `tests/_portal_urls.py`。如果你要用本校网关做本地字符串/解析验证，不要逐个改测试文件，设置环境变量即可：
 
 ```sh
-export SMARTSRUN_TEST_PORTAL_ORIGIN=http://portal.example.edu
-export SMARTSRUN_TEST_DEFAULT_BASE_URL=http://172.17.1.2
-export SMARTSRUN_TEST_PORTAL_HTTPS_ORIGIN=https://portal.example.edu
+export SMARTSRUN_TEST_PORTAL_ORIGIN=http://portal.example.test
+export SMARTSRUN_TEST_PORTAL_HTTPS_ORIGIN=https://portal.example.test
 export SMARTSRUN_TEST_PORTAL_IPV4_ORIGIN=http://198.51.100.10
 export SMARTSRUN_TEST_PORTAL_BARE_HOST=203.0.113.5
+export SMARTSRUN_TEST_WIRED_BIND_IP=192.0.2.20
 ```
 
 这些变量只影响测试占位字符串；单元测试不会因此主动访问真实校园网认证服务，除非某个测试明确 mock/调用网络层。
@@ -98,14 +109,24 @@ python scripts/hot_update.py
 
 ## 学校预设
 
-预设主文件是 `doc/school-presets.json`，随包兜底文件是 `root/usr/lib/smart_srun/school_presets_fallback.json`。插件运行时读取顺序：
+预设主文件是 `doc/school-presets.json`，随包兜底文件是 `root/usr/lib/smart_srun/school_presets_fallback.json`。刷新时的来源顺序如下；普通 `presets list` 只读取缓存并合并随包数据，不主动请求网络：
 
-1. `https://srun.edu-publish.site/school-presets.json`
-2. `https://raw.githubusercontent.com/matthewlu070111/smart-srun/main/doc/school-presets.json`
-3. 本地缓存 `school_presets_cache.json`
-4. 随包兜底 `school_presets_fallback.json`
+1. `https://srun.guiguisocute.com/school-presets.json`
+2. `https://smart-srun--cloudflare-pages.pages.dev/school-presets.json`
+3. `https://raw.githubusercontent.com/matthewlu070111/smart-srun/main/doc/school-presets.json`
+4. `https://srun.edu-publish.site/school-presets.json`（过渡 fallback，计划 2027 年不再续费）
+5. 本地缓存 `school_presets_cache.json`
+6. 随包兜底 `school_presets_fallback.json`
 
-只把确认可用的学校标成 `active`；未测通或信息不完整的学校保持 `draft`。
+网络失败、无效 JSON 或不兼容的 schema 都应继续尝试下一个来源。刷新不得用日期更旧的远端覆盖有效缓存；同日发布的修正需要生效。缓存与随包数据按学校 ID 合并，因此远端清单暂缺的新学校仍可由随包数据提供。
+
+刷新响应与普通列表使用相同的合并和状态规则，只展示 `active` 公共预设；完整草稿保留在缓存与原始清单中。LuCI 异步刷新也应遵守这条规则，成功的空列表必须清除旧选项。用户自定义预设单独存储，不受公共预设的状态过滤影响。
+
+预设 JSON 统一使用语义键序、两空格缩进、展开对象/数组和 LF 末尾换行；缓存写入和开发格式工具共用 `school_presets.format_preset_payload()`。统一排版不补造未知运营商、登录参数、SSID 或接入方式，也不把草稿升级成已验证学校。
+
+修改主预设后运行 `python scripts/format_school_presets.py --write`，它会同步 fallback；提交前运行 `python scripts/format_school_presets.py --check`。默认不带参数等同于只读检查，pytest 也会校验两份数据的格式和一致性。
+
+学校状态必须有可追溯的依据。历史采集提交明确标为 `active` 且未报告认证失败时，可以保留原状态和 `source_issue`，同时说明未覆盖的接入环境；这不等于维护者本人已校内复测。明确报告插件认证失败的诊断样本保留 `draft`。未知的 SSID、接入方式或其他字段保持缺失，不为统一格式补造值。
 
 预设中的运营商后缀只写在 `operators[].suffix` 中（旧的 `operators[].id` 仍兼容读取）。纯账号/无后缀使用空字符串表示：
 
@@ -143,7 +164,8 @@ python scripts/hot_update.py
 更新预设后同步随包 fallback：
 
 ```sh
-python -c "import json, pathlib; p=json.loads(pathlib.Path('doc/school-presets.json').read_text(encoding='utf-8')); p['source']='bundled fallback'; pathlib.Path('root/usr/lib/smart_srun/school_presets_fallback.json').write_text(json.dumps(p, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')"
+python scripts/format_school_presets.py --write
+python scripts/format_school_presets.py --check
 ```
 
 同步 fallback 时只允许 `source` 不同，内容应与 `doc/school-presets.json` 保持一致。
@@ -197,7 +219,7 @@ class Profile(SchoolProfile):
     CONTRIBUTORS = ("@your_github",)
 
     ALPHA = "..."  # 深澜自定义 base64 字母表；不确定就先别改
-    DEFAULT_BASE_URL = "http://portal.example.edu"
+    DEFAULT_BASE_URL = "http://portal.example.test"
     DEFAULT_AC_ID = "1"
     DEFAULT_N = "200"
     DEFAULT_TYPE = "1"
@@ -329,6 +351,14 @@ python -m pytest tests/test_school_runtime_cli.py -k runtime -v
 
 ## GitHub Actions 构建
 
+多 WAN 的 Linux 实际出口验证可在具备 `iproute2` 和 root 权限的开发机运行：
+
+```sh
+sudo python3 scripts/test_network_namespaces.py --output-dir /tmp/smart-srun-netns-check
+```
+
+脚本创建并清理自己命名的 network namespace 和 veth，使用隔离的 HTTP/DNS 服务验证相同 IP、指定出口、DHCP 换址、断线恢复和严格 DNS。报告同时检查宿主接口与默认路由是否保持不变。这是开发验证工具，不会安装到路由器，也不替代真实校园网、无线驱动或运营商策略的测试。
+
 仓库内置两个工作流：
 
 | 工作流 | 用途 |
@@ -339,3 +369,5 @@ python -m pytest tests/test_school_runtime_cli.py -k runtime -v
 构建会并行产出 opkg 用 `.ipk` 和 apk 用 `.apk`。Release 资产规则由 `scripts/release_assets.py` 控制：一个 bundle ipk、一个 bundle apk，以及一个包含 split 包的 zip。
 
 `Makefile` 中 checked-in 的 `PKG_VERSION` 保持 `0.0.0`；工作流运行时临时 patch 版本号。
+
+OpenWrt 25.12 的 APK 打包路径不读取 `CONFLICTS`，因此本仓库在 `BuildPackage` 之后补入 APK 的负依赖，表达 bundle 与 split 包互斥。不要把负依赖提前放入构建依赖，否则会影响 Kconfig 依赖图。修改这部分时运行 `tests/test_package_conflicts.py`，并检查实际 IPK/APK 元数据。

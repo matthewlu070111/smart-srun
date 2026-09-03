@@ -156,7 +156,10 @@ def _build_parser():
         presets_sub,
         "refresh",
         help_text="刷新远端学校预设缓存",
-        description="优先从 srun.edu-publish.site 拉取学校预设，失败时回退 raw GitHub。",
+        description=(
+            "优先从 srun.guiguisocute.com 拉取学校预设，失败时依次回退 "
+            "smart-srun--cloudflare-pages.pages.dev、raw GitHub 和旧域名 srun.edu-publish.site。"
+        ),
     )
 
     p_detect = _make_subparser(

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-08-31",
+  "updated_at": "2026-09-03",
   "source": "https://github.com/matthewlu070111/smart-srun/issues",
   "schools": [
     {
@@ -24,12 +24,27 @@
         "name": "Windows"
       },
       "operators": [
-        {"suffix": "cmcc", "label": "中国移动"},
-        {"suffix": "ctcc", "label": "中国电信"},
-        {"suffix": "cucc", "label": "中国联通"},
-        {"suffix": "", "label": "校园网"}
+        {
+          "suffix": "cmcc",
+          "label": "中国移动"
+        },
+        {
+          "suffix": "ctcc",
+          "label": "中国电信"
+        },
+        {
+          "suffix": "cucc",
+          "label": "中国联通"
+        },
+        {
+          "suffix": "",
+          "label": "校园网"
+        }
       ],
-      "contributors": ["@matthewlu070111", "@guiguisocute"],
+      "contributors": [
+        "@matthewlu070111",
+        "@guiguisocute"
+      ],
       "source_issue": ""
     },
     {
@@ -76,7 +91,36 @@
       "contributors": [
         "@haohaoget"
       ],
-      "source_issue": ""
+      "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/30"
+    },
+    {
+      "id": "bucm",
+      "name": "北京中医药大学",
+      "status": "active",
+      "description": "门户采集信息来自 Issue #28。投稿未说明接入方式或 SSID；预设尚无本项目的校内实测确认。",
+      "defaults": {
+        "base_url": "http://10.2.20.20",
+        "ac_id": "9"
+      },
+      "observed_login_shape": {
+        "n": "200",
+        "type": "1",
+        "enc": "srun_bx1",
+        "info_prefix": "SRBX1",
+        "double_stack": "0",
+        "os": "Windows 10",
+        "name": "Windows"
+      },
+      "operators": [
+        {
+          "suffix": "",
+          "label": "校园网"
+        }
+      ],
+      "contributors": [
+        "@1036598718"
+      ],
+      "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/28"
     },
     {
       "id": "ncu1",
@@ -87,6 +131,13 @@
         "base_url": "http://222.204.3.154",
         "ac_id": "5",
         "ssid": "NCU-5G"
+      },
+      "observed_login_shape": {
+        "n": "200",
+        "type": "1",
+        "enc": "srun_bx1",
+        "info_prefix": "SRBX1",
+        "double_stack": "0"
       },
       "operators": [
         {
@@ -106,13 +157,6 @@
           "label": "校园网"
         }
       ],
-      "observed_login_shape": {
-        "n": "200",
-        "type": "1",
-        "enc": "srun_bx1",
-        "info_prefix": "SRBX1",
-        "double_stack": "0"
-      },
       "contributors": [
         "@guiguisocute"
       ],
@@ -128,12 +172,6 @@
         "ac_id": "39",
         "ssid": "NCUWLAN"
       },
-      "operators": [
-        {
-          "suffix": "",
-          "label": "校园网"
-        }
-      ],
       "observed_login_shape": {
         "n": "200",
         "type": "1",
@@ -141,6 +179,12 @@
         "info_prefix": "SRBX1",
         "double_stack": "0"
       },
+      "operators": [
+        {
+          "suffix": "",
+          "label": "校园网"
+        }
+      ],
       "contributors": [
         "@guiguisocute"
       ],
@@ -150,12 +194,14 @@
       "id": "ytu",
       "name": "烟台大学",
       "status": "active",
-      "description": "已汇报可用；缺少可安全一键填充的网关信息。",
+      "description": "已汇报有线网可用，已收录认证网关；AC_ID、运营商后缀和登录参数尚未记录。",
       "defaults": {
         "base_url": "http://10.10.184.56",
         "access_mode": "wired"
       },
-      "contributors": ["@enoungh"],
+      "contributors": [
+        "@enoungh"
+      ],
       "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/7"
     },
     {
@@ -167,7 +213,9 @@
         "ac_id": "4",
         "access_mode": "wired"
       },
-      "contributors": ["@o-liverkk"],
+      "contributors": [
+        "@o-liverkk"
+      ],
       "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/15"
     },
     {
@@ -188,10 +236,18 @@
         "double_stack": "0"
       },
       "operators": [
-        {"suffix": "hcmcc", "label": "中国移动"},
-        {"suffix": "", "label": "校园网"}
+        {
+          "suffix": "hcmcc",
+          "label": "中国移动"
+        },
+        {
+          "suffix": "",
+          "label": "校园网"
+        }
       ],
-      "contributors": ["@zhaogods"],
+      "contributors": [
+        "@zhaogods"
+      ],
       "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/20"
     },
     {
@@ -199,6 +255,7 @@
       "name": "南昌航空大学（前湖校区）",
       "status": "active",
       "description": "前湖 Wi-Fi 已在 2026-07 实测登录/登出（见 doc/nchu.md）。真实后缀为 stu.nchu.edu.cn（学生用户），勿使用油猴旧版误抓的 1-@stu.nchu.edu.cn。有线拨号未覆盖。其它套餐未验证前不要臆造 cmcc/ctcc。",
+      "doc_url": "https://github.com/matthewlu070111/smart-srun/blob/main/doc/nchu.md",
       "defaults": {
         "base_url": "http://10.1.88.4",
         "ac_id": "1",
@@ -215,11 +272,16 @@
         "name": "Windows"
       },
       "operators": [
-        {"suffix": "stu.nchu.edu.cn", "label": "学生用户"}
+        {
+          "suffix": "stu.nchu.edu.cn",
+          "label": "学生用户"
+        }
       ],
-      "contributors": ["@REALBochengWen", "@guiguisocute"],
-      "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/22",
-      "doc_url": "https://github.com/matthewlu070111/smart-srun/blob/main/doc/nchu.md"
+      "contributors": [
+        "@REALBochengWen",
+        "@guiguisocute"
+      ],
+      "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/22"
     },
     {
       "id": "hsyu",
@@ -231,9 +293,14 @@
         "ac_id": "1"
       },
       "operators": [
-        {"suffix": "", "label": "校园网"}
+        {
+          "suffix": "",
+          "label": "校园网"
+        }
       ],
-      "contributors": ["@issue-reporter"],
+      "contributors": [
+        "@issue-reporter"
+      ],
       "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/18"
     },
     {
@@ -247,10 +314,45 @@
         "ssid": "LYU-WiFi7"
       },
       "operators": [
-        {"suffix": "", "label": "校园网"}
+        {
+          "suffix": "",
+          "label": "校园网"
+        }
       ],
-      "contributors": ["@YHXJLB"],
+      "contributors": [
+        "@YHXJLB"
+      ],
       "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/19"
+    },
+    {
+      "id": "zjut",
+      "name": "浙江工业大学",
+      "status": "draft",
+      "description": "有线门户采集信息来自 Issue #29；投稿者反馈网页认证可用，插件独立认证尚未验证。",
+      "defaults": {
+        "base_url": "http://192.168.210.171",
+        "ac_id": "3",
+        "access_mode": "wired"
+      },
+      "observed_login_shape": {
+        "n": "200",
+        "type": "1",
+        "enc": "srun_bx1",
+        "info_prefix": "SRBX1",
+        "double_stack": "0",
+        "os": "Windows 10",
+        "name": "Windows"
+      },
+      "operators": [
+        {
+          "suffix": "",
+          "label": "校园网"
+        }
+      ],
+      "contributors": [
+        "@RCaquaer"
+      ],
+      "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/29"
     }
   ]
 }

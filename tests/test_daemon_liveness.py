@@ -1,4 +1,3 @@
-import fcntl
 import io
 import os
 import sys
@@ -7,6 +6,14 @@ import unittest
 from contextlib import redirect_stdout
 from unittest import mock
 
+try:
+    import fcntl
+except ImportError:
+    # Same guard daemon.py uses around its own fcntl imports. Without it the
+    # module fails at collection on non-POSIX dev machines and takes the whole
+    # suite down with it, not just these five tests.
+    fcntl = None
+
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODULE_ROOT = os.path.join(REPO_ROOT, "root", "usr", "lib", "smart_srun")
 
@@ -14,9 +21,11 @@ if MODULE_ROOT not in sys.path:
     sys.path.insert(0, MODULE_ROOT)
 
 
+from _portal_urls import CLIENT_IP
 import daemon
 
 
+@unittest.skipUnless(fcntl is not None, "daemon liveness reads a POSIX flock")
 class DaemonLivenessTests(unittest.TestCase):
     """state['daemon_running'] is only ever written True.
 
@@ -63,7 +72,7 @@ class DaemonLivenessTests(unittest.TestCase):
             "daemon_running": True,
             "connectivity": "互联网可达",
             "connectivity_level": "online",
-            "current_ip": "10.0.0.2",
+            "current_ip": CLIENT_IP,
             "current_ssid": "campus",
             "mode_label": "校园网模式",
             "campus_account_label": "someone",

@@ -5,6 +5,7 @@ SRun 认证 API -- challenge、login、logout、在线查询。
 不管 WiFi 连没连，不管重试策略。
 """
 
+import re
 import time
 
 from config import localize_error, log, timed
@@ -16,6 +17,7 @@ from network import (
     parse_jsonp,
     pick_valid_ip,
     resolve_bind_ip,
+    resolve_http_binding,
 )
 from school_runtime import build_app_context
 
@@ -41,11 +43,70 @@ def get_logout_username(cfg):
     return str(cfg.get("username", "")).split("@", 1)[0].strip()
 
 
+class AuthResponseError(ValueError):
+    """A stable response error code, without including gateway response bodies."""
+
+
+def _parse_auth_response(raw, event, username="", duration_ms=0):
+    response_type = "invalid"
+    try:
+        data = parse_jsonp(raw)
+        if isinstance(data, dict):
+            return data
+        response_type = "non_object"
+    except (TypeError, ValueError):
+        if not raw or (isinstance(raw, str) and not raw.strip()):
+            response_type = "empty"
+        elif isinstance(raw, str) and re.search(
+            r"<(?:!doctype\s+html|html|head|body|form)(?:\s|>)", raw[:1024], re.I
+        ):
+            response_type = "html"
+    error_code = (
+        "auth_html_response_error" if response_type == "html"
+        else "auth_response_parse_error"
+    )
+    log(
+        "WARN", event, "authentication response is not a JSON object",
+        username=username, ok=False, error_code=error_code,
+        response_type=response_type, duration_ms=duration_ms,
+        bytes_received=len(raw.encode("utf-8")) if isinstance(raw, str) else 0,
+    )
+    raise AuthResponseError(error_code)
+
+
+def _http_binding_kwargs(bind_ip=None, bind_device=None, strict=False, bind_iface=None):
+    binding = {"bind_ip": bind_ip}
+    if bind_device:
+        binding["bind_device"] = bind_device
+    if strict:
+        binding["strict"] = True
+    if bind_iface:
+        binding["bind_iface"] = bind_iface
+    return binding
+
+
+def _resolve_auth_binding(app_ctx, init_url, bind_ip=None):
+    """Reuse the selected interface for every request in an auth transaction."""
+    cfg = app_ctx["cfg"]
+    if str(cfg.get("_multi_wan_strict_bind", "0")) == "1":
+        cached = app_ctx.get("_http_binding")
+        if isinstance(cached, dict) and cached.get("strict"):
+            if bind_ip is not None and bind_ip != cached.get("bind_ip"):
+                raise RuntimeError("认证事务的绑定 IP 与所选接口不一致")
+            return dict(cached)
+        binding = resolve_http_binding(init_url, cfg, bind_ip=bind_ip)
+        app_ctx["_http_binding"] = dict(binding)
+        return binding
+    return {"bind_ip": bind_ip if bind_ip is not None else resolve_bind_ip(init_url, cfg)}
+
+
 # ---------------------------------------------------------------------------
 # 基础 API 调用
 # ---------------------------------------------------------------------------
-def init_getip(init_url, bind_ip=None):
-    text = http_get(init_url, timeout=5, bind_ip=bind_ip)
+def init_getip(init_url, bind_ip=None, bind_device=None, strict=False, bind_iface=None):
+    text = http_get(
+        init_url, timeout=5, **_http_binding_kwargs(bind_ip, bind_device, strict, bind_iface)
+    )
     ip = extract_ip_from_text(text)
     # 门户首页不一定回显 user_ip。显式绑定了多 WAN 源地址时，应继续使用该
     # DHCP 地址作为 challenge/login 的 ip 参数，不能再次按默认路由选源。
@@ -59,7 +120,10 @@ def init_getip(init_url, bind_ip=None):
     return ip
 
 
-def get_token(get_challenge_api, username, ip, bind_ip=None):
+def get_token(
+    get_challenge_api, username, ip, bind_ip=None, bind_device=None,
+    strict=False, bind_iface=None,
+):
     now = int(time.time() * 1000)
     params = {
         "callback": "jQuery112404953340710317169_" + str(now),
@@ -76,19 +140,11 @@ def get_token(get_challenge_api, username, ip, bind_ip=None):
         bind_ip=bind_ip or "",
     )
     with timed() as t:
-        raw = http_get(get_challenge_api, params=params, timeout=5, bind_ip=bind_ip)
-    try:
-        data = parse_jsonp(raw)
-    except ValueError as exc:
-        log(
-            "WARN",
-            "srun_challenge_result",
-            "challenge response parse failed",
-            username=username,
-            duration_ms=t.ms,
-            error=str(exc),
+        raw = http_get(
+            get_challenge_api, params=params, timeout=5,
+            **_http_binding_kwargs(bind_ip, bind_device, strict, bind_iface),
         )
-        raise
+    data = _parse_auth_response(raw, "srun_challenge_result", username, t.ms)
     token = data.get("challenge")
     if not token:
         msg = data.get("error_msg") or data.get("error") or "unknown response"
@@ -122,7 +178,10 @@ def get_token(get_challenge_api, username, ip, bind_ip=None):
     return token, resolved_ip
 
 
-def login(profile, srun_portal_api, cfg, ip, i_value, hmd5, chksum, bind_ip=None):
+def login(
+    profile, srun_portal_api, cfg, ip, i_value, hmd5, chksum,
+    bind_ip=None, bind_device=None, strict=False, bind_iface=None,
+):
     params = profile.build_login_params(cfg, ip, i_value, hmd5, chksum)
     log(
         "DEBUG",
@@ -136,9 +195,14 @@ def login(profile, srun_portal_api, cfg, ip, i_value, hmd5, chksum, bind_ip=None
         type=cfg.get("type", ""),
     )
     with timed() as t:
-        data = parse_jsonp(
-            http_get(srun_portal_api, params=params, timeout=5, bind_ip=bind_ip)
+        raw = http_get(
+            srun_portal_api, params=params, timeout=5,
+            **_http_binding_kwargs(bind_ip, bind_device, strict, bind_iface),
         )
+    try:
+        data = _parse_auth_response(raw, "srun_login_response", cfg.get("username", ""), t.ms)
+    except AuthResponseError as exc:
+        return False, str(exc)
     ok, message = profile.parse_login_response(data)
     log(
         "INFO" if ok else "WARN",
@@ -152,16 +216,24 @@ def login(profile, srun_portal_api, cfg, ip, i_value, hmd5, chksum, bind_ip=None
     return ok, message
 
 
-def logout(profile, rad_user_dm_api, cfg, ip, bind_ip=None):
+def logout(
+    profile, rad_user_dm_api, cfg, ip, bind_ip=None, bind_device=None,
+    strict=False, bind_iface=None,
+):
     params = profile.build_logout_params(cfg, ip)
-    data = parse_jsonp(
-        http_get(rad_user_dm_api, params=params, timeout=5, bind_ip=bind_ip)
+    data = _parse_auth_response(
+        http_get(
+            rad_user_dm_api, params=params, timeout=5,
+            **_http_binding_kwargs(bind_ip, bind_device, strict, bind_iface),
+        ),
+        "srun_logout_response", cfg.get("username", ""),
     )
     return profile.parse_logout_response(data)
 
 
 def query_online_identity(
-    profile, rad_user_info_api=None, expected_username=None, bind_ip=None
+    profile, rad_user_info_api=None, expected_username=None, bind_ip=None,
+    bind_device=None, strict=False, bind_iface=None,
 ):
     if is_app_context(profile):
         app_ctx = profile
@@ -182,19 +254,11 @@ def query_online_identity(
         bind_ip=bind_ip or "",
     )
     with timed() as t:
-        try:
-            data = parse_jsonp(
-                http_get(rad_user_info_api, params=params, timeout=5, bind_ip=bind_ip)
-            )
-        except ValueError as exc:
-            log(
-                "WARN",
-                "srun_online_result",
-                "online query response parse failed",
-                duration_ms=t.ms,
-                error=str(exc),
-            )
-            raise
+        raw = http_get(
+            rad_user_info_api, params=params, timeout=5,
+            **_http_binding_kwargs(bind_ip, bind_device, strict, bind_iface),
+        )
+    data = _parse_auth_response(raw, "srun_online_result", expected_username or "", t.ms)
     online, username_reported, message = profile.parse_online_status(
         data, expected_username
     )
@@ -203,13 +267,15 @@ def query_online_identity(
         "srun_online_result",
         online=online,
         username_reported=username_reported or "",
+        error_code=message if not online else "ok",
         duration_ms=t.ms,
     )
-    return online, username_reported, message
+    return online, username_reported, message if online else localize_error(message)
 
 
 def query_online_status(
-    profile, rad_user_info_api=None, expected_username=None, bind_ip=None
+    profile, rad_user_info_api=None, expected_username=None, bind_ip=None,
+    bind_device=None, strict=False, bind_iface=None,
 ):
     if is_app_context(profile):
         app_ctx = profile
@@ -222,13 +288,15 @@ def query_online_status(
             app_ctx, expected_username=resolved_username, bind_ip=bind_ip
         )
     online, _, message = query_online_identity(
-        profile, rad_user_info_api, expected_username, bind_ip
+        profile, rad_user_info_api, expected_username,
+        **_http_binding_kwargs(bind_ip, bind_device, strict, bind_iface)
     )
     return online, message
 
 
 def wait_for_logout_status(
-    profile, rad_user_info_api, cfg, bind_ip=None, attempts=3, delay_seconds=1
+    profile, rad_user_info_api, cfg, bind_ip=None, attempts=3, delay_seconds=1,
+    bind_device=None, strict=False, bind_iface=None,
 ):
     app_ctx = None
     expected_username = cfg["username"]
@@ -245,7 +313,8 @@ def wait_for_logout_status(
     last_message = ""
     for idx in range(attempts):
         online, message = query_online_status(
-            query_target, query_api, expected_username, bind_ip=bind_ip
+            query_target, query_api, expected_username,
+            **_http_binding_kwargs(bind_ip, bind_device, strict, bind_iface)
         )
         last_message = message
         if not online:
@@ -268,10 +337,8 @@ def default_query_online_identity(app_ctx, expected_username=None, bind_ip=None)
     cfg = app_ctx["cfg"]
     urls = runtime.build_urls(cfg["base_url"])
     expected = expected_username or cfg.get("username", "")
-    bip = bind_ip
-    if bip is None:
-        bip = resolve_bind_ip(urls["init_url"], cfg)
-    return query_online_identity(runtime, urls["rad_user_info_api"], expected, bip)
+    binding = _resolve_auth_binding(app_ctx, urls["init_url"], bind_ip)
+    return query_online_identity(runtime, urls["rad_user_info_api"], expected, **binding)
 
 
 def default_query_online_status(app_ctx, expected_username=None, bind_ip=None):
@@ -285,17 +352,21 @@ def default_login_once(app_ctx):
     cfg = app_ctx["cfg"]
     runtime = app_ctx["runtime"]
     urls = runtime.build_urls(cfg["base_url"])
-    bip = resolve_bind_ip(urls["init_url"], cfg)
-    ip = init_getip(urls["init_url"], bind_ip=bip)
-    token, ip = get_token(urls["get_challenge_api"], cfg["username"], ip, bind_ip=bip)
+    # A new login is a new transaction: resolve the selected device once, then
+    # retain it through challenge refreshes, online verification and logout.
+    app_ctx.pop("_http_binding", None)
+    binding = _resolve_auth_binding(app_ctx, urls["init_url"])
+    bip = binding["bind_ip"]
+    ip = init_getip(urls["init_url"], **binding)
+    token, ip = get_token(urls["get_challenge_api"], cfg["username"], ip, **binding)
     i_value, hmd5, chksum = runtime.do_complex_work(cfg, ip, token)
     ok, message = login(
-        runtime, urls["srun_portal_api"], cfg, ip, i_value, hmd5, chksum, bind_ip=bip
+        runtime, urls["srun_portal_api"], cfg, ip, i_value, hmd5, chksum, **binding
     )
 
     if (not ok) and ("challenge_expire_error" in message.lower()):
         token, ip = get_token(
-            urls["get_challenge_api"], cfg["username"], ip, bind_ip=bip
+            urls["get_challenge_api"], cfg["username"], ip, **binding
         )
         i_value, hmd5, chksum = runtime.do_complex_work(cfg, ip, token)
         ok, message = login(
@@ -306,19 +377,21 @@ def default_login_once(app_ctx):
             i_value,
             hmd5,
             chksum,
-            bind_ip=bip,
+            **binding,
         )
 
     if (not ok) and ("no_response_data_error" in message.lower()):
         try:
-            online, online_msg = default_query_online_status(
+            online, _online_msg = default_query_online_status(
                 app_ctx, expected_username=cfg["username"], bind_ip=bip
             )
             if online:
                 return True, "已在线"
-            return False, online_msg
         except Exception:
             pass
+        # The online recheck may only upgrade a failure to success. Keep the
+        # gateway's cause in logs and localize that cause at the public boundary.
+        return False, "登录失败: " + localize_error(message)
 
     if (not ok) and (
         "already online" in message.lower() or "e2620" in message.lower()
@@ -346,7 +419,7 @@ def default_login_once(app_ctx):
         time.sleep(3.5)
         try:
             token, ip = get_token(
-                urls["get_challenge_api"], cfg["username"], ip, bind_ip=bip
+                urls["get_challenge_api"], cfg["username"], ip, **binding
             )
             i_value, hmd5, chksum = runtime.do_complex_work(cfg, ip, token)
             ok, message = login(
@@ -357,7 +430,7 @@ def default_login_once(app_ctx):
                 i_value,
                 hmd5,
                 chksum,
-                bind_ip=bip,
+                **binding,
             )
             if ok:
                 return True, "登录成功（已清理旧会话）"
@@ -381,14 +454,14 @@ def default_logout_once(app_ctx, override_user_id=None, bind_ip=None):
     cfg = app_ctx["cfg"]
     runtime = app_ctx["runtime"]
     urls = runtime.build_urls(cfg["base_url"])
-    bip = bind_ip or resolve_bind_ip(urls["init_url"], cfg)
+    binding = _resolve_auth_binding(app_ctx, urls["init_url"], bind_ip)
     logout_cfg = dict(cfg)
     logout_user = str(override_user_id or "").strip()
     if logout_user:
         logout_cfg["user_id"] = logout_user
         logout_cfg["username"] = logout_user
-    ip = init_getip(urls["init_url"], bind_ip=bip)
-    return logout(runtime, urls["rad_user_dm_api"], logout_cfg, ip, bind_ip=bip)
+    ip = init_getip(urls["init_url"], **binding)
+    return logout(runtime, urls["rad_user_dm_api"], logout_cfg, ip, **binding)
 
 
 def run_once(cfg):
