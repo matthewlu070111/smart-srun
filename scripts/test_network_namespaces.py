@@ -7,7 +7,7 @@ Run as root on a disposable Linux development host with iproute2 installed:
 Only task-owned network namespaces and veth devices are created. All addresses
 are documentation addresses; host routes and existing interfaces are untouched.
 The HTTP/DNS servers accept fake test traffic only. Results and request logs
-remain in output-dir; the created namespaces and processes are always removed.
+remain in output-dir; a finally block cleans up the created namespaces and processes.
 """
 
 import argparse

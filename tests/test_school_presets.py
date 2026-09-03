@@ -18,9 +18,10 @@ if MODULE_ROOT not in sys.path:
     sys.path.insert(0, MODULE_ROOT)
 
 
-import config
-import school_presets
-from _portal_urls import (
+# Runtime modules use bare imports after the local source path is installed.
+import config  # noqa: E402
+import school_presets  # noqa: E402
+from _portal_urls import (  # noqa: E402
     PORTAL_ACID1_PAGE_URL,
     PORTAL_BARE_ACID1_PAGE_URL,
     PORTAL_BARE_ORIGIN,
@@ -188,6 +189,7 @@ class SchoolPresetTests(unittest.TestCase):
         valid = {"schema_version": 1, "schools": []}
         invalid = (
             "<html>not a preset</html>", "[]", "{}",
+            '{"schema_version":1,"updated_at":"2026-09-04"}',
             '{"schema_version":2,"schools":[]}',
             '{"schema_version":1,"schools":{}}',
         )
@@ -200,6 +202,61 @@ class SchoolPresetTests(unittest.TestCase):
             self.assertEqual(payload, valid)
             self.assertEqual(source, school_presets.PAGES_PRESETS_URL)
             self.assertEqual(fetcher.call_count, 2)
+
+    def test_empty_school_list_is_a_valid_remote_payload(self):
+        payload = {"schema_version": 1, "updated_at": "2026-09-04", "schools": []}
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_path = os.path.join(tmp, "cache.json")
+            with (
+                mock.patch.object(school_presets, "CACHE_PRESETS_FILE", cache_path),
+                mock.patch.object(school_presets, "_fetch_via_urllib",
+                                  return_value=json.dumps(payload)) as fetcher,
+            ):
+                result = school_presets.refresh_remote_presets()
+                with open(cache_path, encoding="utf-8") as handle:
+                    cached = json.load(handle)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["source_url"], school_presets.MIRROR_PRESETS_URL)
+        self.assertEqual(fetcher.call_count, 1)
+        self.assertEqual(cached["schools"], [])
+
+    def test_missing_school_list_preserves_cache_and_deprecated_status(self):
+        bundled = {
+            "schema_version": 1,
+            "schools": [{"id": "retired-campus", "status": "active"}],
+        }
+        cached = {
+            "schema_version": 1,
+            "updated_at": "2026-09-03",
+            "schools": [
+                {"id": "retired-campus", "status": "deprecated"},
+                {"id": "cached-campus", "status": "active"},
+            ],
+        }
+        invalid = {"schema_version": 1, "updated_at": "2026-09-04"}
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_path = os.path.join(tmp, "cache.json")
+            bundled_path = os.path.join(tmp, "bundled.json")
+            original_bytes = json.dumps(cached).encode("utf-8")
+            with open(cache_path, "wb") as handle:
+                handle.write(original_bytes)
+            with open(bundled_path, "w", encoding="utf-8") as handle:
+                json.dump(bundled, handle)
+            with (
+                mock.patch.object(school_presets, "CACHE_PRESETS_FILE", cache_path),
+                mock.patch.object(school_presets, "FALLBACK_PRESETS_FILE", bundled_path),
+                mock.patch.object(school_presets, "_fetch_via_urllib",
+                                  return_value=json.dumps(invalid)) as fetcher,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "invalid school preset schema"):
+                    school_presets.refresh_remote_presets()
+                self.assertEqual(fetcher.call_count, len(school_presets.REMOTE_PRESETS_URLS))
+                visible = school_presets.list_presets(refresh=True)
+                all_schools = school_presets.list_presets(include_draft=True)
+            with open(cache_path, "rb") as handle:
+                self.assertEqual(handle.read(), original_bytes)
+        self.assertEqual([school["short_name"] for school in visible], ["cached-campus"])
+        self.assertEqual(all_schools[0]["status"], "deprecated")
 
     def test_explicit_source_does_not_silently_fetch_a_different_source(self):
         with (

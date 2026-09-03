@@ -378,7 +378,7 @@ def _payload_schema_ok(payload):
         return False
     try:
         return (int(payload.get("schema_version") or 0) == SCHEMA_VERSION
-                and isinstance(payload.get("schools", []), list))
+                and isinstance(payload.get("schools"), list))
     except (TypeError, ValueError):
         return False
 
