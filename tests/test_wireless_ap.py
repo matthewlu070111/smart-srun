@@ -70,7 +70,7 @@ class BssidTests(unittest.TestCase):
 
 class CandidateTests(unittest.TestCase):
     def scan(self, entries, status=None, profile=None, section=SECTION, radio=RADIO,
-             device=STA_IFNAME, scan_response=None):
+             device=STA_IFNAME, scan_response=None, frequencies=None):
         status = _status() if status is None else status
         profile = {"ssid": SSID, "encryption": "none"} if profile is None else profile
 
@@ -80,8 +80,12 @@ class CandidateTests(unittest.TestCase):
                 return True, json.dumps(status)
             if args[:4] == ["ubus", "call", "iwinfo", "scan"]:
                 self.assertEqual(json.loads(args[4]), {"device": device})
-                self.assertLessEqual(timeout, 8)
+                self.assertEqual(timeout, 20)
                 return scan_response if scan_response is not None else (True, json.dumps({"results": entries}))
+            if args[:4] == ["ubus", "call", "iwinfo", "freqlist"]:
+                self.assertEqual(json.loads(args[4]), {"device": device})
+                self.assertLessEqual(timeout, 2)
+                return (True, json.dumps(frequencies)) if frequencies is not None else (False, "unavailable")
             self.fail("Unexpected command: %r" % args)
 
         with mock.patch.object(wireless_ap, "run_cmd", side_effect=command) as run:
@@ -95,7 +99,7 @@ class CandidateTests(unittest.TestCase):
         self.assertEqual(reason, "")
         self.assertEqual([item["bssid"] for item in candidates], [_bssid(101), _bssid(102), _bssid(100)])
         self.assertEqual([item["signal"] for item in candidates], [-25, -31, -42])
-        self.assertEqual(len(calls), 2)  # One status read and exactly one scan.
+        self.assertEqual(len(calls), 3)  # Status, radio capabilities and exactly one scan.
         self.assertTrue(all(set(item) == {"bssid", "ssid", "signal", "channel"} for item in candidates))
 
     def test_ties_and_duplicate_bssids_are_stable(self):
@@ -160,11 +164,39 @@ class CandidateTests(unittest.TestCase):
                 self.assertEqual(bool(candidates), compatible)
                 self.assertEqual(bool(reason), not compatible)
 
-    def test_fixed_numeric_radio_channel_is_respected(self):
+    def test_configured_ap_channel_does_not_hide_supported_sta_candidates(self):
         for channel in (6, "6"):
             with self.subTest(channel=channel):
-                (candidates, _), _ = self.scan([_entry(1, -20, channel=11), _entry(2, -70)], _status(channel))
-                self.assertEqual([item["bssid"] for item in candidates], [_bssid(2)])
+                (candidates, _), _ = self.scan(
+                    [_entry(1, -20, channel=11), _entry(2, -70)], _status(channel),
+                    frequencies={"results": [{"channel": 6, "mhz": 2437}, {"channel": 11, "mhz": 2462}]},
+                )
+                self.assertEqual([item["bssid"] for item in candidates], [_bssid(1), _bssid(2)])
+
+    def test_radio_frequency_list_excludes_unsupported_channels(self):
+        (candidates, _), _ = self.scan(
+            [_entry(1, -20, channel=36), _entry(2, -70)],
+            frequencies={"results": [{"channel": 6, "mhz": 2437, "restricted": False}]},
+        )
+        self.assertEqual([item["bssid"] for item in candidates], [_bssid(2)])
+
+    def test_passive_or_dfs_channel_flags_do_not_forbid_a_visible_sta_candidate(self):
+        (candidates, _), _ = self.scan(
+            [_entry(1, -20, channel=52), _entry(2, -70, channel=149)], _status(149),
+            frequencies={"results": [
+                {"channel": 52, "mhz": 5260, "restricted": True, "flags": ["radar", "no_ir"], "active": False},
+                {"channel": 149, "mhz": 5745, "restricted": False, "active": True},
+            ]},
+        )
+        self.assertEqual([item["bssid"] for item in candidates], [_bssid(1), _bssid(2)])
+
+    def test_missing_or_invalid_capabilities_keep_the_selected_radios_scan_results(self):
+        for frequencies in (None, {}, {"results": []}, {"results": [None, {}, {"channel": True}]}):
+            with self.subTest(frequencies=frequencies):
+                (candidates, _), _ = self.scan(
+                    [_entry(1, -20, channel=11)], _status(6), frequencies=frequencies,
+                )
+                self.assertEqual([item["bssid"] for item in candidates], [_bssid(1)])
 
     def test_auto_channel_does_not_filter_scan_channels(self):
         (candidates, _), _ = self.scan([_entry(1, -20, channel=11), _entry(2, -70)])
@@ -219,7 +251,7 @@ class CandidateTests(unittest.TestCase):
                 self.assertEqual(candidates, [])
                 self.assertIn("系统自动", reason)
                 self.assertNotIn("private-fixture", reason)
-                self.assertEqual(len(calls), 2)
+                self.assertEqual(len(calls), 3)
 
     def test_unavailable_status_and_unsupported_security_are_safe(self):
         with mock.patch.object(wireless_ap, "run_cmd", return_value=(False, "private-fixture")) as run:
@@ -242,7 +274,7 @@ class CandidateTests(unittest.TestCase):
 
 
 class AssociationTests(unittest.TestCase):
-    def association(self, info=None, link="Not connected.", status=None):
+    def association(self, info=None, link=None, status=None, local_mac=_bssid(200)):
         status = _status() if status is None else status
 
         def command(args, timeout):
@@ -253,26 +285,55 @@ class AssociationTests(unittest.TestCase):
                 self.assertEqual(json.loads(args[4]), {"device": STA_IFNAME})
                 return (True, json.dumps(info)) if info is not None else (False, "not found")
             if args == ["iw", "dev", STA_IFNAME, "link"]:
-                return True, link
+                return (True, link) if link is not None else (False, "iw unavailable")
             self.fail("Unexpected command: %r" % args)
 
-        with mock.patch.object(wireless_ap, "run_cmd", side_effect=command) as run:
+        with (
+            mock.patch.object(wireless_ap, "run_cmd", side_effect=command) as run,
+            mock.patch("builtins.open", mock.mock_open(read_data=local_mac + "\n")),
+        ):
             result = wireless_ap.read_association(SECTION)
         return result, run.call_args_list
 
-    def test_info_uses_actual_sta_bssid_not_configured_bssid(self):
+    def test_info_fallback_uses_nonlocal_bssid_not_configured_bssid(self):
         for mode in ("Client", "Station"):
             with self.subTest(mode=mode):
                 association, calls = self.association(_entry(1, -52, mode=mode))
                 self.assertEqual(association, {"ifname": STA_IFNAME, "ssid": SSID,
                                               "bssid": _bssid(1), "signal": -52, "channel": 6})
                 self.assertNotEqual(association["bssid"], _bssid(99))
-                self.assertEqual(len(calls), 2)
+                self.assertEqual(len(calls), 3)
+
+    def test_iw_link_wins_when_iwinfo_reports_the_local_sta_mac(self):
+        link = "Connected to %s (on %s)\n\tSSID: %s\n\tfreq: 5260.0\n\tsignal: -43 dBm\n" % (
+            _bssid(2), STA_IFNAME, SSID,
+        )
+        association, calls = self.association(_entry(200, mode="Client"), link=link)
+        self.assertEqual(association, {"ifname": STA_IFNAME, "ssid": SSID,
+                                      "bssid": _bssid(2), "signal": -43, "channel": 52})
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[-1].args[0], ["iw", "dev", STA_IFNAME, "link"])
+
+    def test_info_fallback_rejects_local_or_unverifiable_interface_address(self):
+        for local_mac in (_bssid(1), "", "not-a-mac"):
+            with self.subTest(local_mac=local_mac):
+                association, _ = self.association(_entry(1, mode="Client"), local_mac=local_mac)
+                self.assertEqual(association, {})
+
+    def test_unreadable_interface_address_is_unknown(self):
+        with mock.patch("builtins.open", side_effect=OSError("unavailable")) as opened:
+            self.assertEqual(wireless_ap._interface_mac(STA_IFNAME), "")
+        opened.assert_called_once_with("/sys/class/net/%s/address" % STA_IFNAME, encoding="ascii")
+
+    def test_explicitly_disconnected_link_never_trusts_stale_iwinfo(self):
+        association, calls = self.association(_entry(1, mode="Client"), link="Not connected.\n")
+        self.assertEqual(association, {})
+        self.assertEqual(len(calls), 2)
 
     def test_ap_mode_is_not_reported_as_client_association(self):
         association, calls = self.association(_entry(1, mode="Master"))
         self.assertEqual(association, {})
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 3)
 
     def test_no_measured_association_does_not_use_config(self):
         for info in ({}, _entry(1, mode="Client", bssid="00:00:00:00:00:00")):
@@ -289,7 +350,7 @@ class AssociationTests(unittest.TestCase):
                 self.assertEqual(association["ssid"], SSID)
                 self.assertEqual(association["signal"], signal or None)
                 self.assertEqual(association["channel"], channel or None)
-                self.assertEqual(len(calls), 2)
+                self.assertEqual(len(calls), 3)
 
     def test_iw_link_known_association_without_metrics(self):
         link = "Connected to %s (on %s)\n\tSSID: %s\n" % (_bssid(2), STA_IFNAME, SSID)
@@ -297,15 +358,16 @@ class AssociationTests(unittest.TestCase):
         self.assertEqual(association, {"ifname": STA_IFNAME, "ssid": SSID, "bssid": _bssid(2),
                                       "signal": None, "channel": None})
 
-    def test_iw_link_fallback_reports_real_link_and_frequency(self):
-        for frequency, channel in ((2412, 1), (2484, 14), (5180, 36), (5955, 1)):
+    def test_iw_link_reports_real_link_and_integer_or_decimal_frequency(self):
+        for frequency, channel in (("2412", 1), ("2484", 14), ("5180", 36),
+                                   ("5260.0", 52), ("5955.0", 1), ("5260.5", None)):
             with self.subTest(frequency=frequency):
-                link = "Connected to %s (on %s)\n\tSSID: %s\n\tfreq: %d\n\tsignal: -53.50 dBm\n" % (
+                link = "Connected to %s (on %s)\n\tSSID: %s\n\tfreq: %s\n\tsignal: -53.50 dBm\n" % (
                     _bssid(2), STA_IFNAME, SSID, frequency)
                 association, calls = self.association(link=link)
                 self.assertEqual(association, {"ifname": STA_IFNAME, "ssid": SSID,
                                               "bssid": _bssid(2), "signal": -53, "channel": channel})
-                self.assertEqual(len(calls), 3)
+                self.assertEqual(len(calls), 2)
 
     def test_iw_link_for_a_different_interface_is_rejected(self):
         link = "Connected to %s (on othersta0)\n\tSSID: %s\n\tfreq: 2412\n\tsignal: -40 dBm\n" % (_bssid(2), SSID)

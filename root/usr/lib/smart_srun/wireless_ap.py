@@ -7,7 +7,7 @@ from network import run_cmd
 
 
 READ_TIMEOUT = 2
-SCAN_TIMEOUT = 8
+SCAN_TIMEOUT = 20
 MAX_CANDIDATES = 3
 _STA_MODES = {"sta", "client", "station"}
 _AP_MODES = {"ap", "master"}
@@ -166,6 +166,18 @@ def _scan_device(status, section, radio):
     return (device, "") if device else ("", "所选无线电没有可用的扫描设备")
 
 
+def _available_channels(device):
+    frequencies = _iwinfo("freqlist", device)
+    if not frequencies or not isinstance(frequencies.get("results"), list):
+        return None
+    channels = {
+        _channel(entry.get("channel")) for entry in frequencies["results"]
+        if isinstance(entry, dict)
+    }
+    channels.discard(None)
+    return channels or None
+
+
 def select_candidates(section, radio, profile):
     """Scan once and return the strongest three compatible APs on one radio."""
     profile = profile if isinstance(profile, dict) else {}
@@ -181,10 +193,9 @@ def select_candidates(section, radio, profile):
     device, reason = _scan_device(status, section, radio)
     if not device:
         return [], reason
-    # _scan_device may infer the radio from a uniquely mapped STA.
-    if not radio:
-        radio = _target_interfaces(status, section)[0][0]
-    fixed_channel = _channel(_config(status[radio]).get("channel"))
+    # A STA can move its radio's AP to the associated channel. The configured
+    # AP channel is not a STA capability limit; use this device's frequency list.
+    channels = _available_channels(device)
     scan = _iwinfo("scan", device, timeout=SCAN_TIMEOUT)
     if scan is None or not isinstance(scan.get("results"), list):
         return [], "iwinfo 扫描不可用或超时，请使用系统自动选择"
@@ -195,7 +206,7 @@ def select_candidates(section, radio, profile):
         if _mode(entry) not in _AP_MODES or not valid_bssid(entry.get("bssid")):
             continue
         signal, channel = _signal(entry.get("signal")), _channel(entry.get("channel"))
-        if signal is None or channel is None or (fixed_channel and channel != fixed_channel):
+        if signal is None or channel is None or (channels is not None and channel not in channels):
             continue
         if not _security_matches(encryption, entry.get("encryption")):
             continue
@@ -227,7 +238,7 @@ def _frequency_channel(frequency):
         return 2
     for low, high, base in ((2412, 2472, 2407), (5005, 5895, 5000), (5955, 7115, 5950)):
         if low <= frequency <= high and (frequency - base) % 5 == 0:
-            return (frequency - base) // 5
+            return int((frequency - base) // 5)
     return None
 
 
@@ -235,21 +246,34 @@ def _iw_link_association(ifname):
     try:
         ok, output = run_cmd(["iw", "dev", ifname, "link"], timeout=READ_TIMEOUT)
     except (OSError, UnicodeError):
-        return {}
+        return None
     if not ok or not isinstance(output, str):
+        return None
+    if re.search(r"^Not connected\.?\s*$", output, re.I | re.M):
         return {}
     connected = re.search(r"^Connected to ([0-9a-f:]{17})(?: \(on ([^)]+)\))?\s*$", output, re.I | re.M)
-    if not connected or (connected.group(2) and connected.group(2) != ifname):
+    if not connected:
+        return None
+    if connected.group(2) and connected.group(2) != ifname:
         return {}
     ssid = re.search(r"^\s*SSID: (.*)$", output, re.M)
     signal = re.search(r"^\s*signal:\s*(-?\d+(?:\.\d+)?)\s+dBm\s*$", output, re.M)
-    frequency = re.search(r"^\s*freq:\s*(\d+)\s*$", output, re.M)
+    frequency = re.search(r"^\s*freq:\s*(\d+(?:\.\d+)?)\s*$", output, re.M)
     if not ssid:
         return {}
     return _association(
         ifname, ssid.group(1), connected.group(1), signal.group(1) if signal else None,
-        _frequency_channel(int(frequency.group(1))) if frequency else None,
+        _frequency_channel(float(frequency.group(1))) if frequency else None,
     )
+
+
+def _interface_mac(ifname):
+    try:
+        with open("/sys/class/net/%s/address" % ifname, encoding="ascii") as source:
+            address = source.read().strip().lower()
+    except (OSError, UnicodeError):
+        return ""
+    return address if valid_bssid(address) else ""
 
 
 def read_association(section):
@@ -267,6 +291,14 @@ def read_association(section):
     ifname = _ifname(target.get("ifname"))
     if not ifname:
         return {}
+    association = _iw_link_association(ifname)
+    if association is not None:
+        return association
+    # Some iwinfo backends expose the local STA MAC as "bssid" in Client mode.
+    # Without a known local address, that fallback cannot prove association.
+    local_mac = _interface_mac(ifname)
+    if not local_mac:
+        return {}
     info = _iwinfo("info", ifname)
     if info and _mode(info):
         if _mode(info) not in {"client", "station"}:
@@ -274,6 +306,6 @@ def read_association(section):
         association = _association(
             ifname, info.get("ssid"), info.get("bssid"), info.get("signal"), info.get("channel")
         )
-        if association:
+        if association and association["bssid"] != local_mac:
             return association
-    return _iw_link_association(ifname)
+    return {}
