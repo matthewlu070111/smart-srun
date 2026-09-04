@@ -322,10 +322,6 @@ end
 -- 表格 CRUD 需要的配置读写
 local CONFIG_FILE = "/usr/lib/smart_srun/config.json"
 
-local GLOBAL_SCALAR_KEYS_SET = schema.global_scalar_key_set()
-local POINTER_KEYS_LIST = schema.POINTER_KEYS
-local LIST_KEYS_LIST = schema.LIST_KEYS
-
 local function load_config_json_unlocked()
     local raw = fs.readfile(CONFIG_FILE) or "{}"
     local parsed = jsonc.parse(raw)
@@ -1172,9 +1168,7 @@ local function append_message_detail(parts, rest, has_prior_detail)
     local detail = rest:match("|%s*(.+)$")
     if detail and detail ~= "" then
         parts[#parts + 1] = (has_prior_detail and " · " or ": ") .. detail
-        return true
     end
-    return has_prior_detail
 end
 
 local function skip_fields(...)
@@ -1204,8 +1198,6 @@ function friendly_line(line)
         parts[#parts + 1] = "[警告] "
     elseif level == "DEBUG" then
         parts[#parts + 1] = "[调试] "
-    elseif level == "INFO" then
-        parts[#parts + 1] = "[信息] "
     else
         parts[#parts + 1] = "[信息] "
     end

@@ -243,3 +243,6 @@ DHCP 地址位于 `wan.v2`，就在 LuCI 的账号编辑框中选择“有线（
 [WTFPL](LICENSE)
 ## 参与贡献
 如果你愿意参与开发：请参阅 [贡献指南](CONTRIBUTING.md)
+
+感谢 [@haohaoget](https://github.com/haohaoget) 提供多 WAN 并行认证（[#31](https://github.com/matthewlu070111/smart-srun/pull/31)），以及 [@shijia257](https://github.com/shijia257) 提供校园账号绑定网络接口（[#32](https://github.com/matthewlu070111/smart-srun/pull/32)）。
+更多代码贡献见[已合并的 PR](https://github.com/matthewlu070111/smart-srun/pulls?q=is%3Apr+is%3Amerged) 与[贡献者列表](https://github.com/matthewlu070111/smart-srun/graphs/contributors)。问题反馈与学校数据提供者也记录在对应 Issue 和学校预设中。

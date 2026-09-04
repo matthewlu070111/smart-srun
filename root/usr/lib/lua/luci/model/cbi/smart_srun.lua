@@ -299,13 +299,12 @@ end
 
 local RADIO_CHOICES = load_radio_choices()
 
-local function render_school_info_html(schools, current_school)
+local function render_school_info_html()
     local helper_prefix = "如果该配置无法在您的学校使用，请直接前往"
     local helper_suffix = "提交 Issue 或 PR"
     local helper_link = "https://github.com/matthewlu070111/smart-srun"
     -- 初始渲染统一指向 doc 目录（永不 404）；前端 JS 会按预设的 doc_url 覆写为具体文档。
     local doc_url = "https://github.com/matthewlu070111/smart-srun/tree/main/doc"
-    local js_data = jsonc.stringify(schools or {}) or "[]"
 
     return string.format([[
 <div id="smart-school-info" class="cbi-value-description" style="color:#14532d;opacity:0.9;display:block;line-height:1.6;">
@@ -315,14 +314,12 @@ local function render_school_info_html(schools, current_school)
   <div id="smart-school-helper" style="display:block;margin-top:4px;color:#6b7280;font-size:0.92em;">
     %s<a id="smart-school-repo-link" href="%s" target="_blank" rel="noopener noreferrer">插件仓库</a>%s
   </div>
-  <textarea id="smart-school-data" style="display:none;">%s</textarea>
 </div>
 ]],
         doc_url,
         helper_prefix,
         helper_link,
-        helper_suffix,
-        util.pcdata(js_data))
+        helper_suffix)
 end
 
 local function ensure_school_extra_table()
@@ -632,7 +629,7 @@ function school.write(self, section, value)
     end
     set_value("school", next_school)
 end
-school.description = render_school_info_html(schools, cfg.school or "default")
+school.description = render_school_info_html()
 
 if school_runtime_renderable then
     for idx, descriptor in ipairs(school_runtime_descriptors) do

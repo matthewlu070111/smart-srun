@@ -709,20 +709,6 @@ def save_runtime_status(message, state=None, **extra):
 # ---------------------------------------------------------------------------
 
 
-def queue_runtime_action(action):
-    payload = {
-        "action": str(action or "").strip(),
-        "requested_at": int(time.time()),
-    }
-    save_json_file(ACTION_FILE, payload)
-    log(
-        "DEBUG",
-        "config_action_queued",
-        action=payload["action"],
-        requested_at=payload["requested_at"],
-    )
-
-
 def pop_runtime_action():
     # 在 ACTION_FILE 锁内读+删，且仅当解析出 action 时才删除：
     # 配合 LuCI 侧的原子写，避免撕裂/空读时把刚入队的动作连文件一起删掉。

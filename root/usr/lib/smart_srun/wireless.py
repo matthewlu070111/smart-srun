@@ -139,33 +139,7 @@ def get_active_sta_section(cfg=None, wireless_data=None):
 
 def get_runtime_sta_section(cfg=None, wireless_data=None):
     data = wireless_data if wireless_data is not None else parse_wireless_iface_data()
-    active = get_active_sta_section(cfg, data)
-    if active:
-        return active
-
-    known_ssids = []
-    hotspot_ssid = str((cfg or {}).get("hotspot_ssid", "")).strip()
-    campus_ssid = str((cfg or {}).get("campus_ssid", "")).strip()
-    if hotspot_ssid:
-        known_ssids.append(hotspot_ssid)
-    if campus_ssid:
-        known_ssids.append(campus_ssid)
-
-    for sec in get_enabled_sta_sections(data):
-        profile = get_sta_profile_from_section(sec, data)
-        if str(profile.get("ssid", "")).strip() in known_ssids:
-            return sec
-
-    for sec in get_sta_sections(data):
-        profile = get_sta_profile_from_section(sec, data)
-        if str(profile.get("ssid", "")).strip() in known_ssids:
-            return sec
-
-    enabled = get_enabled_sta_sections(data)
-    if enabled:
-        return enabled[0]
-    sections = get_sta_sections(data)
-    return sections[0] if sections else None
+    return get_active_sta_section(cfg, data)
 
 
 def detect_runtime_mode(cfg, wireless_data=None):
@@ -296,19 +270,6 @@ def band_label(band):
 def get_radio_for_section(section, wireless_data=None):
     data = wireless_data if wireless_data is not None else parse_wireless_iface_data()
     return str(data.get(str(section or ""), {}).get("device", "")).strip() or None
-
-
-def find_sta_on_radio(radio, wireless_data=None):
-    data = wireless_data if wireless_data is not None else parse_wireless_iface_data()
-    target = str(radio or "").strip()
-    for sec in sorted(data.keys()):
-        opts = data[sec]
-        if (
-            str(opts.get("mode", "")).strip().lower() == "sta"
-            and str(opts.get("device", "")).strip() == target
-        ):
-            return sec
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1329,10 +1290,6 @@ def switch_sta_profile(cfg, expect_hotspot, reselect_ap=True, ap_context=None):
         "已切换为%s配置但未获取到IPv4地址（%s %s）。如果热点在另一频段，请在 LuCI 中手动指定热点 radio。"
         % (target["label"], radio or "?", bl),
     )
-
-
-def switch_to_hotspot(cfg):
-    return switch_sta_profile(cfg, expect_hotspot=True)
 
 
 def switch_to_campus(cfg, reselect_ap=True, ap_context=None):
