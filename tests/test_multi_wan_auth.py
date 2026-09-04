@@ -157,7 +157,6 @@ class MultiWanDaemonTests(unittest.TestCase):
         account_cfg = config.get_managed_wired_account_configs(
             _cfg([self.accounts[1]])
         )[0]
-        state = daemon._make_daemon_state()
 
         with (
             mock.patch.object(

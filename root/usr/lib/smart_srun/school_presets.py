@@ -40,32 +40,9 @@ DEFAULT_OPERATORS = [
     {"suffix": "", "label": "校园网"},
 ]
 
-_PRESET_FIELD_ORDER = {
-    "payload": ("schema_version", "updated_at", "source", "schools", "_source_url", "_cached_at"),
-    "schools": (
-        "id", "short_name", "name", "status", "description", "doc_url", "defaults",
-        "observed_login_shape", "operators", "contributors", "source_issue",
-    ),
-    "defaults": ("base_url", "ac_id", "ssid", "access_mode"),
-    "observed_login_shape": ("n", "type", "enc", "info_prefix", "double_stack", "os", "name"),
-    "operators": ("suffix", "id", "label"),
-}
-
-
-def _ordered_preset_json(value, section="payload"):
-    if isinstance(value, list):
-        return [_ordered_preset_json(item, section) for item in value]
-    if not isinstance(value, dict):
-        return value
-    known = _PRESET_FIELD_ORDER.get(section, ())
-    keys = [key for key in known if key in value]
-    keys.extend(sorted(key for key in value if key not in known))
-    return {key: _ordered_preset_json(value[key], key) for key in keys}
-
-
 def format_preset_payload(payload):
-    """Format catalogue/cache JSON without adding or changing school data."""
-    return json.dumps(_ordered_preset_json(payload), ensure_ascii=False, indent=2) + "\n"
+    """Serialize cached JSON, preserving data and the input dictionary order."""
+    return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
 
 
 def _read_json(path):

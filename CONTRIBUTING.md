@@ -49,6 +49,8 @@ root/
 - LuCI 前端保持纯 ES5、手写 DOM 与 `XMLHttpRequest`，不引入 bundler、npm 运行时或前端依赖。
 - `school_extra` 是 runtime 私有命名空间；未知 key 会被归一化丢弃，不要偷偷塞顶层配置。
 - `Makefile` 的 `Build/Compile` 为空是正常的；真正构建由 OpenWrt SDK 完成。
+- 保持既有文件的排版、字段顺序及紧凑或展开写法；业务改动不得附带批量格式化。
+- 内部计划和验收报告保存在本地 `.codex/`，不要提交到 `doc/`。
 
 ## 提交前验证
 
@@ -122,9 +124,9 @@ python scripts/hot_update.py
 
 刷新响应与普通列表使用相同的合并和状态规则，只展示 `active` 公共预设；完整草稿保留在缓存与原始清单中。LuCI 异步刷新也应遵守这条规则，成功的空列表必须清除旧选项。用户自定义预设单独存储，不受公共预设的状态过滤影响。
 
-预设 JSON 统一使用语义键序、两空格缩进、展开对象/数组和 LF 末尾换行；缓存写入和开发格式工具共用 `school_presets.format_preset_payload()`。统一排版不补造未知运营商、登录参数、SSID 或接入方式，也不把草稿升级成已验证学校。
+预设 JSON 保持既有字段顺序、缩进和对象/数组排版，只修改本次涉及的数据，不批量重排其他学校。未知运营商、登录参数、SSID 或接入方式保持缺失，草稿状态不能因整理数据而升级。
 
-修改主预设后运行 `python scripts/format_school_presets.py --write`，它会同步 fallback；提交前运行 `python scripts/format_school_presets.py --check`。默认不带参数等同于只读检查，pytest 也会校验两份数据的格式和一致性。
+修改主预设后运行 `python scripts/sync_school_presets.py --write`，它按主文件原文同步 fallback，仅替换顶层 `source`，不改写主文件；提交前运行 `python scripts/sync_school_presets.py --check`。默认不带参数等同于只读检查，pytest 也会校验两份数据的一致性。
 
 学校状态必须有可追溯的依据。历史采集提交明确标为 `active` 且未报告认证失败时，可以保留原状态和 `source_issue`，同时说明未覆盖的接入环境；这不等于维护者本人已校内复测。明确报告插件认证失败的诊断样本保留 `draft`。未知的 SSID、接入方式或其他字段保持缺失，不为统一格式补造值。
 
@@ -164,8 +166,8 @@ python scripts/hot_update.py
 更新预设后同步随包 fallback：
 
 ```sh
-python scripts/format_school_presets.py --write
-python scripts/format_school_presets.py --check
+python scripts/sync_school_presets.py --write
+python scripts/sync_school_presets.py --check
 ```
 
 同步 fallback 时只允许 `source` 不同，内容应与 `doc/school-presets.json` 保持一致。

@@ -17,32 +17,18 @@ from unittest import mock
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODULE_ROOT = os.path.join(REPO_ROOT, "root", "usr", "lib", "smart_srun")
-SCHOOLS_ROOT = os.path.join(MODULE_ROOT, "schools")
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 
-for path in (THIS_DIR, MODULE_ROOT, SCHOOLS_ROOT):
+for path in (THIS_DIR, MODULE_ROOT):
     if path not in sys.path:
         sys.path.insert(0, path)
 
+from _login_runtime import StubLoginRuntime  # noqa: E402
 from _portal_urls import CLIENT_IP, PORTAL_IPV4_ORIGIN, PORTAL_LOGIN_URL  # noqa: E402
 import config  # noqa: E402
 import srun_auth  # noqa: E402
 
 FAKE_USERNAME = "student001"
-
-
-class StubRuntime:
-    def build_urls(self, base_url):
-        return {
-            "init_url": base_url,
-            "get_challenge_api": base_url + "/cgi-bin/get_challenge",
-            "srun_portal_api": base_url + "/cgi-bin/srun_portal",
-            "rad_user_info_api": base_url + "/cgi-bin/rad_user_info",
-            "rad_user_dm_api": base_url + "/cgi-bin/rad_user_dm",
-        }
-
-    def do_complex_work(self, cfg, ip, token):
-        return "info", "hmd5", "chksum"
 
 
 class StubProfile:
@@ -61,7 +47,7 @@ def _login_app_ctx():
             "password": "secret",
             "base_url": PORTAL_IPV4_ORIGIN,
         },
-        "runtime": StubRuntime(),
+        "runtime": StubLoginRuntime(),
     }
 
 

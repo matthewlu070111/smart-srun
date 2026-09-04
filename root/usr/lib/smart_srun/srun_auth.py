@@ -231,17 +231,24 @@ def logout(
     return profile.parse_logout_response(data)
 
 
+def _resolve_query_username(app_ctx, expected_username, legacy_username):
+    """App-context queries also accept a username in the second position."""
+    if expected_username is not None:
+        return expected_username
+    if legacy_username is not None:
+        return legacy_username
+    return app_ctx["cfg"].get("username", "")
+
+
 def query_online_identity(
     profile, rad_user_info_api=None, expected_username=None, bind_ip=None,
     bind_device=None, strict=False, bind_iface=None,
 ):
     if is_app_context(profile):
         app_ctx = profile
-        resolved_username = expected_username
-        if resolved_username is None:
-            resolved_username = rad_user_info_api
-        if resolved_username is None:
-            resolved_username = app_ctx["cfg"].get("username", "")
+        resolved_username = _resolve_query_username(
+            app_ctx, expected_username, rad_user_info_api
+        )
         return app_ctx["runtime"].query_online_identity(
             app_ctx, expected_username=resolved_username, bind_ip=bind_ip
         )
@@ -279,11 +286,9 @@ def query_online_status(
 ):
     if is_app_context(profile):
         app_ctx = profile
-        resolved_username = expected_username
-        if resolved_username is None:
-            resolved_username = rad_user_info_api
-        if resolved_username is None:
-            resolved_username = app_ctx["cfg"].get("username", "")
+        resolved_username = _resolve_query_username(
+            app_ctx, expected_username, rad_user_info_api
+        )
         return app_ctx["runtime"].query_online_status(
             app_ctx, expected_username=resolved_username, bind_ip=bind_ip
         )
@@ -298,22 +303,18 @@ def wait_for_logout_status(
     profile, rad_user_info_api, cfg, bind_ip=None, attempts=3, delay_seconds=1,
     bind_device=None, strict=False, bind_iface=None,
 ):
-    app_ctx = None
     expected_username = cfg["username"]
-    query_target = profile
     query_api = rad_user_info_api
 
     if is_app_context(profile):
-        app_ctx = profile
-        expected_username = app_ctx["cfg"].get("username", expected_username)
-        query_target = app_ctx
+        expected_username = profile["cfg"].get("username", expected_username)
         query_api = None
 
     attempts = max(int(attempts), 1)
     last_message = ""
     for idx in range(attempts):
         online, message = query_online_status(
-            query_target, query_api, expected_username,
+            profile, query_api, expected_username,
             **_http_binding_kwargs(bind_ip, bind_device, strict, bind_iface)
         )
         last_message = message

@@ -190,11 +190,9 @@ def extract_ip_from_text(text):
         match = re.search(pattern, text)
         if not match:
             continue
-        candidate = match.group(1).strip()
-        try:
-            return str(ipaddress.ip_address(candidate))
-        except ValueError:
-            continue
+        candidate = pick_valid_ip(match.group(1))
+        if candidate:
+            return candidate
     return None
 
 
