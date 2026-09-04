@@ -74,6 +74,10 @@ RUNTIME_TARGETS = [
         "remote": "/usr/lib/smart_srun/wireless.py",
     },
     {
+        "local": "root/usr/lib/smart_srun/wireless_ap.py",
+        "remote": "/usr/lib/smart_srun/wireless_ap.py",
+    },
+    {
         "local": "root/usr/lib/smart_srun/srun_auth.py",
         "remote": "/usr/lib/smart_srun/srun_auth.py",
     },

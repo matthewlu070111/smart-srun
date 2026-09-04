@@ -378,11 +378,46 @@
     var mode = document.getElementById('jm-access_mode');
     if (!mode) return;
     var wired = mode.value === 'wired';
+    var policy = document.getElementById('jm-ap_selection');
     setRowDisabled('jm-wired-iface-row', 'jm-wired_iface', !wired);
     setRowDisabled('jm-auth-enabled-row', 'jm-auth_enabled', !wired);
     setRowDisabled('jm-ssid-row', 'jm-ssid', wired);
-    setRowDisabled('jm-bssid-row', 'jm-bssid', wired);
+    setRowDisabled('jm-ap-selection-row', 'jm-ap_selection', wired);
+    setRowDisabled('jm-bssid-row', 'jm-bssid', wired || !policy || policy.value !== 'fixed');
     setRowDisabled('jm-radio-row', 'jm-radio', wired);
+  }
+
+  function normalizeApSelection(value, bssid) {
+    var policy = String(value || '').replace(/^\s+|\s+$/g, '').toLowerCase();
+    if (policy === 'auto' || policy === 'strongest' || policy === 'fixed') return policy;
+    return String(bssid || '').replace(/^\s+|\s+$/g, '') ? 'fixed' : 'auto';
+  }
+
+  function isValidBssid(value) {
+    var address = String(value || '').replace(/^\s+|\s+$/g, '').toLowerCase();
+    return /^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/.test(address) &&
+      address !== '00:00:00:00:00:00' && (parseInt(address.slice(0, 2), 16) & 1) === 0;
+  }
+
+  function apSelectionLabel(policy) {
+    var labels = { auto: '系统自动', strongest: '连接时信号优先', fixed: '固定 BSSID' };
+    return labels[policy] || '未知';
+  }
+
+  function wirelessStatusMarkup(data) {
+    if (data.current_campus_access_mode === 'wired' || data.mode_label === '校园网模式（有线）') return '';
+    function observed(value, suffix) {
+      return value === undefined || value === null || value === '' ? '未知' : escapeHtml(value) + (suffix || '');
+    }
+    var markup = '<span>实际 AP: ' + observed(data.current_bssid) + '</span>' +
+      '<span>无线接口: ' + observed(data.current_wireless_ifname) + '</span>' +
+      '<span>信号: ' + observed(data.current_signal, ' dBm') + '</span>' +
+      '<span>信道: ' + observed(data.current_channel) + '</span>';
+    if (data.mode !== 'hotspot' && data.current_mode !== 'hotspot' && data.mode_label !== '热点模式') {
+      markup += '<span>AP 选择: ' + escapeHtml(apSelectionLabel(data.ap_selection_policy)) + '</span>' +
+        '<span>选择说明: ' + observed(data.ap_selection_reason) + '</span>';
+    }
+    return markup;
   }
 
   function showNativeModal(title, bodyHtml, afterOpen, onSave) {
@@ -592,6 +627,7 @@
       login_name: item.login_name || '',
       ssid: item.ssid || '',
       bssid: item.bssid || '',
+      ap_selection: normalizeApSelection(item.ap_selection, item.bssid),
       radio: item.radio || ''
     };
 
@@ -843,7 +879,12 @@
       '<div class="smart-native-row" id="jm-auth-enabled-row"><label>参与并行守护</label><select id="jm-auth_enabled"><option value="0"' + (initialValues.auth_enabled !== '1' ? ' selected' : '') + '>关闭</option><option value="1"' + (initialValues.auth_enabled === '1' ? ' selected' : '') + '>启用</option></select><div style="color:#6b7280;font-size:12px;margin-top:.25rem;">需同时开启页面上方“多 WAN 并行认证”；守护进程会按本账号的接口、学工号、密码和后缀独立认证。</div></div>' +
       '<div class="smart-native-row"><label>认证地址</label><input id="jm-base_url" value="' + escapeHtml(initialValues.base_url) + '"></div>' +
       '<div class="smart-native-row"><label>AC_ID</label><span><input id="jm-ac_id" value="' + escapeHtml(initialValues.ac_id) + '"> <button type="button" id="jm-detect-acid" class="btn cbi-button">嗅探</button> <span id="jm-detect-acid-status" style="margin-left:6px;color:#6b7280;"></span></span></div>' +
-      '<details class="smart-native-advanced"><summary>高级登录参数</summary>' +
+      '<div class="smart-native-row" id="jm-ssid-row"><label>校园网 SSID</label><input id="jm-ssid" value="' + escapeHtml(initialValues.ssid) + '"></div>' +
+      '<details class="smart-native-advanced"><summary>进阶设置</summary>' +
+      '<div class="smart-native-row" id="jm-ap-selection-row"><label>AP 选择</label><select id="jm-ap_selection"><option value="auto">系统自动</option><option value="strongest">连接时信号优先</option><option value="fixed">固定 BSSID</option></select></div>' +
+      '<div class="smart-native-row" id="jm-radio-row"><label>频段</label><select id="jm-radio">' + radioOptionsMarkup() + '</select></div>' +
+      '<div class="smart-native-row" id="jm-bssid-row"><label>固定 BSSID</label><input id="jm-bssid" value="' + escapeHtml(initialValues.bssid) + '" placeholder="02:11:22:33:44:55"></div>' +
+      '<p style="color:#6b7280;font-size:12px;">信号优先仅在连接时扫描同 SSID、同一频段的兼容信道；在线不主动漫游，认证失败不会轮换 AP。dBm 越接近 0，信号越强。固定 BSSID 不可用时不会自动改连其他 AP。</p>' +
       '<div class="smart-native-row"><label>n</label><input id="jm-login-n" value="' + escapeHtml(initialValues.n) + '" placeholder="200"></div>' +
       '<div class="smart-native-row"><label>type</label><input id="jm-login-type" value="' + escapeHtml(initialValues.type) + '" placeholder="1"></div>' +
       '<div class="smart-native-row"><label>enc</label><input id="jm-login-enc" value="' + escapeHtml(initialValues.enc) + '" placeholder="srun_bx1"></div>' +
@@ -852,9 +893,6 @@
       '<div class="smart-native-row"><label>os</label><input id="jm-login-os" value="' + escapeHtml(initialValues.login_os) + '" placeholder="Windows 10"></div>' +
       '<div class="smart-native-row"><label>name</label><input id="jm-login-name" value="' + escapeHtml(initialValues.login_name) + '" placeholder="Windows"></div>' +
       '</details>' +
-      '<div class="smart-native-row" id="jm-ssid-row"><label>校园网 SSID</label><input id="jm-ssid" value="' + escapeHtml(initialValues.ssid) + '"></div>' +
-      '<div class="smart-native-row" id="jm-bssid-row"><label>BSSID（留空则不锁定）</label><input id="jm-bssid" value="' + escapeHtml(initialValues.bssid) + '"></div>' +
-      '<div class="smart-native-row" id="jm-radio-row"><label>频段</label><select id="jm-radio">' + radioOptionsMarkup() + '</select></div>' +
       '<div style="margin-top:1rem;padding-top:.75rem;border-top:1px solid rgba(127,127,127,.25);display:flex;gap:8px;">' +
         '<button type="button" id="jm-save-school-preset" class="btn cbi-button">保存为新预设</button>' +
         '<button type="button" id="jm-delete-school-preset" class="btn cbi-button cbi-button-remove">删除预设</button>' +
@@ -959,6 +997,7 @@
         'jm-login-name': DEFAULT_LOGIN_SHAPE.name,
         'jm-ssid': '',
         'jm-bssid': initialValues.bssid,
+        'jm-ap_selection': initialValues.ap_selection,
         'jm-radio': initialValues.radio
       };
       for (var idKey in values) {
@@ -1013,6 +1052,7 @@
       bodyHtml,
       function() {
         document.getElementById('jm-radio').value = initialValues.radio;
+        document.getElementById('jm-ap_selection').value = initialValues.ap_selection;
         document.getElementById('jm-school_preset').addEventListener('change', function() {
           selectedPresetId = this.value || NO_PRESET_ID;
         });
@@ -1022,6 +1062,7 @@
         document.getElementById('jm-delete-school-preset').addEventListener('click', deleteSelectedCustomPreset);
         document.getElementById('jm-detect-acid').addEventListener('click', detectAcidForForm);
         document.getElementById('jm-access_mode').addEventListener('change', updateCampusAccessModeUI);
+        document.getElementById('jm-ap_selection').addEventListener('change', updateCampusAccessModeUI);
         document.getElementById('jm-operator').addEventListener('change', applyOperatorPick);
         document.getElementById('jm-operator-add').addEventListener('click', addOperatorFromPrompt);
         document.getElementById('jm-operator-del').addEventListener('click', removeSelectedOperator);
@@ -1059,6 +1100,11 @@
 
   window.smartModalSave = function() {
     if (window.__smartModalSaving) return;
+    if (modalType === 'campus' && getFieldValue('jm-access_mode') !== 'wired' &&
+        getFieldValue('jm-ap_selection') === 'fixed' && !isValidBssid(getFieldValue('jm-bssid'))) {
+      alert('固定 BSSID 需要有效的单播地址，例如 02:11:22:33:44:55');
+      return;
+    }
     window.__smartModalSaving = true;
     var fd = new FormData();
     fd.append('action', (modalEditId ? 'edit_' : 'add_') + modalType);
@@ -1083,6 +1129,7 @@
       fd.append('login_name', document.getElementById('jm-login-name').value);
       fd.append('ssid', document.getElementById('jm-ssid').value);
       fd.append('bssid', document.getElementById('jm-bssid').value);
+      fd.append('ap_selection', document.getElementById('jm-ap_selection').value);
       fd.append('radio', document.getElementById('jm-radio').value);
     } else {
       fd.append('label', document.getElementById('jm-label').value);
@@ -1207,6 +1254,7 @@
         applyTone(level);
         title.textContent = status + pending;
         var metaHtml = '<span>WiFi: ' + escapeHtml(ssid) + '</span><span>模式: ' + escapeHtml(mode) + '</span><span>连通性: ' + escapeHtml(conn) + '</span><span>接口/IP: ' + escapeHtml(iface) + ' / ' + escapeHtml(ip) + '</span>';
+        metaHtml += wirelessStatusMarkup(data);
         if (mode === '热点模式') {
           metaHtml += '<span>热点: ' + escapeHtml(hotspotLabel) + '</span>';
         } else {

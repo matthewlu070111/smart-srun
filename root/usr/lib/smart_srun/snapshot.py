@@ -21,11 +21,13 @@ from network import (
     test_portal_reachability,
 )
 from wireless import (
+    get_ap_selection_status,
     get_network_interface_from_sta_section,
     get_runtime_sta_section,
     get_sta_profile_from_section,
     parse_wireless_iface_data,
 )
+from wireless_ap import read_association
 from school_runtime import build_app_context
 
 
@@ -69,7 +71,10 @@ def build_runtime_snapshot(cfg, state=None):
     section = get_runtime_sta_section(cfg, data)
     profile = get_sta_profile_from_section(section, data) if section else {}
     ssid = str(profile.get("ssid", "")).strip()
-    bssid = str(profile.get("bssid", "")).strip().lower()
+    association = read_association(section) if section else {}
+    bssid = str(association.get("bssid", "")).lower()
+    if association.get("ssid"):
+        ssid = association["ssid"]
     net = get_network_interface_from_sta_section(section, data) if section else None
     ip = get_ipv4_from_network_interface(net) if net else None
     previous = state if state is not None else load_runtime_state()
@@ -101,6 +106,7 @@ def build_runtime_snapshot(cfg, state=None):
     if wired_mode and (wired_ip or strict):
         ssid = "有线接入" if wired_ip else ""
         bssid = ""
+        association = {}
         net = wired_iface
         ip = wired_ip
 
@@ -196,12 +202,21 @@ def build_runtime_snapshot(cfg, state=None):
             "wired" if wired_mode and net == wired_iface else "wifi"
         )
 
+    ap_policy, ap_reason = ("", "")
+    if mode == "campus" and not wired_mode:
+        ap_policy, ap_reason = get_ap_selection_status(cfg, section, association)
+
     return {
         "current_mode": mode,
         "mode": mode,
         "mode_label": mode_label,
         "current_ssid": ssid,
         "current_bssid": bssid,
+        "current_wireless_ifname": str(association.get("ifname", "")),
+        "current_signal": association.get("signal"),
+        "current_channel": association.get("channel"),
+        "ap_selection_policy": ap_policy,
+        "ap_selection_reason": ap_reason,
         "current_iface": str(net or ""),
         "current_ip": str(ip or ""),
         "connectivity": connectivity,

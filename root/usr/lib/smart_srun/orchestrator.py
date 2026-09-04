@@ -34,6 +34,7 @@ from network import (
     resolve_bind_ip,
 )
 from wireless import (
+    capture_campus_ap,
     detect_runtime_mode,
     disable_managed_sta_sections,
     ensure_expected_profile,
@@ -253,7 +254,7 @@ def run_once_with_retry(cfg, ignore_service_disabled=False):
                     "stale_session_rebuild",
                     "already-online deadlock, rebuilding campus connection",
                 )
-                rebuild_ok, rebuild_msg = clean_slate_for_manual_login(runtime_cfg)
+                rebuild_ok, rebuild_msg = clean_slate_for_manual_login(runtime_cfg, reselect_ap=False)
                 if rebuild_ok:
                     with timed() as rebuild_attempt_t:
                         retry_ok, retry_message = srun_auth.run_once_safe(runtime_cfg)
@@ -547,7 +548,7 @@ def wait_for_manual_logout_ready(
 # ---------------------------------------------------------------------------
 
 
-def clean_slate_for_manual_login(cfg, online_user=""):
+def clean_slate_for_manual_login(cfg, online_user="", reselect_ap=True):
     if campus_uses_wired(cfg):
         iface = get_wired_iface(cfg)
         if online_user:
@@ -604,6 +605,8 @@ def clean_slate_for_manual_login(cfg, online_user=""):
 
     active_data = parse_wireless_iface_data()
 
+    ap_context = capture_campus_ap(cfg, active_data) if not reselect_ap else None
+
     if online_user:
         log(
             "INFO",
@@ -643,7 +646,7 @@ def clean_slate_for_manual_login(cfg, online_user=""):
         "manual_preclean_done",
         "managed STA disabled, rebuilding campus connection",
     )
-    ok2, sw_msg = switch_to_campus(cfg)
+    ok2, sw_msg = switch_to_campus(cfg, reselect_ap=reselect_ap, ap_context=ap_context)
     if not ok2:
         log(
             "ERROR",
@@ -678,7 +681,7 @@ def wait_for_manual_login_ready(cfg, attempts=5, delay_seconds=2):
         bssid_expect = str(cfg.get("campus_bssid", "")).strip().lower()
         current_bssid = str(snapshot.get("current_bssid", "")).strip().lower()
         bssid_ok = wired_mode or (
-            (not bssid_expect) or (not current_bssid) or current_bssid == bssid_expect
+            (not bssid_expect) or current_bssid == bssid_expect
         )
         online_ok = connectivity_mode_matches(snapshot, cfg, require_ssid=True)
         auth_online = False
@@ -699,12 +702,6 @@ def wait_for_manual_login_ready(cfg, attempts=5, delay_seconds=2):
             return True, "已关联目标校园网并确认%s" % ready_label
         if (not wired_mode) and ssid_ok and bssid_ok and auth_online:
             return True, "已关联目标校园网并确认认证在线"
-        if ssid_ok and online_ok and bssid_expect and not current_bssid:
-            return (
-                True,
-                "已关联目标校园网并确认%s（BSSID 暂未上报，忽略本次终态校验阻塞）"
-                % ready_label,
-            )
         last_message = "当前 SSID=%s BSSID=%s 连通性=%s" % (
             snapshot.get("current_ssid", "") or "-",
             current_bssid or "-",

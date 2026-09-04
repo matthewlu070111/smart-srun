@@ -922,6 +922,20 @@ def normalize_campus_access_mode(value):
     return mode
 
 
+def normalize_ap_selection(value, bssid=""):
+    policy = str(value or "").strip().lower()
+    if policy in ("auto", "strongest", "fixed"):
+        return policy
+    return "fixed" if str(bssid or "").strip() else "auto"
+
+
+def is_valid_bssid(value):
+    address = str(value or "").strip()
+    if not re.fullmatch(r"(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}", address):
+        return False
+    return address.lower() != "00:00:00:00:00:00" and not (int(address[:2], 16) & 1)
+
+
 def normalize_wired_iface(value):
     """Return the selected OpenWrt logical interface/device for wired auth.
 
@@ -950,6 +964,10 @@ def normalize_campus_account(account):
         normalize_auth_enabled(normalized.get("auth_enabled"))
         if normalize_campus_access_mode(normalized.get("access_mode")) == "wired"
         else "0"
+    )
+    normalized["ap_selection"] = (
+        "" if normalize_campus_access_mode(normalized.get("access_mode")) == "wired"
+        else normalize_ap_selection(normalized.get("ap_selection"), normalized.get("bssid"))
     )
     return normalized
 
@@ -1106,6 +1124,7 @@ def _migrate_legacy_config(raw):
         "operator_suffix": legacy_operator,
         "ssid": str(raw.get("campus_ssid", "jxnu_stu")).strip(),
         "bssid": str(raw.get("campus_bssid", "")).strip(),
+        "ap_selection": normalize_ap_selection(raw.get("campus_ap_selection"), raw.get("campus_bssid")),
         "radio": str(raw.get("campus_radio", "")).strip(),
     }
     campus_account["label"] = _make_campus_label(campus_account)
@@ -1192,7 +1211,11 @@ def resolve_active_items(cfg):
     )
     cfg["ac_id"] = str(campus.get("ac_id", "1")).strip()
     cfg["campus_ssid"] = str(campus.get("ssid", "")).strip()
-    cfg["campus_bssid"] = str(campus.get("bssid", "")).strip()
+    cfg["campus_ap_selection"] = campus.get("ap_selection") or "auto"
+    cfg["campus_bssid"] = (
+        str(campus.get("bssid", "")).strip().lower()
+        if cfg["campus_ap_selection"] == "fixed" else ""
+    )
     cfg["campus_radio"] = str(campus.get("radio", "")).strip()
     cfg["campus_encryption"] = normalize_wifi_encryption(
         str(campus.get("encryption", "none")).strip() or "none"

@@ -52,7 +52,14 @@ local function write_config_json_atomic(data)
 end
 
 local function render_js_asset_tag()
-    return '<script src="' .. util.pcdata(JS_ASSET_PATH) .. '"></script>'
+    local asset_url = JS_ASSET_PATH
+    local stat = fs.stat and fs.stat("/www" .. JS_ASSET_PATH)
+    local mtime = type(stat) == "table" and tonumber(stat.mtime)
+    local size = type(stat) == "table" and tonumber(stat.size)
+    if mtime and size then
+        asset_url = asset_url .. string.format("?v=%.0f-%.0f", mtime, size)
+    end
+    return '<script src="' .. util.pcdata(asset_url) .. '"></script>'
 end
 
 local function read_file_tail(path, lines)
@@ -103,6 +110,7 @@ local function migrate_legacy_config(parsed)
         auth_enabled = "0",
         ssid = tostring(parsed.campus_ssid or "jxnu_stu"):match("^%s*(.-)%s*$"),
         bssid = tostring(parsed.campus_bssid or ""):match("^%s*(.-)%s*$"),
+        ap_selection = schema.normalize_ap_selection(parsed.campus_ap_selection, parsed.campus_bssid),
     }
     ca.label = (uid ~= "" and suffix ~= "") and (uid .. "@" .. suffix) or (uid ~= "" and uid or "未命名账号")
     migrated.campus_accounts = uid ~= "" and { ca } or {}
@@ -546,6 +554,22 @@ overview.anonymous = true
 overview_status = overview:option(DummyValue, "_overview_status", "")
 overview_status.rawhtml = true
 function overview_status.cfgvalue()
+    local state = load_state()
+    local function observed(value, suffix)
+        if value == nil or tostring(value) == "" then return "未知" end
+        return util.pcdata(tostring(value)) .. (suffix or "")
+    end
+    local wireless_meta = '<span>实际 AP: ' .. observed(state.current_bssid) .. '</span>'
+        .. '<span>无线接口: ' .. observed(state.current_wireless_ifname) .. '</span>'
+        .. '<span>信号: ' .. observed(tonumber(state.current_signal), ' dBm') .. '</span>'
+        .. '<span>信道: ' .. observed(tonumber(state.current_channel)) .. '</span>'
+    if state.current_campus_access_mode == "wired" or state.mode_label == "校园网模式（有线）" then
+        wireless_meta = ""
+    elseif state.current_mode ~= "hotspot" then
+        wireless_meta = wireless_meta
+            .. '<span>AP 选择: ' .. util.pcdata(schema.ap_selection_label(state.ap_selection_policy)) .. '</span>'
+            .. '<span>选择说明: ' .. observed(state.ap_selection_reason) .. '</span>'
+    end
     return render_js_asset_tag() .. [[
 <div id="smart-srun-overview" style="margin:4px 0 18px 0;border-left:4px solid #c62828;background:rgba(128,128,128,.08);padding:14px 16px;border-radius:0 6px 6px 0;box-shadow:none;">
   <div id="smart-srun-overview-title" style="font-size:18px;font-weight:700;color:#1f2937;margin-bottom:8px;">状态读取中</div>
@@ -553,6 +577,7 @@ function overview_status.cfgvalue()
     <span>WiFi: --</span>
     <span>模式: --</span>
     <span>连通性: --</span>
+]] .. wireless_meta .. [[
   </div>
 </div>
 ]]
@@ -767,7 +792,8 @@ function tables_html.cfgvalue()
             local aid = tostring(a.id or "")
             local campus_user = tostring(a.user_id or "")
             local campus_ssid = tostring(a.ssid or "")
-            local campus_bssid = tostring(a.bssid or ""):lower()
+            local ap_selection = schema.normalize_ap_selection(a.ap_selection, a.bssid)
+            local campus_bssid = ap_selection == "fixed" and util.trim(tostring(a.bssid or "")):lower() or ""
             local access_mode = tostring(a.access_mode or "wifi")
             local wired_iface = util.trim(tostring(a.wired_iface or ""))
             if wired_iface == "" then wired_iface = util.trim(tostring(a.network_interface or "")) end
@@ -832,7 +858,7 @@ function tables_html.cfgvalue()
                 .. '<td class="td">' .. util.pcdata(tostring(a.operator_suffix or "")) .. '</td>'
                 .. '<td class="td">' .. util.pcdata(ssid_display) .. '</td>'
                 .. '<td class="td">' .. (auth_enabled and (multi_wan_on and '<span style="color:#16a34a;font-weight:700;">参与</span>' or '<span style="color:#d97706;">待开启全局开关</span>') or '<span style="color:#999;">关闭</span>') .. '</td>'
-                .. '<td class="td">' .. util.pcdata(tostring(a.bssid or "")) .. '</td>'
+                .. '<td class="td">' .. (access_mode == "wired" and '—' or util.pcdata(schema.ap_selection_label(ap_selection)) .. (campus_bssid ~= "" and ('<br>' .. util.pcdata(campus_bssid)) or '')) .. '</td>'
                 .. '<td class="td">' .. util.pcdata(radio_labels[tostring(a.radio or "")] or tostring(a.radio or "自动")) .. '</td>'
                 .. '<td class="td cbi-section-actions"><div class="smart-action-cell">'
                 .. ("<button type=\"button\" class=\"cbi-button\" style=\"font-size:12px;padding:1px 8px;\" onclick=\"smartEditCampus('%s')\">编辑</button>"):format(util.pcdata(aid))
@@ -915,7 +941,7 @@ function tables_html.cfgvalue()
 <div class="cbi-section cbi-tblsection smart-native-box">
   <h3>校园网账号</h3>
   <table class="table cbi-section-table">
-    <tr class="tr table-titles"><th class="th" style="width:80px;">状态</th><th class="th">标签</th><th class="th">认证地址</th><th class="th">ACID</th><th class="th">学工号</th><th class="th">运营商后缀</th><th class="th">接入口</th><th class="th">并行守护</th><th class="th">BSSID</th><th class="th">频段</th><th class="th cbi-section-actions" style="width:120px;">操作</th></tr>
+    <tr class="tr table-titles"><th class="th" style="width:80px;">状态</th><th class="th">标签</th><th class="th">认证地址</th><th class="th">ACID</th><th class="th">学工号</th><th class="th">运营商后缀</th><th class="th">接入口</th><th class="th">并行守护</th><th class="th">AP 选择 / 固定 BSSID</th><th class="th">频段</th><th class="th cbi-section-actions" style="width:120px;">操作</th></tr>
     <tbody>]] .. campus_rows .. [[</tbody>
   </table>
   <div class="smart-box-actions">

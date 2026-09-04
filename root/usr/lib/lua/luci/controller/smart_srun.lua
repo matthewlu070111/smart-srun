@@ -291,8 +291,14 @@ function action_status()
         pending_action = pending,
         current_ssid = tostring(data.current_ssid or ""),
         current_bssid = tostring(data.current_bssid or ""),
+        current_wireless_ifname = tostring(data.current_wireless_ifname or ""),
+        current_signal = tonumber(data.current_signal),
+        current_channel = tonumber(data.current_channel),
+        ap_selection_policy = tostring(data.ap_selection_policy or ""),
+        ap_selection_reason = tostring(data.ap_selection_reason or ""),
         current_ip = tostring(data.current_ip or ""),
         current_iface = tostring(data.current_iface or ""),
+        current_campus_access_mode = tostring(data.current_campus_access_mode or ""),
         campus_account_label = tostring(data.campus_account_label or ""),
         online_account_label = tostring(data.online_account_label or ""),
         hotspot_profile_label = tostring(data.hotspot_profile_label or ""),
@@ -621,7 +627,8 @@ function action_enqueue()
                 wired_iface = util.trim(fv("wired_iface")),
                 auth_enabled = fv("auth_enabled") == "1" and "1" or "0",
                 base_url = normalize_base_url(fv("base_url")), ac_id = fv("ac_id"),
-                ssid = fv("ssid"), bssid = fv("bssid"), radio = fv("radio"),
+                ssid = fv("ssid"), bssid = util.trim(fv("bssid")):lower(), radio = fv("radio"),
+                ap_selection = fv("ap_selection"),
                 n = fv("n"), type = fv("type"), enc = fv("enc"),
                 info_prefix = fv("info_prefix"),
                 double_stack = fv("double_stack"),
@@ -639,6 +646,13 @@ function action_enqueue()
                 item.ssid = ""
                 item.bssid = ""
                 item.radio = ""
+                item.ap_selection = ""
+            else
+                item.ap_selection = schema.normalize_ap_selection(item.ap_selection, item.bssid)
+                if item.ap_selection == "fixed" and not schema.is_valid_bssid(item.bssid) then
+                    message = "固定 BSSID 需要有效的单播地址，例如 02:11:22:33:44:55"
+                    return false, cfg
+                end
             end
             if item.label == "" then
                 local suffix = item.operator_suffix or ""
@@ -814,6 +828,8 @@ local event_zh = {
     action_requeued     = "动作重新排队",
     action_interrupted  = "动作已中断",
     switch_progress     = "切换进度",
+    ap_selection        = "AP 选择",
+    ap_association      = "AP 关联",
     quiet_enter         = "进入夜间停用",
     quiet_exit          = "退出夜间停用",
     daemon_tick         = "状态更新",
