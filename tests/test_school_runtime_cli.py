@@ -1077,6 +1077,7 @@ class LuciSourceHardeningTests(unittest.TestCase):
             "root/usr/lib/smart_srun/crypto.py",
             "root/usr/lib/smart_srun/network.py",
             "root/usr/lib/smart_srun/wireless.py",
+            "root/usr/lib/smart_srun/wireless_ap.py",
             "root/usr/lib/smart_srun/srun_auth.py",
             "root/usr/lib/smart_srun/orchestrator.py",
             "root/usr/lib/smart_srun/daemon.py",
@@ -1098,6 +1099,20 @@ class LuciSourceHardeningTests(unittest.TestCase):
         self.assertTrue(
             expected_runtime_payload.issubset(set(uploaded)),
             "hot update payload must include runtime dependency closure",
+        )
+        runtime_dir = os.path.join(REPO_ROOT, "root", "usr", "lib", "smart_srun")
+        packaged_modules = {
+            "root/usr/lib/smart_srun/" + name
+            for name in os.listdir(runtime_dir) if name.endswith(".py")
+        }
+        self.assertTrue(
+            packaged_modules.issubset(set(uploaded)),
+            "hot update must include Python modules installed by the Makefile wildcard",
+        )
+        self.assertIn(
+            {"local": "root/usr/lib/smart_srun/wireless_ap.py",
+             "remote": "/usr/lib/smart_srun/wireless_ap.py"},
+            hot_update.RUNTIME_TARGETS,
         )
 
     def test_hot_update_forces_lf_for_init_script_upload(self):

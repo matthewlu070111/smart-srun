@@ -17,7 +17,10 @@ from config import (
     get_switch_ready_timeout_seconds,
     hotspot_failback_enabled,
     normalize_campus_access_mode,
+    normalize_ap_selection,
     normalize_wifi_encryption,
+    load_json_file,
+    save_json_file,
     wifi_key_required,
     SWITCH_DELAY_SECONDS,
     SSID_EXPECTED_RETRY_SECONDS,
@@ -32,6 +35,10 @@ from network import (
     test_portal_reachability,
     wait_for_network_interface_ipv4,
 )
+from wireless_ap import read_association, select_candidates, valid_bssid
+
+
+AP_SELECTION_FILE = "/var/run/smart_srun/ap_selection.json"
 
 
 # ---------------------------------------------------------------------------
@@ -75,6 +82,7 @@ def parse_wireless_iface_data():
             "key",
             "device",
             "jxnu_auto",
+            "smart_srun_ap_selection",
         ):
             continue
         data.setdefault(sec, {})[opt] = parse_uci_value(val)
@@ -209,6 +217,7 @@ def get_sta_profile_from_section(section, wireless_data=None):
         "bssid": str(opts.get("bssid", "")).strip().lower(),
         "encryption": normalize_wifi_encryption(opts.get("encryption", "none")),
         "key": str(opts.get("key", "")).strip(),
+        "ap_selection": str(opts.get("smart_srun_ap_selection", "")).strip(),
     }
 
 
@@ -545,12 +554,17 @@ def commit_reload_wireless():
 
 def build_expected_profile(cfg, expect_hotspot):
     prefix = "hotspot" if expect_hotspot else "campus"
+    bssid = str(cfg.get(prefix + "_bssid", "")).strip().lower()
+    policy = "" if expect_hotspot else normalize_ap_selection(
+        cfg.get("campus_ap_selection"), bssid
+    )
     return {
         "access_mode": "wifi"
         if expect_hotspot
         else normalize_campus_access_mode(cfg.get("campus_access_mode", "wifi")),
         "ssid": str(cfg.get(prefix + "_ssid", "")).strip(),
-        "bssid": str(cfg.get(prefix + "_bssid", "")).strip().lower(),
+        "bssid": bssid if expect_hotspot or policy == "fixed" else "",
+        "ap_selection": policy,
         "encryption": normalize_wifi_encryption(
             cfg.get(prefix + "_encryption", "none")
         ),
@@ -567,6 +581,11 @@ def profiles_match(current, expected):
     current_bssid = str(current.get("bssid", "")).strip().lower()
     if expected_bssid and current_bssid != expected_bssid:
         return False
+    policy = expected.get("ap_selection", "")
+    if policy:
+        current_policy = normalize_ap_selection(current.get("ap_selection"), current_bssid)
+        if current_policy != policy or (policy == "auto" and current_bssid):
+            return False
 
     current_enc = normalize_wifi_encryption(current.get("encryption", "none"))
     expected_enc = normalize_wifi_encryption(expected.get("encryption", "none"))
@@ -648,6 +667,17 @@ def _set_sta_profile_uci(section, profile):
             msgs.append(c_msg)
     else:
         run_cmd(["uci", "-q", "delete", "wireless.%s.bssid" % sec])
+
+    policy = profile.get("ap_selection", "")
+    if policy in ("auto", "strongest", "fixed"):
+        c_ok, c_msg = run_cmd([
+            "uci", "set", "wireless.%s.smart_srun_ap_selection=%s" % (sec, policy)
+        ])
+        ok = ok and c_ok
+        if not c_ok and c_msg:
+            msgs.append(c_msg)
+    else:
+        run_cmd(["uci", "-q", "delete", "wireless.%s.smart_srun_ap_selection" % sec])
 
     if wifi_key_required(encryption):
         c_ok, c_msg = run_cmd(["uci", "set", "wireless.%s.key=%s" % (sec, key)])
@@ -911,7 +941,8 @@ def select_sta_section(cfg, expect_hotspot, base_section, target, wireless_data)
 
 
 def wait_for_sta_ipv4(
-    section, timeout_seconds=SSID_READY_TIMEOUT_SECONDS, interval_seconds=1
+    section, timeout_seconds=SSID_READY_TIMEOUT_SECONDS, interval_seconds=1,
+    expected_bssid="", expected_ssid="",
 ):
     sec = str(section or "").strip()
     started_at = time.time()
@@ -929,7 +960,14 @@ def wait_for_sta_ipv4(
         if net:
             last_net = net
             ip = get_ipv4_from_network_interface(net)
-            if ip:
+            association_ok = True
+            if ip and expected_bssid:
+                association = read_association(sec)
+                association_ok = (
+                    association.get("bssid", "").lower() == expected_bssid.lower()
+                    and (not expected_ssid or association.get("ssid") == expected_ssid)
+                )
+            if ip and association_ok:
                 total_ms = int((time.time() - started_at) * 1000)
                 log(
                     "INFO",
@@ -986,10 +1024,122 @@ def wait_for_sta_ipv4(
 # ---------------------------------------------------------------------------
 
 
-def switch_sta_profile(cfg, expect_hotspot):
+def _record_ap_selection(cfg, section, profile, reason):
+    payload = {
+        "account_id": str(cfg.get("campus_account_id") or cfg.get("active_campus_id") or ""),
+        "section": section,
+        "ssid": profile.get("ssid", ""),
+        "policy": profile.get("ap_selection", "auto"),
+        "bssid": profile.get("bssid", ""),
+        "reason": reason,
+    }
+    # Selection provenance is runtime-only; never turn an automatic choice into
+    # an account's manually configured BSSID.
+    try:
+        save_json_file(AP_SELECTION_FILE, payload)
+    except OSError:
+        pass
+    log("INFO", "ap_selection", policy=payload["policy"], reason=reason)
+
+
+def get_ap_selection_status(cfg, section, association):
+    policy = normalize_ap_selection(cfg.get("campus_ap_selection"), cfg.get("campus_bssid", ""))
+    record = load_json_file(AP_SELECTION_FILE)
+    account_id = str(cfg.get("campus_account_id") or cfg.get("active_campus_id") or "")
+    if (
+        isinstance(record, dict)
+        and record.get("account_id") == account_id
+        and record.get("section") == section
+        and record.get("ssid") == str(cfg.get("campus_ssid", ""))
+        and record.get("policy") == policy
+        and (not record.get("bssid") or record.get("bssid") == association.get("bssid"))
+    ):
+        return policy, str(record.get("reason", ""))
+    reasons = {
+        "auto": "由系统选择同一 SSID 的 AP",
+        "strongest": "连接时按信号选择；当前关联暂无匹配的选择记录",
+        "fixed": "仅连接配置的 BSSID",
+    }
+    return policy, reasons[policy]
+
+
+def capture_campus_ap(cfg, data):
+    if build_expected_profile(cfg, False).get("ap_selection") != "strongest":
+        return None
+    section = get_active_sta_section(cfg, data)
+    profile = get_sta_profile_from_section(section, data)
+    if not section or profile.get("ssid") != cfg.get("campus_ssid"):
+        return None
+    bssid = profile.get("bssid", "")
+    if not bssid:
+        actual = read_association(section)
+        if actual.get("ssid") == profile["ssid"]:
+            bssid = actual.get("bssid", "")
+    return {"ssid": profile["ssid"], "radio": get_radio_for_section(section, data), "bssid": bssid}
+
+
+def _connect_campus_ap(cfg, section, target, data, reselect_ap=True, ap_context=None):
+    """Try at most three associations from one scan, before any SRun request."""
+    policy = target["ap_selection"]
+    candidates = []
+    reason = "由系统选择同一 SSID 的 AP"
+    if policy == "fixed":
+        reason = "仅连接配置的 BSSID"
+    elif policy == "strongest" and reselect_ap:
+        radio = get_radio_for_section(section, data)
+        candidates, detail = select_candidates(section, radio, target)
+        if not candidates:
+            reason = (detail or "没有可用的扫描结果") + "；本次由系统自动选择 AP"
+    elif policy == "strongest":
+        # E2620 session recovery may reconnect, but must not select another AP
+        # in response to an authentication error.
+        previous = get_sta_profile_from_section(section, data)
+        target = dict(target)
+        target["bssid"] = (ap_context if ap_context is not None else previous).get("bssid", "")
+        reason = "认证会话重建沿用原 AP 配置，不重新扫描"
+
+    attempts = candidates[:3] if candidates else [None]
+    timeout = get_switch_ready_timeout_seconds(cfg)
+    for index, candidate in enumerate(attempts):
+        profile = dict(target)
+        if candidate:
+            profile["bssid"] = candidate["bssid"]
+            reason = "按本次扫描信号排序选择第 %d/%d 个 AP（%s dBm，信道 %s）" % (
+                index + 1, len(attempts), candidate["signal"], candidate["channel"]
+            )
+        _record_ap_selection(cfg, section, profile, reason)
+        ok, message = apply_sta_profile(cfg, section, profile, data)
+        if not ok:
+            return False, message or "写入无线配置失败。", None
+        settle = min(SWITCH_DELAY_SECONDS, timeout)
+        if settle > 0:
+            time.sleep(settle)
+        kwargs = {"timeout_seconds": timeout}
+        if profile.get("bssid"):
+            kwargs.update(expected_bssid=profile["bssid"], expected_ssid=profile["ssid"])
+        _, ip = wait_for_sta_ipv4(section, **kwargs)
+        if ip:
+            actual = read_association(section)
+            log("INFO", "ap_association", bssid=actual.get("bssid", "未知"),
+                signal=actual.get("signal", "未知"), channel=actual.get("channel", "未知"))
+            return True, "", ip
+        log("WARN", "ap_association", reason="目标 AP 关联或 IPv4 就绪等待超时",
+            attempt=index + 1, attempts=len(attempts))
+    return True, "", None
+
+
+def switch_sta_profile(cfg, expect_hotspot, reselect_ap=True, ap_context=None):
     cfg, _, _ = apply_default_selection_for_runtime(expect_hotspot, "执行无线切换前")
+    if (not expect_hotspot and not reselect_ap and ap_context
+            and ap_context.get("ssid") == cfg.get("campus_ssid")
+            and build_expected_profile(cfg, False)["ap_selection"] == "strongest"):
+        cfg = dict(cfg, campus_radio=ap_context.get("radio", ""))
+    else:
+        ap_context = None
     data = parse_wireless_iface_data()
     _eval_target = build_expected_profile(cfg, expect_hotspot)
+    if _eval_target.get("ap_selection") == "fixed" and not valid_bssid(_eval_target["bssid"]):
+        return False, "固定 BSSID 策略需要有效的 AP 地址（例如 02:11:22:33:44:55）。"
     _eval_encryption = normalize_wifi_encryption(_eval_target.get("encryption", "none"))
     log(
         "DEBUG",
@@ -1014,6 +1164,8 @@ def switch_sta_profile(cfg, expect_hotspot):
 
     base_section = get_sta_section(cfg, data)
     target = build_expected_profile(cfg, expect_hotspot)
+    if ap_context is not None:
+        target["bssid"] = ap_context.get("bssid", "")
 
     section, select_msg = select_sta_section(
         cfg, expect_hotspot, base_section, target, data
@@ -1034,14 +1186,20 @@ def switch_sta_profile(cfg, expect_hotspot):
         target=target["label"],
         ssid=target["ssid"] or "?",
     )
-    ok, msg = apply_sta_profile(cfg, section, target, data_after_select)
+    campus_ip = None
+    if expect_hotspot:
+        ok, msg = apply_sta_profile(cfg, section, target, data_after_select)
+    else:
+        ok, msg, campus_ip = _connect_campus_ap(
+            cfg, section, target, data_after_select, reselect_ap=reselect_ap, ap_context=ap_context
+        )
     if (not ok) and msg:
         return False, msg
     if not ok:
         return False, "写入无线配置失败。"
 
     settle_delay = min(SWITCH_DELAY_SECONDS, get_switch_ready_timeout_seconds(cfg))
-    if settle_delay > 0:
+    if expect_hotspot and settle_delay > 0:
         time.sleep(settle_delay)
 
     refreshed_data = parse_wireless_iface_data()
@@ -1062,7 +1220,7 @@ def switch_sta_profile(cfg, expect_hotspot):
     )
 
     if not expect_hotspot:
-        _, ip = wait_for_sta_ipv4(section, timeout_seconds=ip_timeout)
+        ip = campus_ip
         if ip:
             log(
                 "INFO",
@@ -1104,7 +1262,7 @@ def switch_sta_profile(cfg, expect_hotspot):
             band=bl,
         )
         return False, (
-            "已切换为%s配置但未获取到IPv4地址（%s %s）；"
+            "已应用%s配置，但目标 AP 关联或 IPv4 尚未就绪（%s %s）；"
             "可在全局设置调大“切网就绪等待”，并确认该账号是否已有其他设备在线占用名额"
             % (
                 target["label"],
@@ -1177,7 +1335,7 @@ def switch_to_hotspot(cfg):
     return switch_sta_profile(cfg, expect_hotspot=True)
 
 
-def switch_to_campus(cfg):
+def switch_to_campus(cfg, reselect_ap=True, ap_context=None):
     if campus_uses_wired(cfg):
         iface = get_wired_iface(cfg)
         data = parse_wireless_iface_data()
@@ -1191,7 +1349,7 @@ def switch_to_campus(cfg):
         if wired_ip:
             return True, "已切换为有线校园网模式（%s, %s）" % (iface, wired_ip)
         return False, "已切到有线校园网模式，但接口 %s 暂未获取到 IPv4 地址" % iface
-    return switch_sta_profile(cfg, expect_hotspot=False)
+    return switch_sta_profile(cfg, expect_hotspot=False, reselect_ap=reselect_ap, ap_context=ap_context)
 
 
 # ---------------------------------------------------------------------------
@@ -1200,7 +1358,7 @@ def switch_to_campus(cfg):
 
 
 def ensure_expected_profile(cfg, expect_hotspot, last_switch_ts=0):
-    if not failover_enabled(cfg):
+    if not failover_enabled(cfg) and (expect_hotspot or not campus_ap_policy_enabled(cfg)):
         return True, "", last_switch_ts
 
     if (not expect_hotspot) and campus_uses_wired(cfg):
@@ -1217,26 +1375,45 @@ def ensure_expected_profile(cfg, expect_hotspot, last_switch_ts=0):
     data = parse_wireless_iface_data()
     section = get_sta_section(cfg, data)
     if not section:
+        if not expect_hotspot and campus_ap_policy_enabled(cfg):
+            now = time.time()
+            if last_switch_ts and now - last_switch_ts < SSID_EXPECTED_RETRY_SECONDS:
+                return False, "校园网未就绪，等待后重试切换。", last_switch_ts
+            ok, message = switch_sta_profile(cfg, expect_hotspot=False)
+            return ok, message, now
         return False, "未找到可用的 STA 接口节。", last_switch_ts
 
     expected = build_expected_profile(cfg, expect_hotspot)
+    if expected.get("ap_selection") == "fixed" and not valid_bssid(expected["bssid"]):
+        return False, "固定 BSSID 策略需要有效的 AP 地址。", last_switch_ts
     if not expected["ssid"]:
         return False, "%s SSID 未配置。" % expected["label"], last_switch_ts
     if wifi_key_required(expected["encryption"]) and not expected["key"]:
         return False, "%s 配置缺少密码。" % expected["label"], last_switch_ts
 
-    existing = _find_sta_by_profile(expected, data)
+    configured_radio = str(cfg.get("hotspot_radio" if expect_hotspot else "campus_radio", "")).strip()
+    matching_data = {
+        name: opts for name, opts in data.items()
+        if not configured_radio or opts.get("device") == configured_radio
+    }
+    existing = _find_sta_by_profile(expected, matching_data)
     check = existing if existing else section
 
     current = get_sta_profile_from_section(check, data)
     active_section = get_active_sta_section(cfg, data)
     check_enabled = str(data.get(check, {}).get("disabled", "0")).strip() != "1"
-    _, ip_now = wait_for_sta_ipv4(check, timeout_seconds=1, interval_seconds=1)
+    wait_kwargs = {"timeout_seconds": 1, "interval_seconds": 1}
+    if expected.get("ap_selection") == "fixed":
+        wait_kwargs.update(expected_bssid=expected["bssid"], expected_ssid=expected["ssid"])
+    elif expected.get("ap_selection") == "strongest" and current.get("bssid"):
+        wait_kwargs.update(expected_bssid=current["bssid"], expected_ssid=expected["ssid"])
+    _, ip_now = wait_for_sta_ipv4(check, **wait_kwargs)
     if (
         profiles_match(current, expected)
         and ip_now
         and check_enabled
         and active_section == check
+        and (not configured_radio or get_radio_for_section(check, data) == configured_radio)
     ):
         return True, "", last_switch_ts
 
@@ -1271,3 +1448,19 @@ def ensure_expected_profile(cfg, expect_hotspot, last_switch_ts=0):
     if sw_msg:
         note = note + " " + sw_msg
     return True, note, switched_at
+
+
+def campus_ap_policy_enabled(cfg):
+    if campus_uses_wired(cfg):
+        return False
+    if normalize_ap_selection(cfg.get("campus_ap_selection"), cfg.get("campus_bssid", "")) in ("strongest", "fixed"):
+        return True
+    # A change back to automatic must also release the previous pin when
+    # hotspot failover is disabled. Once applied, this check becomes false.
+    data = parse_wireless_iface_data()
+    return any(
+        data[section].get("ssid") == cfg.get("campus_ssid")
+        and str(data[section].get("disabled", "0")) != "1"
+        and (data[section].get("bssid") or data[section].get("smart_srun_ap_selection") in ("strongest", "fixed"))
+        for section in get_managed_sta_sections(cfg, data) if section in data
+    )

@@ -53,6 +53,7 @@ from wireless import (
     build_expected_profile,
     detect_runtime_mode,
     ensure_expected_profile,
+    campus_ap_policy_enabled,
     switch_to_campus,
 )
 import orchestrator
@@ -756,7 +757,7 @@ def _daemon_tick_active(cfg, state, interval):
     else:
         state["wired_auth_sessions"] = {}
 
-    if failover_enabled(cfg):
+    if failover_enabled(cfg) or campus_ap_policy_enabled(cfg):
         ready_ok, ready_msg, state["last_switch_ts"] = ensure_expected_profile(
             cfg,
             expect_hotspot=False,

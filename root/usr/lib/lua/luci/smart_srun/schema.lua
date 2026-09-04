@@ -16,6 +16,25 @@ M.POINTER_KEYS = {
 M.LIST_KEYS = { "campus_accounts", "hotspot_profiles" }
 M.SCHOOL_EXTRA_KEY = "school_extra"
 
+function M.normalize_ap_selection(value, bssid)
+    local policy = tostring(value or ""):match("^%s*(.-)%s*$"):lower()
+    if policy == "auto" or policy == "strongest" or policy == "fixed" then
+        return policy
+    end
+    return tostring(bssid or ""):match("^%s*(.-)%s*$") ~= "" and "fixed" or "auto"
+end
+
+function M.is_valid_bssid(value)
+    local address = tostring(value or ""):match("^%s*(.-)%s*$"):lower()
+    if not address:match("^%x%x:%x%x:%x%x:%x%x:%x%x:%x%x$") then return false end
+    return address ~= "00:00:00:00:00:00" and tonumber(address:sub(1, 2), 16) % 2 == 0
+end
+
+function M.ap_selection_label(policy)
+    local labels = { auto = "系统自动", strongest = "连接时信号优先", fixed = "固定 BSSID" }
+    return labels[tostring(policy or "")] or "未知"
+end
+
 local POINTER_KEY_SET = {}
 for _, key in ipairs(M.POINTER_KEYS) do
     POINTER_KEY_SET[key] = true
