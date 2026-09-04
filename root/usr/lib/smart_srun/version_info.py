@@ -120,15 +120,6 @@ def get_display_version(status_text=None, package_name=None):
     return _makefile_version()
 
 
-def get_luci_badge_label(status_text=None):
-    package_name = detect_installed_package_name(status_text=status_text)
-    if package_name == "luci-app-smart-srun-bundle":
-        return "Bundle 版"
-    if package_name == "luci-app-smart-srun":
-        return "标准版"
-    return "CLI 版"
-
-
 def get_luci_display_text(status_text=None):
     package_name = detect_installed_package_name(status_text=status_text)
     if package_name == "luci-app-smart-srun-bundle":

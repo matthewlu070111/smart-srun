@@ -40,7 +40,6 @@
     if (line.indexOf('[错误]') !== -1) return 'error';
     if (line.indexOf('[警告]') !== -1) return 'warn';
     if (line.indexOf('[调试]') !== -1) return 'debug';
-    if (line.indexOf('[信息]') !== -1) return 'info';
     return 'info';
   }
 
@@ -904,8 +903,8 @@
         resetSchoolDefaultsForm();
         return;
       }
-      var schoolDefaults = (preset && preset.defaults) ? preset.defaults : {};
-      var loginShape = (preset && preset.observed_login_shape) ? preset.observed_login_shape : {};
+      var schoolDefaults = preset.defaults || {};
+      var loginShape = preset.observed_login_shape || {};
       var fieldMap = {
         base_url: 'jm-base_url',
         ac_id: 'jm-ac_id',
@@ -935,9 +934,6 @@
       if (schoolDefaults.access_mode) {
         var modeSel = document.getElementById('jm-access_mode');
         if (modeSel) modeSel.value = String(schoolDefaults.access_mode);
-      } else {
-        var fallbackModeSel = document.getElementById('jm-access_mode');
-        if (fallbackModeSel && selectedPresetId === NO_PRESET_ID) fallbackModeSel.value = 'wifi';
       }
       if (schoolDefaults.wired_iface !== undefined && schoolDefaults.wired_iface !== null) {
         var ifaceInput = document.getElementById('jm-wired_iface');

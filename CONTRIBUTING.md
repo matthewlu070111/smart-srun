@@ -2,6 +2,15 @@
 
 本仓库是 OpenWrt 包源码，不是普通单体应用。真正随包安装的内容都在 `root/` 下；`tests/`、`scripts/` 和 `doc/` 只用于开发、验证和维护。
 
+## 提交署名与 PR 整理
+
+- 提交前检查 `git config user.name` 和 `git config user.email`，使用本人已关联 GitHub 的邮箱或本人设置页提供的 noreply 邮箱，不要复制维护者的邮箱。GitHub 贡献统计按提交邮箱关联账号，PR 作者与提交作者可以不同。
+- 合并外部贡献前核对提交作者和 GitHub 账号关联，保留原贡献者署名；解决冲突的提交由实际处理者署名。已合并的历史不为整理界面而重写。
+- 每个主题使用一条短期分支和一个 PR；同一 PR 内继续修正，合并并确认无待保留工作后删除源分支。自己的零散修正可在合并时 squash，合并前检查最终署名与变更范围。
+- `main` 保留开发历史，`downloads` 提供在线升级包；已合并 PR 是历史记录，日常处理使用 [Open PR 列表](https://github.com/matthewlu070111/smart-srun/pulls?q=is%3Apr+is%3Aopen)。
+
+若邮箱属于本人但未关联账号，可在 GitHub 的邮件设置中添加该邮箱；若误用了他人邮箱，先修正后续提交配置。维护者无法代替贡献者绑定邮箱，也不应通过空提交或虚假署名补贡献数。详见 [GitHub 贡献者统计说明](https://docs.github.com/en/repositories/viewing-activity-and-data-for-your-repository/viewing-a-projects-contributors)。
+
 ## 项目结构
 
 ```text
