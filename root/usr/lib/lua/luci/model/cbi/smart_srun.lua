@@ -52,7 +52,14 @@ local function write_config_json_atomic(data)
 end
 
 local function render_js_asset_tag()
-    return '<script src="' .. util.pcdata(JS_ASSET_PATH) .. '"></script>'
+    local asset_url = JS_ASSET_PATH
+    local stat = fs.stat and fs.stat("/www" .. JS_ASSET_PATH)
+    local mtime = type(stat) == "table" and tonumber(stat.mtime)
+    local size = type(stat) == "table" and tonumber(stat.size)
+    if mtime and size then
+        asset_url = asset_url .. string.format("?v=%.0f-%.0f", mtime, size)
+    end
+    return '<script src="' .. util.pcdata(asset_url) .. '"></script>'
 end
 
 local function read_file_tail(path, lines)

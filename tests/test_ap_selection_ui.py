@@ -259,6 +259,37 @@ end
         subprocess.run([lua, "-e", script], check=True, stdin=subprocess.DEVNULL,
                        capture_output=True, text=True, encoding="utf-8", timeout=15)
 
+    def test_asset_url_tracks_js_mtime_and_size_with_unavailable_stat_fallback(self):
+        lua = shutil.which("lua")
+        if not lua:
+            self.skipTest("lua is not installed")
+        script = r"""
+local handle = assert(io.open(CBI_PATH, "rb"))
+local source = handle:read("*a"):gsub("\r\n", "\n")
+handle:close()
+local body = assert(source:match("local function render_js_asset_tag%(%)\n(.-)\nend"))
+local render = assert(loadstring("return function() " .. body .. " end"))()
+local path = "/luci-static/resources/smart_srun.js"
+local current
+local fs = {stat=function(actual) assert(actual == "/www" .. path); return current end}
+local context = setmetatable({JS_ASSET_PATH=path, fs=fs,
+    util={pcdata=function(value) return value end}}, {__index=_G})
+setfenv(render, context)
+for _, case in ipairs({
+    {stat={mtime=0, size=72217}, query="?v=0-72217"},
+    {stat={mtime=0, size=72218}, query="?v=0-72218"},
+    {stat={mtime=123, size=72218}, query="?v=123-72218"},
+    {query=""}, {stat={mtime=0}, query=""}, {stat={mtime="invalid", size=10}, query=""}
+}) do
+    current = case.stat
+    assert(render() == '<script src="' .. path .. case.query .. '"></script>')
+end
+fs.stat = nil
+assert(render() == '<script src="' .. path .. '"></script>')
+""".replace("CBI_PATH", json.dumps((LUA / "model/cbi/smart_srun.lua").as_posix()))
+        subprocess.run([lua, "-e", script], check=True, stdin=subprocess.DEVNULL,
+                       capture_output=True, text=True, encoding="utf-8", timeout=15)
+
 
 if __name__ == "__main__":
     unittest.main()
