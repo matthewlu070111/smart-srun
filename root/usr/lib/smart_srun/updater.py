@@ -133,16 +133,6 @@ def _release_version(tag_name):
     return text
 
 
-def _version_tuple(value):
-    text = _release_version(str(value or "").strip())
-    text = text.split("-r", 1)[0]
-    nums = []
-    for part in re.split(r"[^0-9]+", text):
-        if part != "":
-            nums.append(int(part))
-    return tuple(nums or [0])
-
-
 def _version_sort_key(value):
     """把版本串解析为可比较的 key，正确处理预发布语义。
 
@@ -505,31 +495,6 @@ def _preinstall_command(paths, manager):
             "--allow-untrusted",
         ] + paths
     return ["opkg", "install", "--noaction"] + paths
-
-
-def _install_command(paths, manager):
-    if manager == "apk":
-        return [
-            "apk",
-            "add",
-            "-q",
-            "--force-overwrite",
-            "--clean-protected",
-            "--allow-untrusted",
-        ] + paths
-    return ["opkg", "install"] + paths
-
-
-def _restart_services():
-    for command in (
-        ["/etc/init.d/smart_srun", "restart"],
-        ["/etc/init.d/uwsgi", "restart"],
-    ):
-        if os.path.exists(command[0]):
-            try:
-                _run_command(command, timeout=30)
-            except Exception as exc:
-                _append_log("restart skipped: %s" % exc)
 
 
 def _pid_alive(pid):

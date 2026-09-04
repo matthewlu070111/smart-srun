@@ -8,7 +8,7 @@
       "name": "江西师范大学",
       "status": "active",
       "description": "江西师范大学预设。",
-      "doc_url": "https://github.com/matthewlu070111/smart-srun/blob/main/doc/jxnu.md",
+      "doc_url": "https://github.com/matthewlu070111/smart-srun/blob/main/doc/default.md",
       "defaults": {
         "base_url": "http://172.17.1.2",
         "ac_id": "1",
@@ -24,27 +24,12 @@
         "name": "Windows"
       },
       "operators": [
-        {
-          "suffix": "cmcc",
-          "label": "中国移动"
-        },
-        {
-          "suffix": "ctcc",
-          "label": "中国电信"
-        },
-        {
-          "suffix": "cucc",
-          "label": "中国联通"
-        },
-        {
-          "suffix": "",
-          "label": "校园网"
-        }
+        {"suffix": "cmcc", "label": "中国移动"},
+        {"suffix": "ctcc", "label": "中国电信"},
+        {"suffix": "cucc", "label": "中国联通"},
+        {"suffix": "", "label": "校园网"}
       ],
-      "contributors": [
-        "@matthewlu070111",
-        "@guiguisocute"
-      ],
+      "contributors": ["@matthewlu070111", "@guiguisocute"],
       "source_issue": ""
     },
     {
@@ -132,13 +117,6 @@
         "ac_id": "5",
         "ssid": "NCU-5G"
       },
-      "observed_login_shape": {
-        "n": "200",
-        "type": "1",
-        "enc": "srun_bx1",
-        "info_prefix": "SRBX1",
-        "double_stack": "0"
-      },
       "operators": [
         {
           "suffix": "??",
@@ -157,6 +135,13 @@
           "label": "校园网"
         }
       ],
+      "observed_login_shape": {
+        "n": "200",
+        "type": "1",
+        "enc": "srun_bx1",
+        "info_prefix": "SRBX1",
+        "double_stack": "0"
+      },
       "contributors": [
         "@guiguisocute"
       ],
@@ -172,6 +157,12 @@
         "ac_id": "39",
         "ssid": "NCUWLAN"
       },
+      "operators": [
+        {
+          "suffix": "",
+          "label": "校园网"
+        }
+      ],
       "observed_login_shape": {
         "n": "200",
         "type": "1",
@@ -179,12 +170,6 @@
         "info_prefix": "SRBX1",
         "double_stack": "0"
       },
-      "operators": [
-        {
-          "suffix": "",
-          "label": "校园网"
-        }
-      ],
       "contributors": [
         "@guiguisocute"
       ],
@@ -199,9 +184,7 @@
         "base_url": "http://10.10.184.56",
         "access_mode": "wired"
       },
-      "contributors": [
-        "@enoungh"
-      ],
+      "contributors": ["@enoungh"],
       "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/7"
     },
     {
@@ -213,9 +196,7 @@
         "ac_id": "4",
         "access_mode": "wired"
       },
-      "contributors": [
-        "@o-liverkk"
-      ],
+      "contributors": ["@o-liverkk"],
       "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/15"
     },
     {
@@ -236,26 +217,17 @@
         "double_stack": "0"
       },
       "operators": [
-        {
-          "suffix": "hcmcc",
-          "label": "中国移动"
-        },
-        {
-          "suffix": "",
-          "label": "校园网"
-        }
+        {"suffix": "hcmcc", "label": "中国移动"},
+        {"suffix": "", "label": "校园网"}
       ],
-      "contributors": [
-        "@zhaogods"
-      ],
+      "contributors": ["@zhaogods"],
       "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/20"
     },
     {
       "id": "nchu",
       "name": "南昌航空大学（前湖校区）",
       "status": "active",
-      "description": "前湖 Wi-Fi 已在 2026-07 实测登录/登出（见 doc/nchu.md）。真实后缀为 stu.nchu.edu.cn（学生用户），勿使用油猴旧版误抓的 1-@stu.nchu.edu.cn。有线拨号未覆盖。其它套餐未验证前不要臆造 cmcc/ctcc。",
-      "doc_url": "https://github.com/matthewlu070111/smart-srun/blob/main/doc/nchu.md",
+      "description": "前湖 Wi-Fi 已在 2026-07 实测登录/登出（见 doc/default.md）。真实后缀为 stu.nchu.edu.cn（学生用户），勿使用油猴旧版误抓的 1-@stu.nchu.edu.cn。有线拨号未覆盖。其它套餐未验证前不要臆造 cmcc/ctcc。",
       "defaults": {
         "base_url": "http://10.1.88.4",
         "ac_id": "1",
@@ -272,16 +244,11 @@
         "name": "Windows"
       },
       "operators": [
-        {
-          "suffix": "stu.nchu.edu.cn",
-          "label": "学生用户"
-        }
+        {"suffix": "stu.nchu.edu.cn", "label": "学生用户"}
       ],
-      "contributors": [
-        "@REALBochengWen",
-        "@guiguisocute"
-      ],
-      "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/22"
+      "contributors": ["@REALBochengWen", "@guiguisocute"],
+      "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/22",
+      "doc_url": "https://github.com/matthewlu070111/smart-srun/blob/main/doc/default.md"
     },
     {
       "id": "hsyu",
@@ -293,14 +260,9 @@
         "ac_id": "1"
       },
       "operators": [
-        {
-          "suffix": "",
-          "label": "校园网"
-        }
+        {"suffix": "", "label": "校园网"}
       ],
-      "contributors": [
-        "@issue-reporter"
-      ],
+      "contributors": ["@issue-reporter"],
       "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/18"
     },
     {
@@ -314,14 +276,9 @@
         "ssid": "LYU-WiFi7"
       },
       "operators": [
-        {
-          "suffix": "",
-          "label": "校园网"
-        }
+        {"suffix": "", "label": "校园网"}
       ],
-      "contributors": [
-        "@YHXJLB"
-      ],
+      "contributors": ["@YHXJLB"],
       "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/19"
     },
     {

@@ -332,18 +332,6 @@ local function write_config_json_unlocked(data)
     os.rename(tmp, CONFIG_FILE)
 end
 
-local function load_config_json()
-    return schema.with_file_lock(CONFIG_FILE, function()
-        return load_config_json_unlocked()
-    end)
-end
-
-local function save_config_json(data)
-    schema.with_file_lock(CONFIG_FILE, function()
-        write_config_json_unlocked(data)
-    end)
-end
-
 local function update_config_json(mutator)
     return schema.with_file_lock(CONFIG_FILE, function()
         local cfg = load_config_json_unlocked()

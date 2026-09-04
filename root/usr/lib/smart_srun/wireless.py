@@ -580,20 +580,6 @@ def profiles_match(current, expected):
     return True
 
 
-def _find_sta_by_ssid(ssid, wireless_data=None):
-    data = wireless_data if wireless_data is not None else parse_wireless_iface_data()
-    target = str(ssid or "").strip()
-    if not target:
-        return None
-    for sec in sorted(data.keys()):
-        opts = data[sec]
-        if str(opts.get("mode", "")).strip().lower() != "sta":
-            continue
-        if str(opts.get("ssid", "")).strip() == target:
-            return sec
-    return None
-
-
 def _find_sta_by_profile(profile, wireless_data=None):
     data = wireless_data if wireless_data is not None else parse_wireless_iface_data()
     target_ssid = str((profile or {}).get("ssid", "")).strip()

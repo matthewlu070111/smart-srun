@@ -6,7 +6,6 @@ import os
 import posixpath
 import re
 import shlex
-import sys
 import time
 from http import cookiejar
 from pathlib import Path

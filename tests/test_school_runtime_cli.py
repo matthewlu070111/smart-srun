@@ -960,7 +960,7 @@ class LuciSourceHardeningTests(unittest.TestCase):
         self.assertIn("Bundle 版", schema_source)
         self.assertIn("标准版", schema_source)
         self.assertIn(
-            "https://api.github.com/repos/matthewlu070111/smart-srun/releases/latest",
+            "/cgi-bin/luci/admin/services/smart_srun/update_check",
             js_source,
         )
         self.assertIn(

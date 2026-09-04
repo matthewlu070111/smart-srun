@@ -1148,38 +1148,30 @@ def _migrate_legacy_config(raw):
 # ---------------------------------------------------------------------------
 
 
-def get_active_campus_account(cfg):
-    accounts = cfg.get("campus_accounts", [])
-    if not isinstance(accounts, list) or not accounts:
+def _get_active_item(cfg, list_key, active_key, default_key):
+    """Select active, then default, then first, without copying the item."""
+    items = cfg.get(list_key, [])
+    if not isinstance(items, list) or not items:
         return {}
-    active_id = str(cfg.get("active_campus_id", "")).strip()
-    if active_id:
-        found = _find_item_by_id(accounts, active_id)
-        if found:
-            return found
-    default_id = str(cfg.get("default_campus_id", "")).strip()
-    if default_id:
-        found = _find_item_by_id(accounts, default_id)
-        if found:
-            return found
-    return accounts[0]
+    for pointer_key in (active_key, default_key):
+        target_id = str(cfg.get(pointer_key, "")).strip()
+        if target_id:
+            found = _find_item_by_id(items, target_id)
+            if found:
+                return found
+    return items[0]
+
+
+def get_active_campus_account(cfg):
+    return _get_active_item(
+        cfg, "campus_accounts", "active_campus_id", "default_campus_id"
+    )
 
 
 def get_active_hotspot_profile(cfg):
-    profiles = cfg.get("hotspot_profiles", [])
-    if not isinstance(profiles, list) or not profiles:
-        return {}
-    active_id = str(cfg.get("active_hotspot_id", "")).strip()
-    if active_id:
-        found = _find_item_by_id(profiles, active_id)
-        if found:
-            return found
-    default_id = str(cfg.get("default_hotspot_id", "")).strip()
-    if default_id:
-        found = _find_item_by_id(profiles, default_id)
-        if found:
-            return found
-    return profiles[0]
+    return _get_active_item(
+        cfg, "hotspot_profiles", "active_hotspot_id", "default_hotspot_id"
+    )
 
 
 def resolve_active_items(cfg):

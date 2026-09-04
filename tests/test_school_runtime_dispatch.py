@@ -349,7 +349,7 @@ class SchoolRuntimeDispatchTests(unittest.TestCase):
                 snapshot, "test_portal_reachability", return_value=(False, "offline")
             ),
             mock.patch.object(
-                snapshot.srun_auth,
+                srun_auth,
                 "query_online_identity",
                 side_effect=unexpected_low_level("query_online_identity"),
             ),

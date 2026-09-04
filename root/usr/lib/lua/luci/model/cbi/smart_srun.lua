@@ -123,17 +123,6 @@ local function migrate_legacy_config(parsed)
     return migrated
 end
 
-local function next_id(items, prefix)
-    local max_num = 0
-    if type(items) == "table" then
-        for _, item in ipairs(items) do
-            local ns = tostring(item.id or ""):match("^" .. prefix .. "%-(%d+)$")
-            if ns then local n = tonumber(ns); if n and n > max_num then max_num = n end end
-        end
-    end
-    return prefix .. "-" .. (max_num + 1)
-end
-
 local function load_cfg()
     ensure_json_file()
     local raw = fs.readfile(CONFIG_FILE) or "{}"

@@ -88,7 +88,7 @@ class VersionInfoTests(unittest.TestCase):
             "v1.3.0", version_info.normalize_version_string("1.3.0-r5")
         )
 
-    def test_luci_sources_accept_prerelease_versions(self):
+    def test_luci_displays_prereleases_and_uses_backend_update_decision(self):
         root = Path(WORKTREE_ROOT)
         schema = (root / "root/usr/lib/lua/luci/smart_srun/schema.lua").read_text(
             encoding="utf-8"
@@ -99,8 +99,9 @@ class VersionInfoTests(unittest.TestCase):
 
         self.assertIn("^v?([0-9][%w%._%-]*)%-r?%d+$", schema)
         self.assertIn('version = version:gsub("_", "-")', schema)
-        self.assertIn("^v?([0-9][A-Za-z0-9._-]*?)(?:-r?\\d+)?$", js)
-        self.assertIn("replace(/_/g, '-')", js)
+        self.assertIn("fetchJson(UPDATE_CHECK_URL, function(err, data)", js)
+        self.assertIn("if (err || !data || !data.ok || !data.update_available) return;", js)
+        self.assertIn("data.latest_tag || data.latest_version", js)
 
 
 if __name__ == "__main__":

@@ -7,7 +7,6 @@
   var modalType = '';
   var modalEditId = '';
   var modalSaveHandler = null;
-  var RELEASES_API_URL = 'https://api.github.com/repos/matthewlu070111/smart-srun/releases/latest';
   var RELEASES_PAGE_URL = 'https://github.com/matthewlu070111/smart-srun/releases';
   var UPDATE_CHECK_URL = '/cgi-bin/luci/admin/services/smart_srun/update_check';
   var UPDATE_START_URL = '/cgi-bin/luci/admin/services/smart_srun/update_start';
@@ -101,38 +100,6 @@
     }
     document.addEventListener('visibilitychange', runIfVisible, false);
     document.addEventListener('webkitvisibilitychange', runIfVisible, false);
-  }
-
-  function normalizeVersionText(value) {
-    var text = String(value == null ? '' : value).trim();
-    var match = text.match(/^v?([0-9][A-Za-z0-9._-]*?)(?:-r?\d+)?$/);
-    if (!match) {
-      match = text.match(/^v?(\d+(?:\.\d+)+)$/);
-      if (!match) return '';
-      return { base: match[1], release: 0 };
-    }
-    return { base: match[1].replace(/_/g, '-'), release: 0 };
-  }
-
-  function compareVersionParts(left, right) {
-    var leftParts = String(left || '0').split('.');
-    var rightParts = String(right || '0').split('.');
-    var length = Math.max(leftParts.length, rightParts.length);
-    for (var i = 0; i < length; i++) {
-      var leftNum = parseInt(leftParts[i] || '0', 10) || 0;
-      var rightNum = parseInt(rightParts[i] || '0', 10) || 0;
-      if (leftNum !== rightNum) return leftNum - rightNum;
-    }
-    return 0;
-  }
-
-  function isRemoteNewer(localVersion, remoteTag) {
-    var localInfo = normalizeVersionText(localVersion);
-    var remoteInfo = normalizeVersionText(remoteTag);
-    if (!localInfo || !remoteInfo) return false;
-    var baseCompare = compareVersionParts(localInfo.base, remoteInfo.base);
-    if (baseCompare !== 0) return baseCompare < 0;
-    return (localInfo.release || 0) < (remoteInfo.release || 0);
   }
 
   function formatUpdateStatus(data) {
@@ -607,8 +574,6 @@
     var NO_PRESET_ID = '__none__';
     // 默认不选任何学校预设：预设只负责预填写，所有字段都由用户决定。
     var selectedPresetId = NO_PRESET_ID;
-    var selectedPreset = null;
-    var presetApplied = false;
     var initialValues = {
       label: item.label || '',
       user_id: item.user_id || '',
@@ -826,8 +791,6 @@
       }
       customPresets.push(preset);
       selectedPresetId = preset.short_name;
-      selectedPreset = preset;
-      presetApplied = true;
       rebuildPresetSelect();
       pushUserPresetStore(function(err) {
         if (err) alert('预设已在本页生效，但保存到路由器失败：' + err.message);
@@ -856,8 +819,6 @@
       if (!confirm('确定删除自定义预设「' + String(customPresets[targetIdx].name || pid) + '」？')) return;
       customPresets.splice(targetIdx, 1);
       selectedPresetId = NO_PRESET_ID;
-      selectedPreset = null;
-      presetApplied = false;
       rebuildPresetSelect();
       pushUserPresetStore(function(err) {
         if (err) alert('预设已在本页删除，但保存到路由器失败：' + err.message);
@@ -878,7 +839,7 @@
         '<input id="jm-operator_suffix" value="' + escapeHtml(initialValues.operator_suffix) + '" placeholder="">' +
         '<div id="jm-operator-suffix-hint" style="display:none;color:#d97706;font-size:12px;margin-top:.25rem;"></div></div>' +
       '<div class="smart-native-row"><label>接入方式</label><select id="jm-access_mode"><option value="wifi"' + (initialValues.access_mode === 'wifi' ? ' selected' : '') + '>无线</option><option value="wired"' + (initialValues.access_mode === 'wired' ? ' selected' : '') + '>有线（指定接口）</option></select></div>' +
-      '<div class="smart-native-row" id="jm-wired-iface-row"><label>有线接口</label><input id="jm-wired_iface" value="' + escapeHtml(initialValues.wired_iface) + '" placeholder="wan.v2"><div style="color:#6b7280;font-size:12px;margin-top:.25rem;">填写 OpenWrt 逻辑接口名或 Linux 设备名；留空兼容旧配置，使用 wan。</div></div>' +
+      '<div class="smart-native-row" id="jm-wired-iface-row"><label>有线接口</label><input id="jm-wired_iface" value="' + escapeHtml(initialValues.wired_iface) + '" placeholder="wan.v2"><div style="color:#6b7280;font-size:12px;margin-top:.25rem;">填写 OpenWrt 逻辑接口名或 Linux 设备名；</div></div>' +
       '<div class="smart-native-row" id="jm-auth-enabled-row"><label>参与并行守护</label><select id="jm-auth_enabled"><option value="0"' + (initialValues.auth_enabled !== '1' ? ' selected' : '') + '>关闭</option><option value="1"' + (initialValues.auth_enabled === '1' ? ' selected' : '') + '>启用</option></select><div style="color:#6b7280;font-size:12px;margin-top:.25rem;">需同时开启页面上方“多 WAN 并行认证”；守护进程会按本账号的接口、学工号、密码和后缀独立认证。</div></div>' +
       '<div class="smart-native-row"><label>认证地址</label><input id="jm-base_url" value="' + escapeHtml(initialValues.base_url) + '"></div>' +
       '<div class="smart-native-row"><label>AC_ID</label><span><input id="jm-ac_id" value="' + escapeHtml(initialValues.ac_id) + '"> <button type="button" id="jm-detect-acid" class="btn cbi-button">嗅探</button> <span id="jm-detect-acid-status" style="margin-left:6px;color:#6b7280;"></span></span></div>' +
@@ -921,7 +882,6 @@
       var nextSuffix = nextOperators.length ? operatorSuffixOf(nextOperators[0]) : '';
       renderOperatorChoices(nextOperators.length ? nextSuffix : undefined);
       applyLoginShapeToForm(loginShape);
-      presetApplied = true;
       // 应用预设时：有运营商则用第一个联动填充后缀；无运营商则清空后缀，避免残留旧校值。
       if (nextOperators.length) {
         applyOperatorPick();
@@ -969,9 +929,7 @@
     }
 
     function resetSchoolDefaultsForm() {
-      presetApplied = false;
       selectedPresetId = NO_PRESET_ID;
-      selectedPreset = null;
       var presetSel = document.getElementById('jm-school_preset');
       if (presetSel) presetSel.value = selectedPresetId;
       // 复位：丢弃预设预填的运营商条目，保留用户自建（路由器侧存储）的条目。
@@ -1056,9 +1014,7 @@
       function() {
         document.getElementById('jm-radio').value = initialValues.radio;
         document.getElementById('jm-school_preset').addEventListener('change', function() {
-          presetApplied = false;
           selectedPresetId = this.value || NO_PRESET_ID;
-          selectedPreset = findSchoolPreset(selectedPresetId);
         });
         document.getElementById('jm-apply-school-defaults').addEventListener('click', applySchoolDefaultsToForm);
         document.getElementById('jm-reset-school-defaults').addEventListener('click', resetSchoolDefaultsForm);

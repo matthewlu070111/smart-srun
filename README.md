@@ -126,7 +126,7 @@ apk add --allow-untrusted ./luci-app-smart-srun-bundle-*.apk
 
 备用来源依次为官方 Pages 域名 `smart-srun--cloudflare-pages.pages.dev`、GitHub 原始文件、旧域名 `srun.edu-publish.site`；网络来源不可用时使用本地缓存和随包清单。
 
-学校预设只填入已知参数，账号仍需自行填写。
+学校预设只填入已知参数，账号仍需自行填写。通用配置步骤与后缀注意事项见 [默认 SRun 配置](doc/default.md)。
 
 已补录 Issue #28 的北京中医药大学参数；投稿未提供接入方式与 SSID，应用后请核对。Issue #29 的浙江工业大学采集信息保留为草稿，待插件认证复测通过后再加入默认选项。
 

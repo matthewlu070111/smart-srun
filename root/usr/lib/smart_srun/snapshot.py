@@ -26,7 +26,6 @@ from wireless import (
     get_sta_profile_from_section,
     parse_wireless_iface_data,
 )
-import srun_auth  # noqa: F401
 from school_runtime import build_app_context
 
 
