@@ -15,6 +15,8 @@ if MODULE_DIR not in sys.path:
 from _portal_urls import BIND_IP, CLIENT_IP, PORTAL_ORIGIN, WIRED_BIND_IP
 import config
 import daemon
+import network
+import srun_auth
 
 
 class _FakeRuntime(object):
@@ -83,6 +85,43 @@ class MultiWanConfigTests(unittest.TestCase):
     def test_global_switch_keeps_legacy_mode_until_explicitly_enabled(self):
         cfg = _cfg([_account("campus-1", "wan", "1001")], enabled="0")
         self.assertEqual([], config.get_managed_wired_account_configs(cfg))
+
+    def test_active_wired_account_requires_binding_even_without_automatic_guard(self):
+        raw = _cfg([_account("campus-1", "wan2", "1001", enabled="0")])
+        with mock.patch.object(config, "load_json_raw_config", return_value=raw):
+            cfg = config.load_config()
+
+        self.assertEqual("1", cfg.get("_multi_wan_strict_bind"))
+        self.assertEqual([], config.get_managed_wired_account_configs(cfg))
+        self.assertNotIn("_multi_wan_strict_bind", config._normalize_json_raw_config(cfg))
+
+    def test_manual_auth_on_missing_selected_interface_never_uses_another_wan(self):
+        raw = _cfg([_account("campus-1", "wan2", "1001")])
+        with mock.patch.object(config, "load_json_raw_config", return_value=raw):
+            cfg = config.load_config()
+        with (
+            mock.patch.object(network, "run_cmd", return_value=(False, "missing")),
+            mock.patch.object(network, "get_local_ip_for_target", return_value=BIND_IP) as route,
+            mock.patch.object(srun_auth, "http_get", return_value="") as fetch,
+        ):
+            ok, _ = srun_auth.run_once_safe(cfg)
+            logout_ok, _ = daemon.orchestrator.run_manual_logout(cfg)
+
+        self.assertFalse(ok)
+        self.assertFalse(logout_ok)
+        route.assert_not_called()
+        fetch.assert_not_called()
+
+    def test_active_binding_policy_is_recomputed_when_mode_changes(self):
+        cfg = config.resolve_active_items(_cfg([_account("campus-1", "wan2", "1001")]))
+        self.assertEqual("1", cfg.get("_multi_wan_strict_bind"))
+        cfg["multi_wan_enabled"] = "0"
+        config.resolve_active_items(cfg)
+        self.assertNotEqual("1", cfg.get("_multi_wan_strict_bind"))
+        cfg["multi_wan_enabled"] = "1"
+        cfg["campus_accounts"][0]["access_mode"] = "wifi"
+        config.resolve_active_items(cfg)
+        self.assertNotEqual("1", cfg.get("_multi_wan_strict_bind"))
 
 
 class MultiWanDaemonTests(unittest.TestCase):
@@ -182,6 +221,21 @@ class MultiWanDaemonTests(unittest.TestCase):
         self.assertEqual("retry_wait", second["status"])
         # Only the first call logs in; the second one is still inside backoff.
         self.assertEqual(1, login.call_count)
+
+    def test_long_outage_on_one_account_does_not_stop_other_accounts(self):
+        state = daemon._make_daemon_state()
+        state["wired_auth_sessions"] = {"campus-1": {"failures": 1024}}
+        with (
+            mock.patch.object(daemon, "resolve_bind_ip", return_value=BIND_IP),
+            mock.patch.object(daemon.srun_auth, "query_online_identity", return_value=(False, "", "offline")),
+            mock.patch.object(daemon.srun_auth, "run_once_safe", side_effect=[(False, "offline"), (True, "online"), (True, "online")]) as login,
+        ):
+            ids, _, _ = daemon._maintain_managed_wired_accounts(self.cfg, state, 60, now=1000)
+
+        self.assertEqual({"campus-1", "campus-2", "campus-3"}, ids)
+        self.assertEqual(3, login.call_count)
+        self.assertEqual(1060, state["wired_auth_sessions"]["campus-1"]["next_retry_at"])
+        self.assertTrue(state["wired_auth_sessions"]["campus-2"]["online"])
 
     def test_global_switch_without_selected_wired_account_stays_idle(self):
         cfg = config.resolve_active_items(

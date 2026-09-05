@@ -322,7 +322,7 @@ def resolve_bind_ip(url, cfg):
     host = extract_host_from_url(url)
     wired_mode = campus_uses_wired(cfg)
 
-    # 有线模式优先使用指定接口的 IPv4。多 WAN 守护生成的账号视图会带上
+    # 有线模式优先使用指定接口的 IPv4。多 WAN 的活动及逐账号视图会带上
     # 严格绑定标记，此时缺少接口地址必须失败，不能把认证流量发到其它 WAN；
     # 存量单有线配置没有该标记，缺地址时继续沿用原来的路由选源逻辑。
     if wired_mode:

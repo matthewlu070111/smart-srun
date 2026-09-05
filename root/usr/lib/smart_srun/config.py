@@ -997,8 +997,7 @@ def resolve_campus_account_config(cfg, account):
     resolved["active_campus_id"] = account_id
     resolved["default_campus_id"] = account_id
     resolved = resolve_active_items(resolved)
-    # 只对多 WAN 守护生成的账号视图启用严格绑定。存量单有线配置仍可在
-    # 指定接口暂时无地址时沿用原来的路由选源逻辑，避免升级后直接失效。
+    # 显式账号视图始终保留严格绑定，包括静默时段的逐账号登出。
     resolved["_multi_wan_strict_bind"] = "1"
     return resolved
 
@@ -1191,6 +1190,13 @@ def resolve_active_items(cfg):
     cfg["campus_access_mode"] = normalize_campus_access_mode(
         campus.get("access_mode", "wifi")
     )
+    # Manual actions and snapshots use the active view directly. They need the
+    # same binding as the guard when multi-WAN is enabled, even for an account
+    # not selected for automatic login. Never persist this runtime-only flag.
+    if multi_wan_enabled(cfg) and campus_uses_wired(cfg):
+        cfg["_multi_wan_strict_bind"] = "1"
+    else:
+        cfg.pop("_multi_wan_strict_bind", None)
     cfg["wired_iface"] = campus["wired_iface"]
     cfg["campus_auth_enabled"] = normalize_auth_enabled(
         campus.get("auth_enabled", "0")
