@@ -404,6 +404,35 @@ class SnapshotBindingTests(unittest.TestCase):
         portal.assert_not_called()
         runtime.query_online_identity.assert_not_called()
 
+    def test_strict_wired_account_keeps_measured_hotspot_status_after_failover(self):
+        cfg = {
+            "campus_access_mode": "wired", "wired_iface": "wan2",
+            "username": "user2", "_multi_wan_strict_bind": "1",
+            "hotspot_ssid": "Phone hotspot",
+        }
+        runtime = mock.Mock(runtime_api_version=1)
+        association = {"ssid": "Phone hotspot", "bssid": "02:11:22:33:44:55"}
+        with (
+            mock.patch.object(snapshot, "build_app_context", return_value={"runtime": runtime}),
+            mock.patch.object(snapshot, "parse_wireless_iface_data", return_value={}),
+            mock.patch.object(snapshot, "get_runtime_sta_section", return_value="sta1"),
+            mock.patch.object(snapshot, "get_sta_profile_from_section", return_value={"ssid": "Phone hotspot"}),
+            mock.patch.object(snapshot, "read_association", return_value=association),
+            mock.patch.object(snapshot, "get_network_interface_from_sta_section", return_value="wwan"),
+            mock.patch.object(snapshot, "get_ipv4_from_network_interface", return_value=CLIENT_IP),
+            mock.patch.object(snapshot, "resolve_http_binding", side_effect=RuntimeError("wan2 missing")),
+            mock.patch.object(snapshot, "test_internet_connectivity", return_value=(True, "")),
+            mock.patch.object(snapshot, "test_portal_reachability") as portal,
+        ):
+            state = snapshot.build_runtime_snapshot(cfg, {})
+
+        self.assertEqual("hotspot", state["current_mode"])
+        self.assertEqual("wwan", state["current_iface"])
+        self.assertEqual(CLIENT_IP, state["current_ip"])
+        self.assertEqual("online", state["connectivity_level"])
+        runtime.query_online_identity.assert_not_called()
+        portal.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

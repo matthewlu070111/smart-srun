@@ -25,6 +25,13 @@ def load_release_assets_module(test_case):
 
 
 class ReleaseAssetsTests(unittest.TestCase):
+    def test_release_tags_point_to_the_commit_used_by_both_build_checkouts(self):
+        for name in ("build-release.yml", "build-prerelease.yml"):
+            with self.subTest(workflow=name):
+                workflow = (REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+                self.assertEqual(2, workflow.count("ref: ${{ github.sha }}"))
+                self.assertIn("target_commitish: ${{ github.sha }}", workflow)
+
     def test_prepare_release_outputs_rejects_missing_bundle_package(self):
         release_assets = load_release_assets_module(self)
 

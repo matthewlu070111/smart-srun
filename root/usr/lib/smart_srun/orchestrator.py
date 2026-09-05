@@ -75,10 +75,14 @@ def calc_backoff_delay_seconds(cfg, failure_index):
     n_val = max(int(failure_index), 1)
     base = get_retry_cooldown_seconds(cfg)
     max_duration = get_retry_max_cooldown_seconds(cfg)
-    delay = base * math.pow(2, max(n_val - 1, 0))
-    if max_duration > 0:
-        delay = min(delay, max_duration)
-    return delay
+    if base == 0:
+        return 0.0
+    exponent = n_val - 1
+    # Saturate before exponentiation: a managed WAN can fail indefinitely, and
+    # computing 2**1024 first would crash the daemon despite the cooldown cap.
+    if exponent >= math.log2(max_duration) - math.log2(base):
+        return max_duration
+    return min(math.ldexp(base, exponent), max_duration)
 
 
 # ---------------------------------------------------------------------------

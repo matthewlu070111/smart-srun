@@ -322,6 +322,7 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ github.event.inputs.version }}-b${{ github.event.inputs.beta }}
+          target_commitish: ${{ github.sha }}
           name: v${{ github.event.inputs.version }}-b${{ github.event.inputs.beta }}
           files: |
             release-assets/*.ipk

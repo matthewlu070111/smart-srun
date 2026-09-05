@@ -15,6 +15,18 @@ if MODULE_ROOT not in sys.path:
 import orchestrator
 
 
+class BackoffSaturationTests(unittest.TestCase):
+    def test_long_outage_keeps_retry_delay_at_the_configured_cap(self):
+        cfg = {"retry_cooldown_seconds": "10", "retry_max_cooldown_seconds": "60"}
+        for failures, expected in ((1, 10), (2, 20), (3, 40), (4, 60), (1025, 60), (1000000, 60)):
+            with self.subTest(failures=failures):
+                self.assertEqual(expected, orchestrator.calc_backoff_delay_seconds(cfg, failures))
+
+    def test_zero_base_stays_zero_after_a_long_outage(self):
+        cfg = {"retry_cooldown_seconds": "0", "retry_max_cooldown_seconds": "60"}
+        self.assertEqual(0, orchestrator.calc_backoff_delay_seconds(cfg, 1025))
+
+
 class RetryInterruptionTests(unittest.TestCase):
     def setUp(self):
         self.cfg = {

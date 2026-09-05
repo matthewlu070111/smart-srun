@@ -78,7 +78,13 @@ def build_runtime_snapshot(cfg, state=None):
     net = get_network_interface_from_sta_section(section, data) if section else None
     ip = get_ipv4_from_network_interface(net) if net else None
     previous = state if state is not None else load_runtime_state()
-    wired_mode = campus_uses_wired(cfg)
+    # A measured hotspot association describes the current connection after
+    # failover, even when the selected campus account uses a missing wired WAN.
+    hotspot_active = bool(
+        ip and association.get("ssid")
+        and association["ssid"] == str(cfg.get("hotspot_ssid", "")).strip()
+    )
+    wired_mode = campus_uses_wired(cfg) and not hotspot_active
     wired_iface = get_wired_iface(cfg) if wired_mode else ""
     strict = wired_mode and str(cfg.get("_multi_wan_strict_bind", "0")).strip() == "1"
     wired_ip = (
@@ -145,7 +151,10 @@ def build_runtime_snapshot(cfg, state=None):
                 connectivity = "互联网可达"
                 connectivity_level = "online"
             else:
-                portal_ok, portal_msg = test_portal_reachability(cfg, timeout=2, **binding)
+                portal_ok, portal_msg = (
+                    (False, "") if hotspot_active
+                    else test_portal_reachability(cfg, timeout=2, **binding)
+                )
                 if portal_ok:
                     connectivity = "认证网关可达"
                     connectivity_level = "portal"
