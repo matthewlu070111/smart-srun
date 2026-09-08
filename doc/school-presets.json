@@ -8,7 +8,7 @@
       "name": "江西师范大学",
       "status": "active",
       "description": "江西师范大学预设。",
-      "doc_url": "https://smartsrun-doc.pages.dev/guide/authentication",
+      "doc_url": "https://srun-doc.guiguisocute.com/guide/authentication",
       "defaults": {
         "base_url": "http://172.17.1.2",
         "ac_id": "1",
@@ -248,7 +248,7 @@
       ],
       "contributors": ["@REALBochengWen", "@guiguisocute"],
       "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/22",
-      "doc_url": "https://smartsrun-doc.pages.dev/guide/authentication"
+      "doc_url": "https://srun-doc.guiguisocute.com/guide/authentication"
     },
     {
       "id": "hsyu",

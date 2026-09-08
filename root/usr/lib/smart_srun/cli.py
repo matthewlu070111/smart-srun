@@ -591,8 +591,8 @@ SMART SRun (srunnet)(1) -- OpenWrt 智慧深澜校园网认证客户端
 相关链接
     LuCI 页面    服务 -> SMART SRun
     项目主页    https://github.com/matthewlu070111/smart-srun
-    使用文档    https://smartsrun-doc.pages.dev
-    开发文档    https://smartsrun-doc.pages.dev/development/architecture
+    使用文档    https://srun-doc.guiguisocute.com
+    开发文档    https://srun-doc.guiguisocute.com/development/architecture
 
 许可
     WTFPL

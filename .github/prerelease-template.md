@@ -32,6 +32,6 @@ opkg install ./luci-app-smart-srun-bundle_*.ipk
 apk add --allow-untrusted ./luci-app-smart-srun-bundle-*.apk
 ```
 
-[分体包下载](${SPLIT_PACKAGES_URL}) · [安装指南](https://smartsrun-doc.pages.dev/guide/install) · [备份与更新](https://smartsrun-doc.pages.dev/reference/configuration)
+[分体包下载](${SPLIT_PACKAGES_URL}) · [安装指南](https://srun-doc.guiguisocute.com/guide/install) · [备份与更新](https://srun-doc.guiguisocute.com/reference/configuration)
 
 bundle 与分体包互斥，切换包型前先备份并移除原包型。更新内容以本次发布说明为准。

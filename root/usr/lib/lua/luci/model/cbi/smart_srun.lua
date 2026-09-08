@@ -301,10 +301,10 @@ local RADIO_CHOICES = load_radio_choices()
 
 local function render_school_info_html(strategies)
     -- 文档来自已安装的认证策略元数据，与参数预设目录分开。
-    local doc_url = "https://smartsrun-doc.pages.dev/development/architecture"
+    local doc_url = "https://srun-doc.guiguisocute.com/development/architecture"
     local selected = tostring(cfg.school or "default")
     if selected == "" or selected == "default" then
-        doc_url = "https://smartsrun-doc.pages.dev/guide/authentication"
+        doc_url = "https://srun-doc.guiguisocute.com/guide/authentication"
     end
     for _, strategy in ipairs(strategies or {}) do
         if strategy.short_name == selected and type(strategy.doc_url) == "string"

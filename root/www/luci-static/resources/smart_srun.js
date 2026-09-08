@@ -1182,14 +1182,14 @@
     if (!infoBox || !docLinkEl || window.__smartSchoolInfoInit) return;
     window.__smartSchoolInfoInit = true;
 
-    var DOC_FALLBACK = 'https://smartsrun-doc.pages.dev/development/architecture';
+    var DOC_FALLBACK = 'https://srun-doc.guiguisocute.com/development/architecture';
     function docUrlFor(value) {
       var items = readJson('smart-auth-strategy-data', []);
       if (!Array.isArray(items)) items = [];
       for (var i = 0; i < items.length; i++) {
         if (items[i] && items[i].short_name === value && /^https?:\/\//i.test(items[i].doc_url || '')) return items[i].doc_url;
       }
-      if (!value || value === 'default') return 'https://smartsrun-doc.pages.dev/guide/authentication';
+      if (!value || value === 'default') return 'https://srun-doc.guiguisocute.com/guide/authentication';
       return DOC_FALLBACK;
     }
     var outerDescEl = null;
