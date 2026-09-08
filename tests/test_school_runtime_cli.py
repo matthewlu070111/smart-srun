@@ -688,12 +688,20 @@ class HotUpdateScriptTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {}, clear=True):
             hot_update = load_hot_update_module(self)
 
-        # This asserts the deploy script's shipped default, not a test connection.
-        self.assertEqual(hot_update.ROUTER_HOST, "10.0.0.1")
+        self.assertEqual(hot_update.ROUTER_HOST, "")
         self.assertIsNone(hot_update.ROUTER_PASSWORD)
         with self.assertRaises(RuntimeError) as exc:
             hot_update.require_router_password()
         self.assertIn("SMARTSRUN_ROUTER_PASSWORD", str(exc.exception))
+
+        transport = mock.Mock()
+        with self.assertRaisesRegex(RuntimeError, "SMARTSRUN_ROUTER_HOST"):
+            hot_update.connect_ssh(transport, "fixture-password")
+        transport.SSHClient.assert_not_called()
+
+        with mock.patch.dict(os.environ, {"SMARTSRUN_ROUTER_HOST": "router.example.test"}):
+            hot_update = load_hot_update_module(self)
+        self.assertEqual(hot_update.ROUTER_HOST, "router.example.test")
 
     def test_hot_update_probe_paths_and_commands_stay_tmp_only(self):
         hot_update = load_hot_update_module(self)

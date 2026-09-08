@@ -122,8 +122,8 @@ def normalize_operator_id(value):
 def normalize_operator_suffix(value):
     text = str(value or "").strip()
     # "??" 是学校预设里"运营商后缀未经验证"的哨兵值，绝不能当作真实后缀拼进用户名，
-    # 否则会构造出 user@?? 导致登录失败。和历史占位符 "xn" 一样归一化为空。
-    return "" if text.lower() in ("xn", "??") else text
+    # 旧 operator 字段的 xn 由 normalize_operator_id 迁移；显式后缀保留原值。
+    return "" if text == "??" else text
 
 
 def wifi_key_required(encryption):
@@ -1094,20 +1094,20 @@ def _migrate_legacy_config(raw):
             )
 
     user_id = str(raw.get("user_id", "")).strip()
-    legacy_operator = normalize_operator_id(raw.get("operator", "cucc"))
+    legacy_operator = normalize_operator_id(raw.get("operator", ""))
     campus_account = {
         "id": "campus-1",
         "label": "",
         "access_mode": "wifi",
         "wired_iface": "wan",
         "auth_enabled": "0",
-        "base_url": normalize_base_url(raw.get("base_url", "http://172.17.1.2")),
+        "base_url": normalize_base_url(raw.get("base_url", "")),
         "ac_id": str(raw.get("ac_id", "1")).strip(),
         "user_id": user_id,
         "password": str(raw.get("password", "")).strip(),
         "operator": legacy_operator,
         "operator_suffix": legacy_operator,
-        "ssid": str(raw.get("campus_ssid", "jxnu_stu")).strip(),
+        "ssid": str(raw.get("campus_ssid", "")).strip(),
         "bssid": str(raw.get("campus_bssid", "")).strip(),
         "ap_selection": normalize_ap_selection(raw.get("campus_ap_selection"), raw.get("campus_bssid")),
         "radio": str(raw.get("campus_radio", "")).strip(),
@@ -1212,7 +1212,7 @@ def resolve_active_items(cfg):
     cfg["campus_encryption"] = normalize_wifi_encryption(
         str(campus.get("encryption", "none")).strip() or "none"
     )
-    cfg["campus_key"] = ""
+    cfg["campus_key"] = str(campus.get("key", "")) if wifi_key_required(cfg["campus_encryption"]) else ""
     cfg["operator_suffix"] = normalize_operator_suffix(
         campus.get("operator_suffix", "")
     )

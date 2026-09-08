@@ -308,6 +308,10 @@ def resolve_wired_binding(cfg):
 
 def resolve_http_binding(url, cfg, bind_ip=None):
     """HTTP keyword arguments; legacy callers retain source-only behavior."""
+    if cfg.get("_probe_iface"):
+        # Wizard probes may also pin a wireless uplink's netifd interface.
+        cfg = dict(cfg, campus_access_mode="wired", wired_iface=cfg["_probe_iface"],
+                   _multi_wan_strict_bind="1")
     strict = campus_uses_wired(cfg) and str(cfg.get("_multi_wan_strict_bind", "0")).strip() == "1"
     if not strict:
         return {"bind_ip": bind_ip or resolve_bind_ip(url, cfg)}
@@ -465,11 +469,25 @@ def _create_bound_connection(address, timeout, source_address, bind_device, stri
     raise OSError("getaddrinfo returns an empty list")
 
 
-def _http_get_via_stdlib(url, timeout, bind_ip, bind_device=None, strict=False, bind_iface=None):
+def decode_portal_body(raw, headers):
+    """Respect portal encodings without changing authentication JSON decoding."""
+    content_type = next((str(v) for k, v in headers.items() if k.lower() == "content-type"), "")
+    match = re.search(r"charset\s*=\s*[\"']?([a-zA-Z0-9_-]+)", content_type, re.I)
+    if not match:
+        match = re.search(r"charset\s*=\s*[\"']?([a-zA-Z0-9_-]+)", raw[:4096].decode("ascii", errors="ignore"), re.I)
+    try:
+        return raw.decode(match.group(1) if match else "utf-8", errors="replace")
+    except (LookupError, UnicodeError):
+        return raw.decode("utf-8", errors="replace")
+
+
+def _http_get_via_stdlib(url, timeout, bind_ip, bind_device=None, strict=False, bind_iface=None,
+                         return_headers=False):
     """用 stdlib http.client 发起 GET，可选绑定源 IP 和所属 L3 设备。
 
     避免依赖 wget --bind-address（BusyBox wget / uclient-fetch 都不支持），
-    在 python3-light 上即可完成多 WAN 绑定。返回 (body, status_code)。
+    使用已声明的 Python 标准库依赖完成多 WAN 绑定。返回 (body, status_code)，
+    return_headers=True 时额外返回响应头，并按门户声明的字符集解码正文。
     """
     parts = urllib_parse.urlsplit(url)
     scheme = (parts.scheme or "http").lower()
@@ -517,8 +535,11 @@ def _http_get_via_stdlib(url, timeout, bind_ip, bind_device=None, strict=False, 
     try:
         conn.request("GET", path, headers=HEADER)
         resp = conn.getresponse()
-        body = resp.read().decode("utf-8", errors="replace")
-        return body, resp.status
+        raw = resp.read()
+        if return_headers:
+            headers = dict(resp.getheaders())
+            return decode_portal_body(raw, headers), resp.status, headers
+        return raw.decode("utf-8", errors="replace"), resp.status
     finally:
         conn.close()
 
@@ -829,11 +850,36 @@ def _resolve_probe_ips(host, timeout, bind_ip=None, bind_device=None, iface=None
     return [info[4][0] for info in infos]
 
 
-def _probe_http_status(url, timeout, bind_ip=None, bind_device=None, iface=None, strict=False):
-    """裸 socket 发 HTTP GET 并只读状态行，返回状态码。仅支持 http。
+def _parse_http_head(head):
+    """把已读到的响应头字节拆成 (状态码, 小写键的头字典)。
+
+    用 latin-1 解码：它对任意字节都不抛异常，且纯 ASCII 状态行的结果与旧
+    实现逐字符一致，不会改变既有错误信息。
+    """
+    lines = head.decode("latin-1").split("\r\n")
+    fields = lines[0].split()
+    if len(fields) < 2 or not fields[1].isdigit():
+        raise ValueError("异常的 HTTP 状态行: %r" % lines[0][:64])
+    headers = {}
+    for line in lines[1:]:
+        if not line:
+            break
+        if ":" in line:
+            key, value = line.split(":", 1)
+            headers[key.strip().lower()] = value.strip()
+    return int(fields[1]), headers
+
+
+def _probe_http_head(url, timeout, bind_ip=None, bind_device=None, iface=None,
+                     strict=False, want_headers=False):
+    """裸 socket 发 HTTP GET，只读响应头，返回 (状态码, 头字典)。仅支持 http。
 
     刻意不用 urllib/http.client（缺 idna 编解码器的设备上 stdlib 解析直接
     抛错），DNS 也优先绕开本机代理链，见 _uplink_dns_servers。
+
+    want_headers=False 时在读到第一个 CRLF 就停手，与守护进程每 tick 都要跑
+    的连通性探测保持同样的字节数和耗时；只有一次性的门户嗅探才会多读到头结束，
+    因为它要的是 302 的 Location。
     """
     host, port, path = _split_http_url(url)
     last_error = None
@@ -859,22 +905,29 @@ def _probe_http_status(url, timeout, bind_ip=None, bind_device=None, iface=None,
                 "Connection: close\r\n\r\n" % (path, host, HEADER["User-Agent"])
             )
             sock.sendall(request.encode("ascii"))
+            terminator = b"\r\n\r\n" if want_headers else b"\r\n"
+            cap = 4096 if want_headers else 512
             head = b""
-            while b"\r\n" not in head and len(head) < 512:
+            while terminator not in head and len(head) < cap:
                 chunk = sock.recv(256)
                 if not chunk:
                     break
                 head += chunk
-            status_line = head.split(b"\r\n", 1)[0].decode("ascii", "replace")
-            fields = status_line.split()
-            if len(fields) < 2 or not fields[1].isdigit():
-                raise ValueError("异常的 HTTP 状态行: %r" % status_line[:64])
-            return int(fields[1])
+            return _parse_http_head(head)
         except Exception as exc:
             last_error = exc
         finally:
             sock.close()
     raise last_error if last_error else OSError("无可用探测地址")
+
+
+def _probe_http_status(url, timeout, bind_ip=None, bind_device=None, iface=None, strict=False):
+    """连通性探测用的窄接口：只要状态码。守护进程热路径走这里。"""
+    status, _headers = _probe_http_head(
+        url, timeout, bind_ip=bind_ip, bind_device=bind_device,
+        iface=iface, strict=strict,
+    )
+    return status
 
 
 def test_internet_connectivity(timeout=5, bind_ip=None, bind_device=None, iface=None, strict=False, bind_iface=None):
@@ -925,6 +978,50 @@ def test_internet_connectivity(timeout=5, bind_ip=None, bind_device=None, iface=
             )
             return False, "疑似被重定向到认证页面"
     return False, "无法访问连通性检测服务器"
+
+
+def probe_captive_portal(timeout=5, bind_ip=None, bind_device=None, iface=None,
+                         strict=False, bind_iface=None):
+    """一次性探测：这条出口是直连、被门户劫持、还是完全不通。
+
+    劫持时把 302 的 Location 一并带出来——那正是本校认证页的地址，用户最
+    填不出来的一项。守护进程的 test_internet_connectivity 只要状态码，故意
+    不共用这条路径：它每 tick 都跑，不该为一个一次性的界面功能多读字节。
+
+    返回 location 原样，不做拼接：相对地址的解析属于 URL 语义，交给
+    portal_detect 处理，network 这一层不反向依赖它。
+    """
+    iface = bind_iface or iface
+    binding = {"bind_ip": bind_ip, "bind_device": bind_device,
+               "iface": iface, "strict": strict}
+    last_error = ""
+    for url in CONNECTIVITY_CHECK_URLS:
+        with timed() as t:
+            try:
+                status, headers = _probe_http_head(
+                    url, timeout, want_headers=True, **binding
+                )
+            except Exception as exc:
+                last_error = str(exc)
+                log("DEBUG", "captive_probe_result", url=url, outcome="error",
+                    duration_ms=t.ms, error=last_error)
+                continue
+            if status == 204:
+                log("DEBUG", "captive_probe_result", url=url, outcome="online",
+                    status_code=status, duration_ms=t.ms)
+                return {"state": "online", "checked_url": url, "status_code": status,
+                        "location": "", "message": "出口可直连外网"}
+            location = headers.get("location", "")
+            log("DEBUG", "captive_probe_result", url=url, outcome="portal",
+                status_code=status, duration_ms=t.ms)
+            return {
+                "state": "portal", "checked_url": url, "status_code": status,
+                "location": location,
+                "message": ("已捕获认证页跳转地址" if location
+                            else "出口被拦截，但响应里没有跳转地址"),
+            }
+    return {"state": "down", "checked_url": "", "status_code": 0, "location": "",
+            "message": last_error or "无法访问任何连通性检测服务器"}
 
 
 def test_portal_reachability(cfg, timeout=3, bind_ip=None, bind_device=None, strict=False, bind_iface=None):

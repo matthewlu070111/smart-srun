@@ -13,6 +13,7 @@ from unittest import mock
 REPO_ROOT = Path(__file__).resolve().parents[1]
 KEEP_PATH = "/lib/upgrade/keep.d/smart-srun"
 CONFIG_PATH = "/usr/lib/smart_srun/config.json"
+USER_PRESETS_PATH = "/usr/lib/smart_srun/user_presets.json"
 
 
 def read_source(relative_path):
@@ -26,7 +27,7 @@ class SysupgradeBackupTests(unittest.TestCase):
             for line in read_source("root" + KEEP_PATH).splitlines()
             if line.strip() and not line.lstrip().startswith("#")
         ]
-        self.assertEqual(entries, [CONFIG_PATH])
+        self.assertEqual(entries, [CONFIG_PATH, USER_PRESETS_PATH])
 
         config_tree = ast.parse(read_source("root/usr/lib/smart_srun/config.py"))
         config_path = next(
@@ -45,8 +46,11 @@ class SysupgradeBackupTests(unittest.TestCase):
         ):
             self.assertIn('local CONFIG_FILE = "%s"' % CONFIG_PATH,
                           read_source(relative_path))
-        # The package must not ship a default config over restored credentials.
-        self.assertFalse((REPO_ROOT / ("root" + CONFIG_PATH)).exists())
+            self.assertIn('local USER_PRESETS_FILE = "%s"' % USER_PRESETS_PATH,
+                          read_source(relative_path))
+        # The package must not ship defaults over restored user data.
+        for path in (CONFIG_PATH, USER_PRESETS_PATH):
+            self.assertFalse((REPO_ROOT / ("root" + path)).exists())
 
     def test_both_runtime_packages_install_the_backup_rule_as_data(self):
         makefile = read_source("Makefile")

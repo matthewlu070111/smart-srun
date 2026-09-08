@@ -23,6 +23,17 @@ SPEC = importlib.util.spec_from_file_location(
 syncer = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(syncer)
 
+# Match any owner/repo/ref so a fork or a rename cannot silently stop checking
+# the links instead of failing on a broken one.
+DOC_LINK_RE = re.compile(r"^/[^/]+/[^/]+/blob/[^/]+/doc/(?P<path>.+)$")
+
+# Every spelling `_normalize_observed_login_shape` consumes. Catching a typo is
+# the point; the published values themselves belong to whoever captured them.
+LOGIN_SHAPE_KEYS = frozenset(
+    ("n", "type", "enc", "double_stack", "info_prefix",
+     "os", "name", "login_os", "login_name")
+)
+
 
 class PresetCatalogueTests(unittest.TestCase):
     @classmethod
@@ -38,12 +49,12 @@ class PresetCatalogueTests(unittest.TestCase):
         self.assertEqual(fallback, self.payload)
 
     def test_links_to_repository_docs_have_existing_targets(self):
-        prefix = "/matthewlu070111/smart-srun/blob/main/doc/"
         for school in self.payload["schools"]:
             url = urlsplit(school.get("doc_url", ""))
-            if url.netloc == "github.com" and url.path.startswith(prefix):
+            link = DOC_LINK_RE.match(url.path) if url.netloc == "github.com" else None
+            if link:
                 with self.subTest(school=school["id"]):
-                    target = REPO_ROOT / "doc" / unquote(url.path[len(prefix):])
+                    target = REPO_ROOT / "doc" / unquote(link.group("path"))
                     self.assertTrue(target.is_file(), school["doc_url"])
 
     def test_catalogue_ids_and_present_values_are_valid_without_filling_unknowns(self):
@@ -67,42 +78,20 @@ class PresetCatalogueTests(unittest.TestCase):
                     self.assertIsInstance(operator.get("suffix"), str)
                     self.assertTrue(operator.get("label", "").strip())
                     self.assertNotIn("id", operator)
-                for value in school.get("observed_login_shape", {}).values():
+                shape = school.get("observed_login_shape", {})
+                self.assertLessEqual(set(shape), LOGIN_SHAPE_KEYS)
+                for value in shape.values():
                     self.assertIsInstance(value, str)
 
-    def test_issue_28_keeps_submitted_status_and_does_not_guess_access(self):
-        school = self.schools["bucm"]
-        self.assertEqual(school["name"], "北京中医药大学")
-        self.assertEqual(school["status"], "active")
-        self.assertEqual(school["defaults"], {"base_url": "http://10.2.20.20", "ac_id": "9"})
-        self.assertEqual(school["operators"], [{"suffix": "", "label": "校园网"}])
-        self.assertEqual(school["contributors"], ["@1036598718"])
-        self.assertEqual(school["source_issue"], "https://github.com/matthewlu070111/smart-srun/issues/28")
-        self.assertIn("未说明接入方式", school["description"])
-
-    def test_issue_29_capture_is_draft_until_standalone_auth_is_verified(self):
-        school = self.schools["zjut"]
-        self.assertEqual(school["name"], "浙江工业大学")
-        self.assertEqual(school["status"], "draft")
-        self.assertEqual(school["defaults"], {
-            "base_url": "http://192.168.210.171", "ac_id": "3", "access_mode": "wired",
-        })
-        self.assertEqual(school["operators"], [{"suffix": "", "label": "校园网"}])
-        self.assertEqual(school["contributors"], ["@RCaquaer"])
-        self.assertEqual(school["source_issue"], "https://github.com/matthewlu070111/smart-srun/issues/29")
-        self.assertIn("插件独立认证尚未验证", school["description"])
-        visible = {item["short_name"] for item in school_presets.normalize_payload(self.payload)}
-        with_drafts = {item["short_name"] for item in school_presets.normalize_payload(self.payload, include_draft=True)}
-        self.assertIn("bucm", visible)
-        self.assertNotIn("zjut", visible)
-        self.assertIn("zjut", with_drafts)
-
-    def test_issue_capture_login_shapes_are_preserved(self):
-        shape = {"n": "200", "type": "1", "enc": "srun_bx1", "info_prefix": "SRBX1",
-                 "double_stack": "0", "os": "Windows 10", "name": "Windows"}
-        for school_id in ("bucm", "zjut"):
-            with self.subTest(school=school_id):
-                self.assertEqual(self.schools[school_id]["observed_login_shape"], shape)
+    def test_published_status_decides_visibility_without_naming_any_school(self):
+        active = {school["id"] for school in self.payload["schools"]
+                  if school["status"] == "active"}
+        visible = {item["short_name"]
+                   for item in school_presets.normalize_payload(self.payload)}
+        with_drafts = {item["short_name"] for item
+                       in school_presets.normalize_payload(self.payload, include_draft=True)}
+        self.assertEqual(visible, active)
+        self.assertEqual(with_drafts, set(self.schools))
 
 
 class PresetSynchronizationTests(unittest.TestCase):

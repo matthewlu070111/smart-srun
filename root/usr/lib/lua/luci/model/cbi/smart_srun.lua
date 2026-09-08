@@ -98,17 +98,17 @@ local function migrate_legacy_config(parsed)
         migrated[key] = parsed[key] ~= nil and tostring(parsed[key]) or (SCALAR_DEFAULTS[key] or "")
     end
     local uid = tostring(parsed.user_id or ""):match("^%s*(.-)%s*$")
-    local op = tostring(parsed.operator or "cucc"):match("^%s*(.-)%s*$"):lower()
-    local suffix = op ~= "xn" and op or ""
+    local op = tostring(parsed.operator or ""):match("^%s*(.-)%s*$"):lower()
+    local suffix = op ~= "xn" and op ~= "??" and op or ""
     local ca = {
         id = "campus-1", label = "",
-        base_url = tostring(parsed.base_url or "http://172.17.1.2"):match("^%s*(.-)%s*$"),
+        base_url = tostring(parsed.base_url or ""):match("^%s*(.-)%s*$"),
         ac_id = tostring(parsed.ac_id or "1"):match("^%s*(.-)%s*$"),
         user_id = uid, password = tostring(parsed.password or ""):match("^%s*(.-)%s*$"),
         operator = op, operator_suffix = suffix,
         wired_iface = "wan",
         auth_enabled = "0",
-        ssid = tostring(parsed.campus_ssid or "jxnu_stu"):match("^%s*(.-)%s*$"),
+        ssid = tostring(parsed.campus_ssid or ""):match("^%s*(.-)%s*$"),
         bssid = tostring(parsed.campus_bssid or ""):match("^%s*(.-)%s*$"),
         ap_selection = schema.normalize_ap_selection(parsed.campus_ap_selection, parsed.campus_bssid),
     }
@@ -299,27 +299,31 @@ end
 
 local RADIO_CHOICES = load_radio_choices()
 
-local function render_school_info_html()
-    local helper_prefix = "如果该配置无法在您的学校使用，请直接前往"
-    local helper_suffix = "提交 Issue 或 PR"
-    local helper_link = "https://github.com/matthewlu070111/smart-srun"
-    -- 初始渲染统一指向 doc 目录（永不 404）；前端 JS 会按预设的 doc_url 覆写为具体文档。
-    local doc_url = "https://github.com/matthewlu070111/smart-srun/tree/main/doc"
+local function render_school_info_html(strategies)
+    -- 文档来自已安装的认证策略元数据，与参数预设目录分开。
+    local doc_url = "https://smartsrun-doc.pages.dev/development/architecture"
+    local selected = tostring(cfg.school or "default")
+    if selected == "" or selected == "default" then
+        doc_url = "https://smartsrun-doc.pages.dev/guide/authentication"
+    end
+    for _, strategy in ipairs(strategies or {}) do
+        if strategy.short_name == selected and type(strategy.doc_url) == "string"
+            and strategy.doc_url:match("^https?://") then
+            doc_url = strategy.doc_url
+            break
+        end
+    end
 
     return string.format([[
 <div id="smart-school-info" class="cbi-value-description" style="color:#14532d;opacity:0.9;display:block;line-height:1.6;">
   <div id="smart-school-doclink" style="display:block;">
-    <a id="smart-school-doc-link" href="%s" target="_blank" rel="noopener noreferrer">点击查看学校预设文档</a>
-  </div>
-  <div id="smart-school-helper" style="display:block;margin-top:4px;color:#6b7280;font-size:0.92em;">
-    %s<a id="smart-school-repo-link" href="%s" target="_blank" rel="noopener noreferrer">插件仓库</a>%s
+    <a id="smart-school-doc-link" href="%s" target="_blank" rel="noopener noreferrer">认证策略说明</a>
   </div>
 </div>
+<textarea id="smart-auth-strategy-data" style="display:none;">%s</textarea>
 ]],
-        doc_url,
-        helper_prefix,
-        helper_link,
-        helper_suffix)
+        util.pcdata(doc_url),
+        util.pcdata(jsonc.stringify(strategies or {}) or "[]"))
 end
 
 local function ensure_school_extra_table()
@@ -455,7 +459,7 @@ end
 cfg = load_cfg()
 changed = false
 
--- 加载学校 Profile 列表
+-- 加载已安装的认证策略列表。
 local schools_json = select(1, run_client("schools", false)) or ""
 local schools = jsonc.parse(schools_json)
 if type(schools) ~= "table" then schools = {} end
@@ -552,30 +556,70 @@ overview_status = overview:option(DummyValue, "_overview_status", "")
 overview_status.rawhtml = true
 function overview_status.cfgvalue()
     local state = load_state()
-    local function observed(value, suffix)
-        if value == nil or tostring(value) == "" then return "未知" end
-        return util.pcdata(tostring(value)) .. (suffix or "")
+    local function field(label, value, mono, unit)
+        local text = "未知"
+        if value ~= nil and tostring(value) ~= "" then text = tostring(value) .. (unit or "") end
+        return '<div class="smart-overview-field"><dt>' .. util.pcdata(label) .. '</dt><dd'
+            .. (mono and ' class="smart-overview-mono"' or '') .. '>' .. util.pcdata(text) .. '</dd></div>'
     end
-    local wireless_meta = '<span>实际 AP: ' .. observed(state.current_bssid) .. '</span>'
-        .. '<span>无线接口: ' .. observed(state.current_wireless_ifname) .. '</span>'
-        .. '<span>信号: ' .. observed(tonumber(state.current_signal), ' dBm') .. '</span>'
-        .. '<span>信道: ' .. observed(tonumber(state.current_channel)) .. '</span>'
-    if state.current_campus_access_mode == "wired" or state.mode_label == "校园网模式（有线）" then
-        wireless_meta = ""
-    elseif state.current_mode ~= "hotspot" then
-        wireless_meta = wireless_meta
-            .. '<span>AP 选择: ' .. util.pcdata(schema.ap_selection_label(state.ap_selection_policy)) .. '</span>'
-            .. '<span>选择说明: ' .. observed(state.ap_selection_reason) .. '</span>'
+    local function group(label, fields)
+        return '<section class="smart-overview-group"><h5>' .. util.pcdata(label) .. '</h5><dl>' .. fields .. '</dl></section>'
     end
+    local wired = state.current_campus_access_mode == "wired" or state.mode_label == "校园网模式（有线）"
+    local wireless_meta = ""
+    local runtime_meta = field('模式', state.mode_label)
+    if not wired then
+        wireless_meta = group('无线连接', field('实际 AP', state.current_bssid, true)
+            .. field('无线接口', state.current_wireless_ifname, true)
+            .. field('信号', tonumber(state.current_signal), true, ' dBm')
+            .. field('信道', tonumber(state.current_channel), true))
+        if state.current_mode ~= "hotspot" and state.mode_label ~= "热点模式" then
+            runtime_meta = runtime_meta .. field('AP 选择', schema.ap_selection_label(state.ap_selection_policy))
+                .. field('选择说明', state.ap_selection_reason)
+        end
+    end
+    local details_meta = group('网络连接', field('网络接口', state.current_iface, true)
+        .. field('IP 地址', state.current_ip, true)) .. wireless_meta .. group('运行信息', runtime_meta)
     return render_js_asset_tag() .. [[
-<div id="smart-srun-overview" style="margin:4px 0 18px 0;border-left:4px solid #c62828;background:rgba(128,128,128,.08);padding:14px 16px;border-radius:0 6px 6px 0;box-shadow:none;">
-  <div id="smart-srun-overview-title" style="font-size:18px;font-weight:700;color:#1f2937;margin-bottom:8px;">状态读取中</div>
-  <div id="smart-srun-overview-meta" style="font-size:13px;color:#374151;display:flex;gap:14px;flex-wrap:wrap;line-height:1.6;">
-    <span>WiFi: --</span>
-    <span>模式: --</span>
-    <span>连通性: --</span>
-]] .. wireless_meta .. [[
+<style>
+#smart-srun-overview{margin:4px 0 18px;border:1px solid rgba(128,128,128,.18);border-left:4px solid #88909c;background:rgba(128,128,128,.035);padding:20px 24px;border-radius:8px;box-shadow:none;overflow-wrap:anywhere;line-height:1.5;}
+#smart-srun-overview .smart-overview-header{display:flex;align-items:center;gap:24px 36px;flex-wrap:wrap;}
+#smart-srun-overview-title{display:flex;align-items:baseline;gap:10px;font-size:22px;font-weight:700;letter-spacing:.02em;line-height:1.35;max-width:100%;}
+#smart-srun-overview-title::before{content:"";display:inline-block;flex:none;width:9px;height:9px;border-radius:50%;background:currentColor;align-self:center;}
+#smart-srun-overview-meta{display:flex;gap:16px 36px;flex-wrap:wrap;min-width:0;font-size:13px;}
+#smart-srun-overview .smart-overview-primary{min-width:120px;max-width:100%;}
+#smart-srun-overview .smart-overview-primary>span{display:block;font-size:12px;opacity:.7;margin-bottom:3px;}
+#smart-srun-overview .smart-overview-primary>strong{display:block;font-size:16px;font-weight:600;line-height:1.5;color:inherit;}
+#smart-srun-overview-pending{margin-top:14px;padding:8px 12px;border-radius:5px;background:rgba(128,128,128,.1);font-size:13px;}
+#smart-srun-overview-details{margin-top:16px;font-size:13px;}
+#smart-srun-overview-details>summary{cursor:pointer;width:fit-content;font-size:12px;opacity:.75;list-style:none;display:flex;align-items:center;gap:7px;padding:3px 0;}
+#smart-srun-overview-details>summary::-webkit-details-marker{display:none;}
+#smart-srun-overview-details>summary::before{content:"";width:5px;height:5px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(-45deg);transition:transform .15s;}
+#smart-srun-overview-details[open]>summary::before{transform:rotate(45deg);}
+#smart-srun-overview-details>summary:hover,#smart-srun-overview-details>summary:focus{opacity:1;}
+#smart-srun-overview-details>summary:focus-visible{outline:2px solid currentColor;outline-offset:4px;border-radius:2px;}
+#smart-srun-overview-details-content{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:24px 32px;margin-top:16px;padding-top:20px;border-top:1px solid rgba(128,128,128,.2);}
+#smart-srun-overview .smart-overview-group{min-width:0;margin:0;padding:0;}
+#smart-srun-overview .smart-overview-group>h5{margin:0 0 14px;padding:0;border:0;background:none;color:inherit;font-size:13px;font-weight:700;line-height:1.5;}
+#smart-srun-overview .smart-overview-group>dl{margin:0;padding:0;display:grid;gap:12px;}
+#smart-srun-overview .smart-overview-field{display:grid;grid-template-columns:74px minmax(0,1fr);align-items:baseline;gap:12px;}
+#smart-srun-overview .smart-overview-field>dt{margin:0;padding:0;opacity:.7;font-size:12px;font-weight:400;}
+#smart-srun-overview .smart-overview-field>dd{margin:0;padding:0;font-size:13px;font-weight:500;line-height:1.6;min-width:0;}
+#smart-srun-overview .smart-overview-mono{font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;font-variant-numeric:tabular-nums;}
+@media(max-width:600px){#smart-srun-overview{padding:16px;}#smart-srun-overview .smart-overview-header{display:block;}#smart-srun-overview-title{font-size:20px;}#smart-srun-overview-meta{margin-top:16px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;}#smart-srun-overview .smart-overview-primary{min-width:0;}#smart-srun-overview .smart-overview-primary>strong{font-size:15px;}#smart-srun-overview-details-content{grid-template-columns:minmax(0,1fr);gap:22px;}#smart-srun-overview .smart-overview-group+.smart-overview-group{border-top:1px solid rgba(128,128,128,.15);padding-top:18px;}}
+</style>
+<div id="smart-srun-overview">
+  <div class="smart-overview-header">
+    <div id="smart-srun-overview-title" role="status">状态读取中</div>
+    <div id="smart-srun-overview-meta">正在获取连接信息…</div>
   </div>
+  <div id="smart-srun-overview-pending" style="display:none;"></div>
+  <details id="smart-srun-overview-details">
+    <summary>连接详情</summary>
+    <div id="smart-srun-overview-details-content">
+]] .. details_meta .. [[
+    </div>
+  </details>
 </div>
 ]]
 end
@@ -587,10 +631,10 @@ s:tab("basic", "基础设置")
 s:tab("advanced", "进阶设置")
 s:tab("log", "日志")
 
--- 学校配置选择器
-school = s:taboption("basic", ListValue, "school", "学校预设")
+-- 认证策略选择器；school 为兼容已有配置保留的运行时标识。
+school = s:taboption("basic", ListValue, "school", "认证策略")
 -- "default" 是内置通用深澜运行时：不绑定任何学校，作为出厂默认值。
-school:value("default", "通用配置")
+school:value("default", "通用深澜认证")
 local school_current = util.trim(tostring(cfg.school or ""))
 local school_listed = school_current == "" or school_current == "default"
 for _, sch in ipairs(schools) do
@@ -629,7 +673,7 @@ function school.write(self, section, value)
     end
     set_value("school", next_school)
 end
-school.description = render_school_info_html()
+school.description = render_school_info_html(schools)
 
 if school_runtime_renderable then
     for idx, descriptor in ipairs(school_runtime_descriptors) do
@@ -683,6 +727,19 @@ if school_runtime_renderable then
     end
 end
 
+-- 一键配置：面向没配过校园网的用户。放在学校预设和手动登录之间——先有能用的
+-- 配置，才谈得上手动登录。
+setup_wizard = s:taboption("basic", DummyValue, "_setup_wizard", "一键配置")
+setup_wizard.rawhtml = true
+function setup_wizard.cfgvalue()
+    return [[
+<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+  <button id="smart-srun-setup-wizard" type="button" class="cbi-button cbi-button-action">开始一键配置</button>
+  <span id="smart-srun-setup-wizard-hint" style="color:#666;"></span>
+</div>
+]]
+end
+
 manual_login = s:taboption("basic", DummyValue, "_manual_login", "手动登录")
 manual_login.rawhtml = true
 function manual_login.cfgvalue()
@@ -697,11 +754,11 @@ function manual_login.cfgvalue()
 end
 
 enabled = s:taboption("basic", Flag, "enabled", "启用")
-enabled.description = "仅控制后台自动登录守护服务（自动检测、自动重连、按时段自动上下线/切网）。手动登录和手动登出始终可用，不受此开关影响。"
+enabled.description = "自动认证、断线重连与定时切网；不影响手动登录、登出。"
 bind_flag(enabled, "enabled")
 
 multi_wan_enabled = s:taboption("basic", Flag, "multi_wan_enabled", "多 WAN 并行认证")
-multi_wan_enabled.description = "开启后，后台会同时维护账号表中勾选“参与并行守护”的所有有线账号；每个账号使用自己的学工号、密码、运营商后缀和有线接口。"
+multi_wan_enabled.description = "同时维护已勾选“参与并行守护”的有线账号。"
 bind_flag(multi_wan_enabled, "multi_wan_enabled")
 
 quiet_desc = "当前下线/上线时间：" .. tostring(cfg.quiet_start or "00:00") .. " / " .. tostring(cfg.quiet_end or "06:00")

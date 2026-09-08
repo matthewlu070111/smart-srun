@@ -17,6 +17,7 @@ for path in (THIS_DIR, MODULE_ROOT):
 from _portal_urls import (  # noqa: E402
     CONNECTIVITY_PROBE_URL,
     DNS_SERVER_IP,
+    PORTAL_ACID9_PAGE_URL,
     PORTAL_BARE_HOST,
     PORTAL_DNS_NAME,
     PORTAL_IPV4_HOST,
@@ -237,6 +238,95 @@ class InternetConnectivityProbeTests(unittest.TestCase):
                 network.test_portal_reachability(cfg, timeout=2), (True, "")
             )
         fetch.assert_called_once_with(cfg["base_url"], timeout=2, **binding)
+
+
+class CaptivePortalProbeTests(unittest.TestCase):
+    """强制门户探测：302 的 Location 就是本校认证页地址。
+
+    守护进程的连通性探测只要状态码，每 tick 都跑；门户嗅探是一次性的、要多读
+    到响应头结束。两者共用 socket 逻辑但不能共用读取预算，下面第一组测试就是
+    钉住这条边界。
+    """
+
+    def _socket_returning(self, chunks):
+        sock = mock.Mock()
+        sock.recv.side_effect = list(chunks) + [b""]
+        return sock
+
+    def _probe(self, sock, **kwargs):
+        with (
+            mock.patch.object(network, "validate_ip_device_binding"),
+            mock.patch.object(network.socket, "socket", return_value=sock),
+        ):
+            return network._probe_http_head(
+                PORTAL_IPV4_ORIGIN + "/generate_204", 2, **kwargs
+            )
+
+    def test_status_only_probe_stops_at_the_first_crlf(self):
+        # 守护进程热路径的读取预算不能因为新增门户嗅探而变大。
+        sock = self._socket_returning([
+            b"HTTP/1.1 204 No Content\r\n",
+            b"Server: should-not-be-read\r\n\r\n",
+        ])
+        with (
+            mock.patch.object(network, "validate_ip_device_binding"),
+            mock.patch.object(network.socket, "socket", return_value=sock),
+        ):
+            status = network._probe_http_status(PORTAL_IPV4_ORIGIN + "/generate_204", 2)
+        self.assertEqual(status, 204)
+        self.assertEqual(sock.recv.call_count, 1)
+
+    def test_header_probe_reads_until_headers_end_and_exposes_location(self):
+        sock = self._socket_returning([
+            b"HTTP/1.1 302 Found\r\n",
+            b"Location: " + PORTAL_ACID9_PAGE_URL.encode("ascii") + b"\r\n",
+            b"Content-Length: 0\r\n\r\n",
+        ])
+        status, headers = self._probe(sock, want_headers=True)
+        self.assertEqual(status, 302)
+        self.assertEqual(headers["location"], PORTAL_ACID9_PAGE_URL)
+        self.assertEqual(headers["content-length"], "0")
+
+    def test_header_keys_are_lowercased_and_malformed_status_still_raises(self):
+        sock = self._socket_returning([b"HTTP/1.1 302 Found\r\nLOCATION: /x\r\n\r\n"])
+        self.assertEqual(self._probe(sock, want_headers=True)[1]["location"], "/x")
+
+        bad = self._socket_returning([b"not-a-status-line\r\n\r\n"])
+        with self.assertRaises(ValueError):
+            self._probe(bad, want_headers=True)
+
+    def test_captive_probe_reports_online_without_a_portal_url(self):
+        with mock.patch.object(network, "_probe_http_head", return_value=(204, {})):
+            result = network.probe_captive_portal(timeout=2)
+        self.assertEqual(result["state"], "online")
+        self.assertEqual(result["location"], "")
+
+    def test_captive_probe_hands_back_the_redirect_target(self):
+        with mock.patch.object(
+            network, "_probe_http_head",
+            return_value=(302, {"location": PORTAL_ACID9_PAGE_URL}),
+        ) as probe:
+            result = network.probe_captive_portal(timeout=2)
+        self.assertEqual(result["state"], "portal")
+        self.assertEqual(result["location"], PORTAL_ACID9_PAGE_URL)
+        self.assertEqual(result["status_code"], 302)
+        self.assertTrue(probe.call_args.kwargs["want_headers"])
+
+    def test_captive_probe_reports_intercepted_without_location(self):
+        # 部分门户直接回 200 + HTML 跳转：仍算被拦截，交给上层读正文。
+        with mock.patch.object(network, "_probe_http_head", return_value=(200, {})):
+            result = network.probe_captive_portal(timeout=2)
+        self.assertEqual(result["state"], "portal")
+        self.assertEqual(result["location"], "")
+
+    def test_captive_probe_reports_down_after_every_url_fails(self):
+        with mock.patch.object(
+            network, "_probe_http_head", side_effect=OSError("unreachable")
+        ) as probe:
+            result = network.probe_captive_portal(timeout=2)
+        self.assertEqual(result["state"], "down")
+        self.assertEqual(probe.call_count, len(network.CONNECTIVITY_CHECK_URLS))
+        self.assertIn("unreachable", result["message"])
 
 
 if __name__ == "__main__":

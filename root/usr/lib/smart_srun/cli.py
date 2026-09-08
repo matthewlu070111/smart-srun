@@ -36,9 +36,9 @@ TOP_EPILOG = (
     "  配置      config show / config get KEY / config set KEY=VAL [...]\n"
     "            config account [add|edit|rm|default] [ID]\n"
     "            config hotspot [add|edit|rm|default] [ID]\n"
-    "  学校      schools / schools inspect --selected\n"
+    "  策略      schools / schools inspect --selected\n"
     "  预设      presets list / presets refresh\n"
-    "  探测      detect acid [BASE_URL]\n"
+    "  探测      detect env | detect acid [BASE_URL] | detect operators | detect operator | detect wifi\n"
     "  更新      update check / update run / update status\n"
     "  帮助      help [COMMAND] / man / --version\n"
     "\n"
@@ -60,6 +60,30 @@ def _make_subparser(sub, name, *, help_text, description, epilog=None):
         epilog=epilog,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+
+
+def _read_probe_payload(path):
+    """读取一次性探测参数并立刻删除该文件。
+
+    密码不能出现在 argv 里——同机任何用户 ps 一下就能看见。调用方（LuCI）用
+    0600 权限写入 /tmp，这里读完即删，把暴露窗口压到最短。
+    """
+    import os
+
+    target = str(path or "").strip()
+    if not target:
+        return {}
+    try:
+        with open(target, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        data = {}
+    finally:
+        try:
+            os.unlink(target)
+        except OSError:
+            pass
+    return data if isinstance(data, dict) else {}
 
 
 def _build_parser():
@@ -184,6 +208,50 @@ def _build_parser():
         "--reality-url",
         default="",
         help="可选：先访问一个会被校园网劫持的 HTTP 地址并从跳转中提取 ac_id",
+    )
+    p_detect_env = _make_subparser(
+        detect_sub,
+        "env",
+        help_text="自检出口状态并捕获认证页地址",
+        description=(
+            "判断当前出口是直连、被强制门户拦截还是不通；被拦截时从跳转中"
+            "取出认证地址与 AC_ID。不需要预先填写任何地址。"
+        ),
+    )
+    p_detect_operators = _make_subparser(detect_sub, "operators", help_text="从认证页读取认证后缀",
+                                       description="读取学校认证页的账号类型与后缀，不提交账号密码。")
+    p_detect_operators.add_argument("base_url")
+    p_detect_operators.add_argument("--ac-id", default="")
+    for probe_parser in (p_detect_acid, p_detect_env, p_detect_operators):
+        probe_parser.add_argument("--access-mode", choices=("wired", "wifi"), default="")
+        probe_parser.add_argument("--iface", default="", help="只使用该出口接口探测")
+        probe_parser.add_argument("--ssid", default="", help="匹配已连接的校园网 Wi-Fi")
+    p_detect_env.add_argument("--base-url", default="", help="已在线时仍检查此认证地址")
+    p_detect_env.add_argument("--school", default="", help="检查此学校预设的认证地址")
+    p_detect_wifi = _make_subparser(detect_sub, "wifi", help_text="连接校园 Wi-Fi 并支持失败回滚",
+                                  description="配置临时无线客户端，确认后保留，失败或取消后恢复原网络。")
+    p_detect_wifi.add_argument("--payload", default="")
+    p_detect_wifi.add_argument("--status", default="")
+    p_detect_wifi.add_argument("--cancel", default="")
+    p_detect_wifi.add_argument("--commit", default="")
+    p_detect_wifi.add_argument("--account", default="")
+    p_detect_wifi.add_argument("--ssid", default="")
+    p_detect_operator = _make_subparser(
+        detect_sub,
+        "operator",
+        help_text="识别或验证账号的认证后缀",
+        description=(
+            "读取在线账号的认证后缀，或使用已知后缀验证登录，最多尝试 5 次。"
+            "参数通过 JSON 文件传入，避免密码出现在进程命令行中。"
+        ),
+    )
+    p_detect_operator.add_argument(
+        "--payload",
+        required=True,
+        help=(
+            "JSON 文件路径，含 base_url / ac_id / user_id / password / "
+            "candidates / school / max_attempts；读取后立即删除"
+        ),
     )
 
     p_update = _make_subparser(
@@ -391,7 +459,7 @@ SMART SRun (srunnet)(1) -- OpenWrt 智慧深澜校园网认证客户端
 说明
     SMART SRun 是基于 SRun 4000 协议的 OpenWrt 校园网认证客户端，
     通过守护进程（daemon）自动维持在线，并支持手动登录登出、夜间时段
-    自动切到个人热点、按账号分组管理等功能。
+    自动切到个人热点、多账号管理与多 WAN 逐线路认证等功能。
     本 CLI 与 LuCI Web 界面共用同一份配置 (/usr/lib/smart_srun/config.json)。
 
     无参数运行 srunnet 等同 'srunnet status'。
@@ -416,10 +484,10 @@ SMART SRun (srunnet)(1) -- OpenWrt 智慧深澜校园网认证客户端
   ▸ 日志
     log                 实时跟随 /var/log/smart_srun.log
     log -n N            显示最后 N 行后退出
-    log runtime         打印当前学校 runtime 的诊断块
+    log runtime         打印当前认证策略的诊断块
 
   ▸ 配置
-    config              显示完整配置摘要（同 config show）
+    config              显示配置摘要（同 config show，不是完整 JSON 导出）
     config show         同上
     config get KEY      读取标量
     config set KEY=VAL [...]    写入标量（可重复）
@@ -432,12 +500,21 @@ SMART SRun (srunnet)(1) -- OpenWrt 智慧深澜校园网认证客户端
     config hotspot              列出所有热点
     config hotspot add / edit / rm / default ID    同上
 
-  ▸ 学校
-    schools                          列出可用学校 (JSON)
-    schools inspect --selected       打印当前学校 runtime 元数据 (JSON)
+  ▸ 认证策略与学校预设
+    schools                          列出已安装认证策略 (JSON)
+    schools inspect --selected       打印当前认证策略元数据 (JSON)
+    presets list                     读取本地学校预设
+    presets refresh                  刷新远端学校预设
 
   ▸ 探测
-    detect acid [BASE_URL]            从认证地址 / Portal 页面嗅探 AC_ID
+    detect env                        检测所选线路并查找认证地址
+    detect operators BASE_URL        只读认证页后缀，不提交账号密码
+    detect operator --payload FILE    空密码识别在线账号；有密码验证已知候选（最多 5 次）
+    detect acid [BASE_URL]            从认证地址 / Portal 页面探测 AC_ID
+    detect wifi                      向导无线任务接口，会修改 UCI
+
+  ▸ 更新
+    update check / run / status       检查、安装与查询更新
 
   ▸ 帮助与版本
     help [COMMAND]       显示子命令帮助（等价 --help）
@@ -447,7 +524,7 @@ SMART SRun (srunnet)(1) -- OpenWrt 智慧深澜校园网认证客户端
 主要配置项（标量，UCI 风格字符串）
     enabled                       守护进程总开关（"0"/"1"）
     multi_wan_enabled             多 WAN 按账号并行认证（"0"/"1"）
-    school                        当前学校短名（如 "default"）
+    school                        认证策略标识（如 "default"）
     interval                      守护循环间隔（秒）
     log_level                     日志等级 ALL / DEBUG / INFO / WARN / ERROR
     failover_enabled              登出时自动切到热点
@@ -480,11 +557,12 @@ SMART SRun (srunnet)(1) -- OpenWrt 智慧深澜校园网认证客户端
 
 文件
     /usr/lib/smart_srun/config.json     持久化配置（JSON）
+    /usr/lib/smart_srun/user_presets.json 用户自建预设
     /usr/lib/smart_srun/defaults.json   默认值表
     /var/run/smart_srun/state.json      运行时状态
     /var/log/smart_srun.log             运行日志（512 KiB 自动轮转）
     /etc/init.d/smart_srun              procd 服务脚本
-    /etc/config/smart_srun              UCI 配置（LuCI 写入入口）
+    /etc/config/smart_srun              CBI 节点，非完整账号配置
 
 退出码
     0    成功
@@ -492,7 +570,7 @@ SMART SRun (srunnet)(1) -- OpenWrt 智慧深澜校园网认证客户端
     其他 由各子命令 / 学校 runtime 自定义
 
 环境变量（开发态）
-    SMARTSRUN_ROUTER_HOST        scripts/hot_update.py 目标 IP（默认 10.0.0.1）
+    SMARTSRUN_ROUTER_HOST        scripts/hot_update.py 目标地址（必需）
     SMARTSRUN_ROUTER_USER        SSH 用户名（默认 root）
     SMARTSRUN_ROUTER_PASSWORD    SSH 密码（必填）
     SMARTSRUN_LUCI_BASE_URL      LuCI 验证 URL 前缀
@@ -513,8 +591,8 @@ SMART SRun (srunnet)(1) -- OpenWrt 智慧深澜校园网认证客户端
 相关链接
     LuCI 页面    服务 -> SMART SRun
     项目主页    https://github.com/matthewlu070111/smart-srun
-    贡献指南    CONTRIBUTING.md
-    开发者文档  CLAUDE.md / AGENTS.md（仓库根目录）
+    使用文档    https://smartsrun-doc.pages.dev
+    开发文档    https://smartsrun-doc.pages.dev/development/architecture
 
 许可
     WTFPL
@@ -660,13 +738,61 @@ def main():
     if args.command == "detect":
         import portal_detect
 
-        if getattr(args, "detect_command", "") == "acid":
-            base_url = getattr(args, "base_url", "") or cfg.get("base_url", "")
+        detect_command = getattr(args, "detect_command", "")
+        if detect_command == "wifi":
+            import wifi_setup
+
+            try:
+                if args.status:
+                    result = wifi_setup.status(args.status)
+                elif args.cancel or args.commit:
+                    result = wifi_setup.control(args.cancel or args.commit, "cancel" if args.cancel else "commit")
+                elif args.account:
+                    result = {"ok": True, "account": wifi_setup.account_fields(args.account, args.ssid)}
+                else:
+                    result = wifi_setup.start(_read_probe_payload(args.payload))
+            except (ValueError, OSError) as exc:
+                result = {"ok": False, "message": str(exc)}
+            print(json.dumps(result, ensure_ascii=False))
+            return
+        probe_options = {key: getattr(args, key) for key in ("access_mode", "iface", "ssid")
+                         if getattr(args, key, "")}
+        if detect_command == "operators":
+            print(json.dumps(portal_detect.discover_operators(args.base_url, args.ac_id, **probe_options), ensure_ascii=False))
+            return
+        if detect_command == "acid":
+            base_url = getattr(args, "base_url", None)
+            if base_url is None:
+                base_url = cfg.get("base_url", "")
             payload = portal_detect.detect_acid(
                 base_url,
                 reality_url=getattr(args, "reality_url", "") or "",
+                **probe_options,
             )
             print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return
+        if detect_command == "env":
+            payload = portal_detect.detect_environment(
+                base_url=getattr(args, "base_url", ""), school=getattr(args, "school", ""),
+                **probe_options,
+            )
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return
+        if detect_command == "operator":
+            payload = _read_probe_payload(getattr(args, "payload", ""))
+            result = portal_detect.detect_operator(
+                payload.get("base_url", ""),
+                payload.get("ac_id", ""),
+                payload.get("user_id", ""),
+                payload.get("password", ""),
+                payload.get("candidates", []),
+                school=payload.get("school", ""),
+                max_attempts=payload.get("max_attempts", 5),
+                access_mode=payload.get("access_mode", ""),
+                iface=payload.get("iface", ""), ssid=payload.get("ssid", ""),
+                login_shape=payload.get("login_shape", {}),
+            )
+            print(json.dumps(result, ensure_ascii=False, indent=2))
             return
         parser.parse_args(["detect", "--help"])
         return

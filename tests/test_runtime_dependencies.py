@@ -38,6 +38,8 @@ import cli
 import network
 import school_presets
 import updater
+import portal_detect
+import wifi_setup
 
 assert network.HAVE_URLLIB, "Python HTTP client unavailable"
 assert "portal.example".encode("idna") == b"portal.example"

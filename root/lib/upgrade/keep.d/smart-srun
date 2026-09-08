@@ -1,2 +1,4 @@
 # User-created accounts and settings; keep the existing JSON storage format.
 /usr/lib/smart_srun/config.json
+# User-authored school presets and operators; the router copy is the only one.
+/usr/lib/smart_srun/user_presets.json

@@ -722,7 +722,7 @@ def teardown_managed_sta_interfaces(cfg, wireless_data=None):
 
     仅把 STA 节设为 disabled 再 wifi reload，并不会拆掉它对应的网络接口（如 wwan）：
     其 DHCP 租约、地址和路由都会残留。无线切有线时，残留的 wwan 校园网网段路由会和
-    WAN 口指向同一网关（172.17.1.2）的路由冲突，内核仍把出站包发往已经失效的 wwan
+    WAN 口指向同一网关时的路由冲突，内核仍把出站包发往已经失效的 wwan
     接口并以 EPERM（“Operation not permitted”）拒绝，且该状态会一直持续到重启路由器。
     主动 ifdown 接口可以让 netifd 释放租约并清空相关路由。
 
