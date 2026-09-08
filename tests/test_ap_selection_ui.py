@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import unittest
@@ -36,7 +37,8 @@ const nodes = {}, sent = [], alerts = [];
 ['wired-iface', 'auth-enabled', 'ssid', 'bssid', 'radio', 'ap-selection'].forEach(key => {
   nodes['jm-' + key + '-row'] = {style: {}};
 });
-['smart-srun-overview', 'smart-srun-overview-title', 'smart-srun-overview-meta'].forEach(key => {
+['smart-srun-overview', 'smart-srun-overview-title', 'smart-srun-overview-meta',
+ 'smart-srun-overview-details-content', 'smart-srun-overview-pending'].forEach(key => {
   nodes[key] = {style: {}};
 });
 nodes['jm-access_mode'].value = scenario.mode || 'wifi';
@@ -65,13 +67,18 @@ console.log(JSON.stringify({ sent, alerts, bssidDisabled: nodes['jm-bssid'].disa
   policyDisabled: nodes['jm-ap_selection'].disabled,
   normalizations: [context.window.apTest.normalize(null, scenario.bssid),
     context.window.apTest.normalize('auto', scenario.bssid)],
-  overview: nodes['smart-srun-overview-meta'].innerHTML }));
+  overview: nodes['smart-srun-overview-details-content'].innerHTML,
+  summary: nodes['smart-srun-overview-meta'].innerHTML,
+  title: nodes['smart-srun-overview-title'].textContent,
+  pending: nodes['smart-srun-overview-pending'].textContent }));
 """
         output = subprocess.run(
             [node, "-e", script, json.dumps(scenario), str(JS)], check=True,
             stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", timeout=15,
         )
-        return json.loads(output.stdout)
+        result = json.loads(output.stdout)
+        result["fields"] = dict(re.findall(r"<dt>(.*?)</dt><dd[^>]*>(.*?)</dd>", result["overview"]))
+        return result
 
     def test_auto_and_strongest_disable_fixed_field_but_preserve_remembered_value(self):
         for policy in ("auto", "strongest"):
@@ -105,24 +112,44 @@ console.log(JSON.stringify({ sent, alerts, bssidDisabled: nodes['jm-bssid'].disa
             "ap_selection_policy": "strongest", "ap_selection_reason": "<untrusted>",
         }})
         self.assertIn("-47 dBm", output["overview"])
-        self.assertIn("实际 AP: " + BSSID, output["overview"])
-        self.assertIn("信道: 36", output["overview"])
+        self.assertEqual(output["fields"]["实际 AP"], BSSID)
+        self.assertEqual(output["fields"]["信道"], "36")
         self.assertIn("&lt;untrusted&gt;", output["overview"])
         missing = self.run_js({"status": {"campus_bssid": BSSID, "current_signal": None}})
-        self.assertIn("实际 AP: 未知", missing["overview"])
-        self.assertIn("信号: 未知", missing["overview"])
+        self.assertEqual(missing["fields"]["实际 AP"], "未知")
+        self.assertEqual(missing["fields"]["信号"], "未知")
         self.assertNotIn(BSSID, missing["overview"])
         self.assertNotIn("0 dBm", missing["overview"])
 
     def test_wired_hides_ap_fields_and_hotspot_only_shows_observations(self):
         wired = self.run_js({"status": {"current_campus_access_mode": "wired"}})
-        self.assertNotIn("实际 AP:", wired["overview"])
-        self.assertNotIn("信号:", wired["overview"])
+        self.assertNotIn("实际 AP", wired["fields"])
+        self.assertNotIn("信号", wired["fields"])
         hotspot = self.run_js({"status": {"mode": "hotspot", "current_bssid": BSSID, "current_signal": -55}})
-        self.assertIn("实际 AP: " + BSSID, hotspot["overview"])
+        self.assertEqual(hotspot["fields"]["实际 AP"], BSSID)
         self.assertIn("-55 dBm", hotspot["overview"])
-        self.assertNotIn("AP 选择:", hotspot["overview"])
-        self.assertNotIn("选择说明:", hotspot["overview"])
+        self.assertNotIn("AP 选择", hotspot["fields"])
+        self.assertNotIn("选择说明", hotspot["fields"])
+
+    def test_overview_summary_hides_diagnostics_but_keeps_actions_and_errors_visible(self):
+        output = self.run_js({"status": {
+            "status": "在线，下一次检测间隔 45 秒", "current_ssid": "Campus<WiFi>",
+            "current_ip": "192.0.2.4", "online_account_label": "student", "current_signal": -47,
+            "current_bssid": BSSID, "pending_action": "login",
+        }})
+        self.assertEqual(output["title"], "在线")
+        self.assertIn("Campus&lt;WiFi&gt;", output["summary"])
+        self.assertIn("student", output["summary"])
+        for technical in (BSSID, "192.0.2.4", "-47", "45 秒"):
+            self.assertNotIn(technical, output["summary"])
+            self.assertIn(technical, output["overview"])
+        self.assertIn("login", output["pending"])
+        failure = self.run_js({"status": {"status": "认证失败：密码错误"}})
+        self.assertEqual(failure["title"], "认证失败：密码错误")
+        wired = self.run_js({"status": {"current_campus_access_mode": "wired", "current_iface": "wan"}})
+        self.assertIn("有线网络", wired["summary"])
+        self.assertIn("wan", wired["summary"])
+        self.assertNotIn("Wi-Fi", wired["summary"])
 
     def test_advanced_fields_and_ssr_use_policy_and_observed_state(self):
         source = JS.read_text(encoding="utf-8")
@@ -134,6 +161,8 @@ console.log(JSON.stringify({ sent, alerts, bssidDisabled: nodes['jm-bssid'].disa
         for field in ("current_bssid", "current_signal", "current_channel", "current_wireless_ifname"):
             self.assertIn("state." + field, overview)
         self.assertNotIn("campus_bssid", overview)
+        self.assertIn('<details id="smart-srun-overview-details">', overview)
+        self.assertNotIn('<details id="smart-srun-overview-details" open', overview)
         self.assertIn('ap_selection == "fixed"', cbi)
 
     def test_real_lua_schema_and_controller_reject_invalid_fixed_and_persist_policy(self):

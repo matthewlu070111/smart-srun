@@ -269,6 +269,12 @@ def query_online_identity(
     online, username_reported, message = profile.parse_online_status(
         data, expected_username
     )
+    # SRun's own Portal.js combines user_name and domain. Some gateways
+    # return a bare user_name even though the actual login used @domain.
+    domain = str(data.get("domain") or "").strip()
+    if (online and username_reported and "@" not in username_reported
+            and re.fullmatch(r"@?[A-Za-z0-9_.-]{1,128}", domain)):
+        username_reported += "@" + domain.lstrip("@")
     log(
         "DEBUG",
         "srun_online_result",
@@ -470,6 +476,31 @@ def run_once(cfg):
     不管 WiFi、不管 quiet hours、不管重试。"""
     app_ctx = ensure_app_context(cfg)
     return app_ctx["runtime"].login_once(app_ctx)
+
+
+def probe_login_once(cfg):
+    """One candidate, one login request; never kick sessions or trust E2620.
+
+    The daemon's recovery flow intentionally accepts some uncertain online
+    replies and may log out/retry. Those semantics cannot identify a suffix.
+    """
+    try:
+        app_ctx = ensure_app_context(cfg)
+        runtime = app_ctx["runtime"]
+        urls = runtime.build_urls(cfg["base_url"])
+        binding = _resolve_auth_binding(app_ctx, urls["init_url"])
+        ip = init_getip(urls["init_url"], **binding)
+        token, ip = get_token(urls["get_challenge_api"], cfg["username"], ip, **binding)
+        i_value, hmd5, chksum = runtime.do_complex_work(cfg, ip, token)
+        return login(runtime, urls["srun_portal_api"], cfg, ip, i_value, hmd5, chksum, **binding)
+    except Exception as exc:
+        return False, "验证请求失败: " + localize_error(exc)
+
+
+def probe_online_identity(cfg):
+    """Return the gateway's full online name; callers must compare it exactly."""
+    app_ctx = ensure_app_context(cfg)
+    return app_ctx["runtime"].query_online_identity(app_ctx, expected_username=cfg.get("username", ""))
 
 
 def run_once_safe(cfg):

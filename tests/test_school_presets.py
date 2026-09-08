@@ -34,6 +34,22 @@ from _portal_urls import (  # noqa: E402
 )
 
 
+def bundled_school_ids(status="active"):
+    """Read catalogue ids out of the shipped fallback, in published order.
+
+    Behaviour around bundled schools has to be exercised with ids that really
+    are bundled, but naming the schools contributors published turns every
+    unrelated catalogue edit into a test failure.
+    """
+    with open(FALLBACK_PRESETS_FILE, "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    return [
+        school["id"]
+        for school in payload["schools"]
+        if str(school.get("status", "active")) == status
+    ]
+
+
 class SchoolPresetTests(unittest.TestCase):
     def test_normalize_base_url_accepts_portal_page_urls(self):
         cases = {
@@ -46,45 +62,25 @@ class SchoolPresetTests(unittest.TestCase):
             with self.subTest(raw=raw):
                 self.assertEqual(school_presets.normalize_base_url(raw), expected)
 
-    def test_builtin_presets_include_active_schools_but_hide_drafts(self):
-        items = school_presets.list_presets()
-        school_ids = {item["short_name"] for item in items}
+    def test_builtin_presets_expose_active_schools_without_legacy_operator_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            # Ignore any cache a contributor's checkout happens to carry.
+            with mock.patch.object(school_presets, "CACHE_PRESETS_FILE",
+                                   os.path.join(tmp, "absent.json")):
+                items = school_presets.list_presets()
 
-        self.assertIn("jxnu", school_ids)
-        self.assertIn("swpu", school_ids)
+        self.assertEqual({item["short_name"] for item in items},
+                         set(bundled_school_ids()))
         self.assertTrue(all(item["status"] == "active" for item in items))
-
-        jxnu = school_presets.get_preset("jxnu")
-        self.assertEqual(jxnu["observed_login_shape"]["info_prefix"], "SRBX1")
-        self.assertEqual(jxnu["observed_login_shape"]["enc"], "srun_bx1")
-        self.assertEqual(jxnu["observed_login_shape"]["os"], "Windows 10")
-        self.assertEqual(jxnu["observed_login_shape"]["name"], "Windows")
-        operators_by_suffix = {item["suffix"]: item for item in jxnu["operators"]}
-        self.assertIn("cmcc", operators_by_suffix)
-        self.assertIn("ctcc", operators_by_suffix)
-        self.assertIn("cucc", operators_by_suffix)
-        self.assertIn("", operators_by_suffix)
-        self.assertNotIn("operator", jxnu["defaults"])
-        self.assertNotIn("operator_suffix", jxnu["defaults"])
-        self.assertNotIn("no_suffix_operators", jxnu)
-        for operator in jxnu["operators"]:
-            self.assertNotIn("operator_suffix", operator)
-
-        swpu = school_presets.get_preset("swpu")
-        self.assertEqual(swpu["defaults"]["base_url"], "http://172.16.245.50")
-        self.assertEqual(swpu["defaults"]["ac_id"], "1")
-        self.assertEqual(swpu["defaults"]["access_mode"], "wired")
-        self.assertEqual(
-            swpu["operators"],
-            [
-                {"suffix": "dxwx", "label": "电信"},
-                {"suffix": "stu", "label": "学生"},
-                {"suffix": "tch", "label": "教师"},
-                {"suffix": "yd", "label": "移动无线"},
-                {"suffix": "ydyx", "label": "移动有线"},
-            ],
-        )
-        self.assertEqual(swpu["observed_login_shape"]["info_prefix"], "SRBX1")
+        for item in items:
+            with self.subTest(school=item["short_name"]):
+                defaults = item.get("defaults", {})
+                self.assertNotIn("operator", defaults)
+                self.assertNotIn("operator_suffix", defaults)
+                self.assertNotIn("no_suffix_operators", item)
+                for operator in item.get("operators", []):
+                    self.assertIsInstance(operator["suffix"], str)
+                    self.assertNotIn("operator_suffix", operator)
 
     def test_bundled_fallback_is_synced_with_doc_presets(self):
         with open(DOC_PRESETS_FILE, "r", encoding="utf-8") as handle:
@@ -298,9 +294,10 @@ class SchoolPresetTests(unittest.TestCase):
                     self.assertEqual(json.load(handle), payload)
                 os.unlink(cache_path)
                 bundled = school_presets.list_presets(refresh=True)
+        bundled_active = set(bundled_school_ids())
         self.assertIn("cached-campus", {item["short_name"] for item in schools})
-        self.assertIn("jxnu", {item["short_name"] for item in schools})
-        self.assertIn("jxnu", {item["short_name"] for item in bundled})
+        self.assertLessEqual(bundled_active, {item["short_name"] for item in schools})
+        self.assertLessEqual(bundled_active, {item["short_name"] for item in bundled})
 
     def test_same_day_catalogue_and_source_changes_are_saved(self):
         cached = {
@@ -369,13 +366,19 @@ class SchoolPresetTests(unittest.TestCase):
         self.assertNotIn("old-campus", {item["short_name"] for item in listed})
 
     def test_refresh_matches_public_list_and_preserves_drafts_in_cache(self):
+        bundled_active = bundled_school_ids()
+        self.assertGreaterEqual(
+            len(bundled_active), 2,
+            "needs two bundled active schools to separate demotion from preservation",
+        )
+        demoted, preserved = bundled_active[0], bundled_active[-1]
         catalogue = {
             "schema_version": 1,
             "updated_at": "2026-09-03",
             "schools": [
                 {"id": "remote-active", "status": "active"},
                 {"id": "remote-draft", "status": "draft"},
-                {"id": "jxnu", "status": "deprecated"},
+                {"id": demoted, "status": "deprecated"},
             ],
         }
         for remote_date in ("2026-09-03", "2026-09-02"):
@@ -396,9 +399,9 @@ class SchoolPresetTests(unittest.TestCase):
                 with open(path, "r", encoding="utf-8") as handle:
                     persisted = json.load(handle)
                 self.assertIn("remote-active", public_ids)
-                self.assertIn("swpu", public_ids)  # Preserve bundled-only schools.
+                self.assertIn(preserved, public_ids)  # Preserve bundled-only schools.
                 self.assertNotIn("remote-draft", public_ids)
-                self.assertNotIn("jxnu", public_ids)  # A remote demotion overrides bundled active.
+                self.assertNotIn(demoted, public_ids)  # Remote demotion beats bundled active.
                 self.assertIn("remote-draft", all_ids)
                 self.assertEqual(persisted["schools"], catalogue["schools"])
 
@@ -468,6 +471,22 @@ class SchoolPresetTests(unittest.TestCase):
         self.assertEqual(items[0]["operators"][0]["suffix"], "")
         self.assertNotIn("xn", [item["suffix"] for item in items[0]["operators"]])
 
+    def test_missing_operator_metadata_never_invents_carrier_choices(self):
+        for operators in (None, [], [{"label": "尚未确认"}]):
+            with self.subTest(operators=operators):
+                schools = school_presets.normalize_payload({"schema_version": 1, "schools": [
+                    {"id": "unknown-campus", "name": "示例学校", "status": "active", "operators": operators}
+                ]})
+                self.assertEqual(schools[0]["operators"], [])
+
+    def test_explicit_suffix_keeps_case_and_legacy_like_spelling(self):
+        for suffix in ("xn", "42", "Staff.Example.test"):
+            with self.subTest(suffix=suffix):
+                self.assertEqual(school_presets._normalize_operators([
+                    {"suffix": suffix, "label": "自定义账号"}
+                ]), [{"suffix": suffix, "label": "自定义账号"}])
+                self.assertEqual(school_presets._legacy_default_operator({"operator_suffix": suffix}), suffix)
+
     def test_presets_do_not_register_as_school_runtimes(self):
         for name in ["schools", "school_runtime"]:
             if name in sys.modules:
@@ -476,9 +495,9 @@ class SchoolPresetTests(unittest.TestCase):
 
         listed = {item["short_name"]: item for item in schools.list_schools()}
         self.assertIn("default", listed)
-        self.assertNotIn("jxnu", listed)
-        self.assertNotIn("lnut-hld", listed)
-        self.assertNotIn("qdu", listed)
+        catalogue = set(bundled_school_ids()) | set(bundled_school_ids("draft"))
+        self.assertTrue(catalogue, "the bundled fallback must not be empty")
+        self.assertEqual(catalogue & set(listed), set())
 
 
 class SchoolPresetConfigTests(unittest.TestCase):

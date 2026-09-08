@@ -67,6 +67,8 @@ class SchoolRuntimeLoaderTests(unittest.TestCase):
 
         self.assertIsNotNone(default)
         self.assertEqual(default["name"], "默认配置")
+        self.assertEqual(default["operators"], [])
+        self.assertEqual(schools.get_default_profile().DEFAULT_BASE_URL, "")
         self.assertIn("description", default)
         self.assertIn("contributors", default)
         self.assertIn("operators", default)

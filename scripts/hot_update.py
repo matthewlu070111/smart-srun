@@ -14,7 +14,7 @@ from urllib import parse, request
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-ROUTER_HOST = os.environ.get("SMARTSRUN_ROUTER_HOST", "10.0.0.1")
+ROUTER_HOST = os.environ.get("SMARTSRUN_ROUTER_HOST", "").strip()
 ROUTER_USER = os.environ.get("SMARTSRUN_ROUTER_USER", "root")
 ROUTER_PASSWORD = os.environ.get("SMARTSRUN_ROUTER_PASSWORD")
 LUCI_BASE_URL = os.environ.get(
@@ -54,6 +54,10 @@ RUNTIME_TARGETS = [
     {
         "local": "root/usr/lib/smart_srun/portal_detect.py",
         "remote": "/usr/lib/smart_srun/portal_detect.py",
+    },
+    {
+        "local": "root/usr/lib/smart_srun/wifi_setup.py",
+        "remote": "/usr/lib/smart_srun/wifi_setup.py",
     },
     {
         "local": "root/usr/lib/smart_srun/updater.py",
@@ -423,6 +427,8 @@ def run_command_group(ssh, name, commands, timeout=60):
 
 
 def connect_ssh(paramiko, password):
+    if not ROUTER_HOST:
+        raise RuntimeError("SMARTSRUN_ROUTER_HOST is required; set the target router explicitly")
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     print("Connecting to %s as %s" % (ROUTER_HOST, ROUTER_USER))

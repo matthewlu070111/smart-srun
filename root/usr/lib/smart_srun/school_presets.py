@@ -33,13 +33,6 @@ FALLBACK_PRESETS_FILE = os.path.join(MODULE_DIR, "school_presets_fallback.json")
 CACHE_PRESETS_FILE = os.path.join(MODULE_DIR, "school_presets_cache.json")
 REMOTE_TIMEOUT_SECONDS = 8
 
-DEFAULT_OPERATORS = [
-    {"suffix": "cmcc", "label": "中国移动"},
-    {"suffix": "ctcc", "label": "中国电信"},
-    {"suffix": "cucc", "label": "中国联通"},
-    {"suffix": "", "label": "校园网"},
-]
-
 def format_preset_payload(payload):
     """Serialize cached JSON, preserving data and the input dictionary order."""
     return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
@@ -101,7 +94,7 @@ def _normalize_operator(item):
     if not has_suffix and not has_legacy_id:
         return None
     raw = item.get("suffix") if has_suffix else item.get("id")
-    suffix = str(raw or "").strip().lower()
+    suffix = str(raw or "").strip()
     operator = {
         "suffix": suffix,
         "label": str(item.get("label") or suffix or "校园网").strip()
@@ -119,18 +112,14 @@ def _legacy_default_operator(defaults):
     if not isinstance(defaults, dict):
         return None
     if "operator_suffix" in defaults:
-        return _canonical_operator_suffix(defaults.get("operator_suffix"))
+        return str(defaults.get("operator_suffix") or "").strip()
     if "operator" in defaults:
         return _canonical_operator_suffix(defaults.get("operator"))
     return None
 
 
 def _operator_label_from_suffix(suffix):
-    text = str(suffix or "").strip().lower()
-    for item in DEFAULT_OPERATORS:
-        if item["suffix"] == text:
-            return item["label"]
-    return text or "校园网"
+    return str(suffix or "").strip() or "不加后缀"
 
 
 def _normalize_operators(value, legacy_defaults=None):
@@ -151,7 +140,8 @@ def _normalize_operators(value, legacy_defaults=None):
                 "label": _operator_label_from_suffix(legacy_operator),
             },
         )
-    return operators or [dict(item) for item in DEFAULT_OPERATORS]
+    # Absence of evidence must not add carrier choices or a plain-account option.
+    return operators
 
 
 def _normalize_defaults(value):

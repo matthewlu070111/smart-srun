@@ -49,6 +49,14 @@ class SchoolRuntimeConfigTests(unittest.TestCase):
         self.assertEqual("cmcc", migrated["campus_accounts"][0]["operator"])
         self.assertEqual("cmcc", migrated["campus_accounts"][0]["operator_suffix"])
 
+    def test_legacy_migration_preserves_supplied_values_without_school_defaults(self):
+        account = config._migrate_legacy_config({"user_id": "sample-user", "operator": "xn"})["campus_accounts"][0]
+        self.assertEqual((account["base_url"], account["ssid"], account["operator_suffix"]), ("", "", ""))
+        account = config._migrate_legacy_config({"user_id": "sample-user", "base_url": PORTAL_ORIGIN,
+                                               "campus_ssid": "Example Wi-Fi"})["campus_accounts"][0]
+        self.assertEqual((account["base_url"], account["ssid"], account["operator_suffix"]),
+                         (PORTAL_ORIGIN, "Example Wi-Fi", ""))
+
     def test_save_and_load_school_extra_contract(self):
         descriptors = [
             {

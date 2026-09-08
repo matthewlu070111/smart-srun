@@ -93,6 +93,10 @@ function index()
     entry({"admin", "services", "smart_srun", "presets_refresh"}, call("action_presets_refresh")).leaf = true
     entry({"admin", "services", "smart_srun", "user_presets_set"}, call("action_user_presets_set")).leaf = true
     entry({"admin", "services", "smart_srun", "detect_acid"}, call("action_detect_acid")).leaf = true
+    entry({"admin", "services", "smart_srun", "detect_env"}, call("action_detect_env")).leaf = true
+    entry({"admin", "services", "smart_srun", "detect_operator"}, call("action_detect_operator")).leaf = true
+    entry({"admin", "services", "smart_srun", "discover_operators"}, call("action_discover_operators")).leaf = true
+    entry({"admin", "services", "smart_srun", "setup_wifi"}, call("action_setup_wifi")).leaf = true
 end
 
 local function write_json_response(payload)
@@ -510,14 +514,128 @@ function action_user_presets_set()
     })
 end
 
+local function detect_connection_args()
+    return " --access-mode " .. util.shellquote(fv("access_mode")) ..
+        " --iface " .. util.shellquote(fv("iface")) ..
+        " --ssid " .. util.shellquote(fv("ssid"))
+end
+
 function action_detect_acid()
     local base_url = fv("base_url")
-    local payload = run_srunnet_json("detect acid " .. util.shellquote(base_url))
+    local args = fv("access_mode") ~= "" and detect_connection_args() or ""
+    local payload = run_srunnet_json("detect acid " .. util.shellquote(base_url) .. args)
     if type(payload) == "table" and payload.acid ~= nil then
         payload.value = tostring(payload.acid or "")
         payload.ac_id = tostring(payload.acid or "")
     end
     write_json_response(payload)
+end
+
+-- 出口自检：绑定所选接口；已在线时仍可检查预设、已有账号及本线路网关。
+function action_detect_env()
+    local args = fv("access_mode") ~= "" and detect_connection_args() or ""
+    args = args .. " --base-url " .. util.shellquote(fv("base_url")) ..
+        " --school " .. util.shellquote(fv("school"))
+    local payload = run_srunnet_json("detect env" .. args)
+    if type(payload) == "table" and payload.acid ~= nil then
+        payload.ac_id = tostring(payload.acid or "")
+    end
+    write_json_response(payload)
+end
+
+-- 运营商后缀探测。密码不能进 argv（同机 ps 可见），改用 0600 临时文件传参，
+-- CLI 读完即删，这里再兜底删一次。
+function action_detect_operator()
+    local nixio = require "nixio"
+    if http.getenv("REQUEST_METHOD") ~= "POST" then
+        write_json_response({ ok = false, message = "仅支持 POST" })
+        return
+    end
+    local candidates = jsonc.parse(fv("candidates"))
+    if type(candidates) ~= "table" then
+        write_json_response({ ok = false, message = "认证后缀格式错误" })
+        return
+    end
+    local attempts = tonumber(fv("max_attempts") or "") or 5
+    if attempts < 1 then attempts = 1 end
+    if attempts > 5 then attempts = 5 end
+
+    local path = "/tmp/smart_srun_detect_operator." .. nixio.getpid() .. ".json"
+    local handle = nixio.open(path, nixio.open_flags("wronly", "creat", "excl"), "600")
+    if not handle then
+        write_json_response({ ok = false, message = "无法写入临时探测参数" })
+        return
+    end
+    local content = jsonc.stringify({
+        base_url = fv("base_url"),
+        ac_id = fv("ac_id"),
+        user_id = fv("user_id"),
+        password = fv("password"),
+        school = fv("school"),
+        access_mode = fv("access_mode"), iface = fv("iface"), ssid = fv("ssid"),
+        login_shape = {
+            n = fv("n"), type = fv("type"), enc = fv("enc"), info_prefix = fv("info_prefix"),
+            double_stack = fv("double_stack"), login_os = fv("login_os"), login_name = fv("login_name"),
+        },
+        candidates = candidates,
+        max_attempts = attempts,
+    })
+    local written = handle:write(content)
+    handle:close()
+    if written ~= #content then
+        fs.unlink(path)
+        write_json_response({ ok = false, message = "无法完整写入探测参数" })
+        return
+    end
+
+    local payload = run_srunnet_json("detect operator --payload " .. util.shellquote(path))
+    fs.unlink(path)
+    write_json_response(payload)
+end
+
+function action_setup_wifi()
+    local nixio = require "nixio"
+    if http.getenv("REQUEST_METHOD") ~= "POST" then
+        write_json_response({ ok = false, message = "仅支持 POST" })
+        return
+    end
+    local job = fv("job")
+    if #job ~= 32 or not job:match("^[a-f0-9]+$") then
+        write_json_response({ ok = false, message = "无线任务编号无效" })
+        return
+    end
+    local action = fv("action")
+    if action == "status" or action == "cancel" then
+        write_json_response(run_srunnet_json("detect wifi --" .. action .. " " .. util.shellquote(job)))
+        return
+    end
+    if action ~= "start" then
+        write_json_response({ ok = false, message = "无线操作无效" })
+        return
+    end
+    local path = "/tmp/smart_srun_setup_wifi." .. nixio.getpid() .. ".json"
+    local handle = nixio.open(path, nixio.open_flags("wronly", "creat", "excl"), "600")
+    if not handle then
+        write_json_response({ ok = false, message = "无法写入无线连接参数" })
+        return
+    end
+    local content = jsonc.stringify({job = job, ssid = fv("ssid"), key = fv("key"), encryption = fv("encryption"), iface = fv("iface"), radio = fv("radio")})
+    local written = handle:write(content)
+    handle:close()
+    if written ~= #content then
+        fs.unlink(path)
+        write_json_response({ ok = false, message = "无法完整写入无线连接参数" })
+        return
+    end
+    local result = run_srunnet_json("detect wifi --payload " .. util.shellquote(path))
+    fs.unlink(path)
+    write_json_response(result)
+end
+
+function action_discover_operators()
+    local args = fv("access_mode") ~= "" and detect_connection_args() or ""
+    write_json_response(run_srunnet_json("detect operators " .. util.shellquote(fv("base_url")) ..
+        " --ac-id " .. util.shellquote(fv("ac_id")) .. args))
 end
 
 local function normalize_base_url(value)
@@ -536,6 +654,20 @@ end
 
 function action_enqueue()
     local action = fv("action")
+    local setup_job = fv("setup_job")
+    local setup_account = nil
+    if setup_job ~= "" then
+        if action ~= "add_campus" or fv("access_mode") ~= "wifi" then
+            write_json_response({ ok = false, message = "无线连接只能保存为无线校园网账号" })
+            return
+        end
+        local result = run_srunnet_json("detect wifi --account " .. util.shellquote(setup_job) .. " --ssid " .. util.shellquote(fv("ssid")))
+        if not result.ok or type(result.account) ~= "table" then
+            write_json_response({ ok = false, message = result.message or "无线连接已超时，请重新连接" })
+            return
+        end
+        setup_account = result.account
+    end
 
     -- 原有的 daemon action 处理
     local daemon_actions = {
@@ -630,6 +762,11 @@ function action_enqueue()
                 double_stack = fv("double_stack"),
                 login_os = fv("login_os"), login_name = fv("login_name"),
             }
+            if setup_account then
+                item.radio = setup_account.radio
+                item.encryption = setup_account.encryption
+                item.key = setup_account.key
+            end
             if item.access_mode ~= "wired" then
                 item.access_mode = "wifi"
                 item.auth_enabled = "0"
@@ -679,7 +816,7 @@ function action_enqueue()
             else
                 item.id = next_id(cfg.campus_accounts, "campus")
                 cfg.campus_accounts[#cfg.campus_accounts + 1] = item
-                if #cfg.campus_accounts == 1 then
+                if #cfg.campus_accounts == 1 or setup_account then
                     cfg.active_campus_id = item.id
                     cfg.default_campus_id = item.id
                 end
@@ -787,6 +924,16 @@ function action_enqueue()
     end)
 
     if ok then
+        if setup_account then
+            local result = run_srunnet_json("detect wifi --commit " .. util.shellquote(setup_job))
+            if not result.ok then
+                write_json_response({ ok = false, saved = true, message = "账号已保存，但无线连接未保留。请刷新列表核对，并重新连接 Wi-Fi。" })
+                return
+            end
+            -- Changed connections resume the daemon after the worker releases
+            -- its transaction; an existing connection has no waiting worker.
+            if result.state ~= "done" then need_restart = false end
+        end
         if need_restart then
             sys.call("(sleep 1; /etc/init.d/smart_srun restart >/dev/null 2>&1) >/dev/null 2>&1 &")
         end

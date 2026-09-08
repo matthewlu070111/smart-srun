@@ -14,6 +14,60 @@ JS_FILE = REPO_ROOT / "root/www/luci-static/resources/smart_srun.js"
 
 
 class PresetLuciTests(unittest.TestCase):
+    def test_auth_strategy_selector_and_documentation_are_separate_from_parameter_presets(self):
+        cbi = (REPO_ROOT / "root/usr/lib/lua/luci/model/cbi/smart_srun.lua").read_text(encoding="utf-8")
+        self.assertIn('ListValue, "school", "认证策略"', cbi)
+        self.assertIn('school:value("default", "通用深澜认证")', cbi)
+        self.assertIn('render_school_info_html(schools)', cbi)
+        self.assertIn('set_value("school", next_school)', cbi)
+        self.assertNotIn('点击查看学校预设文档', cbi)
+        source = JS_FILE.read_text(encoding="utf-8")
+        info = source.split('function initSchoolInfo()', 1)[1].split('function initOverview()', 1)[0]
+        self.assertIn("readJson('smart-auth-strategy-data', [])", info)
+        self.assertNotIn('schoolPresetList()', info)
+        self.assertIn('guide/authentication', info)
+        self.assertIn("wizRow('学校预设', wizPresetSelect())", source)
+
+    def test_strategy_documentation_handles_delayed_controls_and_ignores_preset_urls(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not installed")
+        script = r"""
+const fs = require('fs'), vm = require('vm'), assert = require('assert');
+let source = fs.readFileSync(process.argv[1], 'utf8');
+const end = source.lastIndexOf('})();');
+source = source.slice(0, end) + 'window.initStrategy = initSchoolInfo;' + source.slice(end);
+const listeners = {}, link = {href: 'https://example.test/server-rendered'}, nodes = {
+  'smart-school-info': {style: {}}, 'smart-school-doc-link': link,
+  'smart-auth-strategy-data': {value: JSON.stringify([
+    {short_name: 'custom', doc_url: 'https://example.test/runtime'},
+    {short_name: 'invalid', doc_url: 'javascript:alert(1)'}
+  ])},
+  'smart-school-preset-data': {value: JSON.stringify([{short_name:'custom', doc_url:'https://example.test/preset'}])}
+};
+const context = {window: {}, document: {
+  readyState: 'loading', querySelector() { return null; },
+  getElementById(id) { return nodes[id] || null; },
+  addEventListener(name, fn) { (listeners[name] || (listeners[name] = [])).push(fn); }
+}};
+vm.runInNewContext(source, context);
+context.window.initStrategy();
+context.window.initStrategy();
+assert.strictEqual(listeners.change.length, 1);
+assert.strictEqual(link.href, 'https://example.test/server-rendered');
+const change = (value, name='cbid.smart_srun.main.school') => listeners.change[0]({target:{name,value}});
+change('custom', 'wiz-preset');
+assert.strictEqual(link.href, 'https://example.test/server-rendered');
+change('custom');
+assert.strictEqual(link.href, 'https://example.test/runtime');
+change('default');
+assert(link.href.endsWith('/guide/authentication'));
+change('invalid');
+assert(link.href.endsWith('/development/architecture'));
+"""
+        subprocess.run([node, "-e", script, str(JS_FILE)], check=True,
+                       stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", timeout=15)
+
     def _run_ui(self, initial, custom=None, lookups=None, refreshes=None):
         node = shutil.which("node")
         if not node:

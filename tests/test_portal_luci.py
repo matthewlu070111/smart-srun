@@ -270,6 +270,19 @@ assert(multi:find("wan.test", 1, true), multi)
         self.assertNotIn("fd.append('network_interface'", js)
         self.assertIn('util.trim(tostring(a.network_interface or ""))', cbi)
 
+    def test_empty_auth_address_probes_the_environment_instead_of_refusing(self):
+        # 认证地址是小白最填不出来的一项，不能拿它当探测的前置条件。空地址时
+        # 前端要改问 detect_env，由路由器自己从强制门户跳转里捞出地址。
+        controller = CONTROLLER_FILE.read_text(encoding="utf-8")
+        js = JS_FILE.read_text(encoding="utf-8")
+
+        self.assertIn('"detect_env"}, call("action_detect_env")', controller)
+        self.assertIn("function action_detect_env()", controller)
+        self.assertIn('run_srunnet_json("detect env" .. args)', controller)
+
+        self.assertIn("var path = baseUrl ? 'detect_acid' : 'detect_env';", js)
+        self.assertNotIn("请先填写认证地址", js)
+
 
 if __name__ == "__main__":
     unittest.main()
