@@ -52,12 +52,13 @@ root/
 
 ## 运行环境约束
 
-- 设备端只依赖 OpenWrt `python3-light`，shipped Python 必须保持标准库-only。
+- 设备端使用 OpenWrt `python3-light` 及 `Makefile` 声明的标准库拆分包（`python3-urllib`、`python3-codecs`、`python3-openssl`）；shipped Python 必须保持标准库-only。新增 import 时核对 OpenWrt 拆包，完整桌面 Python 会掩盖缺失依赖。
 - 模块使用裸 import，例如 `import orchestrator`、`from config import load_config`。`client.py` 和 `schools/__init__.py` 负责注入路径，不要改成 package-relative imports。
 - 持久化配置是 UCI 风格字符串，布尔值通常是 `"0"` / `"1"`，数字也以字符串保存。
 - LuCI 前端保持纯 ES5、手写 DOM 与 `XMLHttpRequest`，不引入 bundler、npm 运行时或前端依赖。
 - `school_extra` 是 runtime 私有命名空间；未知 key 会被归一化丢弃，不要偷偷塞顶层配置。
 - `Makefile` 的 `Build/Compile` 为空是正常的；真正构建由 OpenWrt SDK 完成。
+- 用户配置继续保存在 `/usr/lib/smart_srun/config.json`，由 `root/lib/upgrade/keep.d/smart-srun` 纳入保留配置刷机与系统备份；不要把随包默认值或运行态加入清单。
 - 保持既有文件的排版、字段顺序及紧凑或展开写法；业务改动不得附带批量格式化。
 - 内部计划和验收报告保存在本地 `.codex/`，不要提交到 `doc/`。
 

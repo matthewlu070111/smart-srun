@@ -1,0 +1,2 @@
+# User-created accounts and settings; keep the existing JSON storage format.
+/usr/lib/smart_srun/config.json

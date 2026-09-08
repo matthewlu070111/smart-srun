@@ -31,13 +31,13 @@
 
 ## 安装包说明
 
-仓库构建产出三个 ipk 包：
+仓库为以下三个包分别构建 ipk / apk 格式：
 
 | 包名 | 说明 | 依赖 |
 |------|------|------|
-| `smart-srun` | 基础包：守护进程 + CLI | `python3-light` |
+| `smart-srun` | 基础包：守护进程 + CLI | `python3-light`、`python3-urllib`、`python3-codecs`、`python3-openssl` |
 | `luci-app-smart-srun` | 标准 LuCI Web 界面包（用于 opkg / LuCI 软件包管理升级） | `smart-srun`、LuCI 运行环境 |
-| `luci-app-smart-srun-bundle` | 自包含安装包：CLI + LuCI 一起打包，适合手动下载安装 | `python3-light`、LuCI 运行环境 |
+| `luci-app-smart-srun-bundle` | 自包含安装包：CLI + LuCI 一起打包，适合手动下载安装 | 与 `smart-srun` 相同的 Python 依赖、LuCI 运行环境 |
 
 - 最少安装步骤：直接安装 `luci-app-smart-srun-bundle`
 - 仅CLI：安装 `smart-srun` 即可
@@ -47,8 +47,9 @@
 **以下操作请在路由器连上互联网的情况进行！**
 
 1. 下载最新安装包：[Releases](https://github.com/matthewlu070111/smart-srun/releases)
-   - OpenWrt 23.05 及更早（opkg 系统）→ 下载 `*.ipk`
-   - OpenWrt 24.10+ / 25.12+（apk 系统）→ 下载 `*.apk`
+   - opkg 系统（官方 OpenWrt 24.10 及更早）→ 下载 `*.ipk`
+   - apk 系统（官方 OpenWrt 25.12 及更新）→ 下载 `*.apk`
+   - 第三方固件请以设备实际包管理器为准，参见 [OpenWrt 软件包管理说明](https://openwrt.org/docs/guide-user/additional-software/managing_packages)。
 2. 安装：
 #### 使用 LuCI 网页面板安装：
 1. 登录 LuCI 界面，进入 **系统**——**软件包** 页面。
@@ -69,7 +70,7 @@
 #### 使用命令行界面安装：
 1. 将安装包上传到 OpenWrt 设备，切换到该目录，执行：
 
-**opkg 系统（OpenWrt 23.05 及更早）：**
+**opkg 系统（官方 OpenWrt 24.10 及更早）：**
 ```sh
 # 仅 CLI
 opkg install smart-srun_*.ipk
@@ -82,7 +83,7 @@ opkg install luci-app-smart-srun_*.ipk
 opkg install luci-app-smart-srun-bundle_*.ipk
 ```
 
-**apk 系统（OpenWrt 24.10+ / 25.12+）：**
+**apk 系统（官方 OpenWrt 25.12 及更新）：**
 > 因为本项目是自签的第三方包，apk 默认会因 `UNTRUSTED signature` 拒绝安装，
 > 所以下面命令统一加 `--allow-untrusted`。这是 apk 的强制安全检查，
 ```sh
@@ -104,6 +105,34 @@ apk add --allow-untrusted ./luci-app-smart-srun-bundle-*.apk
 
 安装建议：
 - **不要把 `luci-app-smart-srun-bundle` 和标准 split 包混装**
+
+### 刷机时保留配置
+
+从 **1.5.1** 起，插件通过 OpenWrt 的 `/lib/upgrade/keep.d/smart-srun` 将
+`/usr/lib/smart_srun/config.json` 纳入系统备份和“保留配置”升级清单。校园网账号、
+热点密码和插件设置继续使用原来的 JSON 路径与格式，已有配置无需迁移。
+
+请在刷机前先升级插件至 1.5.1 或更新版本，保存配置，并确认以下命令能列出该文件：
+
+```sh
+sysupgrade -l | grep -Fx '/usr/lib/smart_srun/config.json'
+```
+
+随后在 LuCI 的 **系统 → 备份/升级** 中生成备份，或刷入固件时勾选 **保留配置**。
+新固件若未包含插件，仍需重新安装插件；安装后会继续读取恢复的配置。
+插件加入备份的内容仅为用户配置，不包含插件程序、随包默认值、学校预设缓存或运行状态。
+OpenWrt 的保留规则见 [sysupgrade 文档](https://openwrt.org/docs/techref/sysupgrade)。
+
+清空配置刷机（包括 `sysupgrade -n`）、恢复出厂设置或重新写入磁盘镜像不会自动保留文件。
+这种情况下，请事先把 `/usr/lib/smart_srun/config.json` 下载到电脑；重装插件后，
+将备份上传为 `/tmp/smart-srun-config.json`，再导入并重启服务：
+
+```sh
+srunnet config set -f /tmp/smart-srun-config.json
+/etc/init.d/smart_srun restart
+```
+
+备份包含账号和密码，请妥善保存；放在路由器 `/tmp` 中的副本会在重启时丢失。
 
 ## 使用
 ### LuCI 使用

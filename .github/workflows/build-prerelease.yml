@@ -1,7 +1,7 @@
 name: pre-release build
 
-# Builds both .ipk (opkg, OpenWrt 23.05/older) and .apk (apk, OpenWrt 24.10+
-# / 25.12+) and publishes them as a single pre-release with two bundle assets
+# Builds both .ipk (opkg, OpenWrt 24.10/older) and .apk (apk, OpenWrt 25.12+)
+# and publishes them as a single pre-release with two bundle assets
 # and one combined split-packages zip.
 #
 # The two SDK builds run in parallel via matrix; the publish job waits for
@@ -19,7 +19,7 @@ on:
         required: false
         default: "23.05.5"
       openwrt_apk_version:
-        description: "OpenWrt release version for apk build (24.10.x / 25.12.x)"
+        description: "OpenWrt release version for apk build (25.12.x or newer)"
         required: false
         default: "25.12.2"
       version:
