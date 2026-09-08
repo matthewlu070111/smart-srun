@@ -18,7 +18,7 @@ OpenWrt SDK 版本：`${OPENWRT_VERSION}`
 
 说明：
 - 本软件包为纯脚本（Lua/Python/Shell），与 CPU 架构无关，所有 OpenWrt 设备均可直接安装。
-- 请直接下载本页 Assets 中的 `luci-app-smart-srun-bundle_*.ipk`（opkg / OpenWrt 23.05 及更早）或 `luci-app-smart-srun-bundle-*.apk`（apk / OpenWrt 24.10+ / 25.12+）进行安装。
+- 请直接下载本页 Assets 中的 `luci-app-smart-srun-bundle_*.ipk`（opkg / 官方 OpenWrt 24.10 及更早）或 `luci-app-smart-srun-bundle-*.apk`（apk / 官方 OpenWrt 25.12 及更新）进行安装；第三方固件以实际包管理器为准。
 - 安装命令：
   - opkg：`opkg install ./luci-app-smart-srun-bundle_*.ipk`
   - apk：`apk add --allow-untrusted ./luci-app-smart-srun-bundle-*.apk`

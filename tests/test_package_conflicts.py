@@ -17,9 +17,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PACKAGES = ("smart-srun", "luci-app-smart-srun", "luci-app-smart-srun-bundle")
 BUILD_DEPENDS = {
-    "smart-srun": {"+python3-light", "+python3-urllib"},
+    "smart-srun": {"+python3-light", "+python3-urllib", "+python3-codecs", "+python3-openssl"},
     "luci-app-smart-srun": {"+smart-srun"},
-    "luci-app-smart-srun-bundle": {"+python3-light", "+python3-urllib"},
+    "luci-app-smart-srun-bundle": {"+python3-light", "+python3-urllib", "+python3-codecs", "+python3-openssl"},
 }
 CONFLICTS = {
     "smart-srun": set(),

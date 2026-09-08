@@ -359,6 +359,75 @@ class InitScriptUpdateSafetyTests(unittest.TestCase):
 
 
 class LockWriteAtomicityTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "posix", "requires POSIX file locking")
+    def test_acquire_rejects_competitor_before_initial_pid_is_written(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock_file = os.path.join(tmp, "update.lock")
+            original_open = os.open
+            attempted = []
+
+            def open_with_competitor(path, flags, *args, **kwargs):
+                fd = original_open(path, flags, *args, **kwargs)
+                if path == lock_file and not attempted:
+                    attempted.append(True)
+                    try:
+                        with self.assertRaisesRegex(RuntimeError, "已有更新任务"):
+                            updater._acquire_lock()
+                    except BaseException:
+                        os.close(fd)
+                        raise
+                return fd
+
+            with (
+                mock.patch.object(updater, "LOCK_FILE", lock_file),
+                mock.patch.object(updater, "_append_log"),
+                mock.patch.object(updater.os, "open", side_effect=open_with_competitor),
+            ):
+                updater._acquire_lock()
+                self.assertEqual(updater._read_lock_pid(), os.getpid())
+            self.assertEqual(attempted, [True])
+
+    @unittest.skipUnless(os.name == "posix", "requires POSIX file locking")
+    def test_acquire_rejects_competitor_during_stale_lock_recovery(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock_file = os.path.join(tmp, "update.lock")
+            with open(lock_file, "w", encoding="ascii") as handle:
+                handle.write("12345")
+            original_remove = os.remove
+            attempted = []
+
+            def remove_with_competitor(path):
+                original_remove(path)
+                if path == lock_file and not attempted:
+                    attempted.append(True)
+                    with self.assertRaisesRegex(RuntimeError, "已有更新任务"):
+                        updater._acquire_lock()
+
+            with (
+                mock.patch.object(updater, "LOCK_FILE", lock_file),
+                mock.patch.object(updater, "_append_log"),
+                mock.patch.object(updater, "_pid_alive", return_value=False),
+                mock.patch.object(updater.os, "remove", side_effect=remove_with_competitor),
+            ):
+                updater._acquire_lock()
+                self.assertEqual(updater._read_lock_pid(), os.getpid())
+            self.assertEqual(attempted, [True])
+
+    def test_acquire_keeps_live_owner_and_recovers_dead_owner(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock_file = os.path.join(tmp, "update.lock")
+            with (
+                mock.patch.object(updater, "LOCK_FILE", lock_file),
+                mock.patch.object(updater, "_append_log"),
+            ):
+                updater._acquire_lock()
+                with mock.patch.object(updater, "_pid_alive", return_value=True):
+                    with self.assertRaisesRegex(RuntimeError, "已有更新任务"):
+                        updater._acquire_lock()
+                with mock.patch.object(updater, "_pid_alive", return_value=False):
+                    updater._acquire_lock()
+                self.assertEqual(updater._read_lock_pid(), os.getpid())
+
     def test_write_lock_pid_uses_atomic_replace(self):
         with tempfile.TemporaryDirectory() as tmp:
             lock_file = os.path.join(tmp, "update.lock")

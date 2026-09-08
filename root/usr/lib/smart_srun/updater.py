@@ -529,6 +529,24 @@ def _write_lock_pid(pid):
 def _acquire_lock():
     _ensure_parent(LOCK_FILE)
     try:
+        import fcntl
+    except ImportError:  # Non-POSIX development hosts.
+        return _claim_lock_pid()
+
+    # Keep this inode separate from the PID file: worker handoff replaces that
+    # file. Serialize initial PID publication and stale-lock recovery so a
+    # competitor cannot reclaim an empty/new lock and start a second install.
+    # Do not unlink the guard: waiters must always lock the same inode.
+    with open(LOCK_FILE + ".guard", "a", encoding="ascii") as guard:
+        try:
+            fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            raise RuntimeError("已有更新任务正在运行")
+        return _claim_lock_pid()
+
+
+def _claim_lock_pid():
+    try:
         fd = os.open(LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except OSError:
         # 锁文件已存在：若持有者进程已退出（崩溃 / 被服务重启杀掉）则视为陈旧锁，

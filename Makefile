@@ -6,7 +6,8 @@ PKG_RELEASE:=1
 
 include $(INCLUDE_DIR)/package.mk
 
-RUNTIME_DEPENDS:=+python3-light +python3-urllib
+# urllib needs unicodedata (codecs) for IDNA and _ssl (openssl) for HTTPS.
+RUNTIME_DEPENDS:=+python3-light +python3-urllib +python3-codecs +python3-openssl
 # Keep empty so SDK CI only packs our files (see 1.3.4). Declaring luci-base
 # / luci-compat forces a Lua LuCI stack the release SDK cannot build.
 LUCI_FILE_DEPENDS:=
@@ -33,6 +34,9 @@ endef
 define Package/smart-srun/install
 	$(INSTALL_DIR) $(1)/usr/lib/smart_srun
 	$(INSTALL_DIR) $(1)/usr/lib/smart_srun/schools
+	$(INSTALL_DIR) $(1)/lib/upgrade/keep.d
+	$(INSTALL_DATA) $(CURDIR)/root/lib/upgrade/keep.d/smart-srun \
+		$(1)/lib/upgrade/keep.d/smart-srun
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_DIR) $(1)/etc/uci-defaults
 	$(CP) $(CURDIR)/root/usr/lib/smart_srun/*.py \
@@ -105,6 +109,9 @@ endef
 define Package/luci-app-smart-srun-bundle/install
 	$(INSTALL_DIR) $(1)/usr/lib/smart_srun
 	$(INSTALL_DIR) $(1)/usr/lib/smart_srun/schools
+	$(INSTALL_DIR) $(1)/lib/upgrade/keep.d
+	$(INSTALL_DATA) $(CURDIR)/root/lib/upgrade/keep.d/smart-srun \
+		$(1)/lib/upgrade/keep.d/smart-srun
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_DIR) $(1)/etc/uci-defaults
 	$(CP) $(CURDIR)/root/usr/lib/smart_srun/*.py \

@@ -20,7 +20,9 @@ ROUTER_PASSWORD = os.environ.get("SMARTSRUN_ROUTER_PASSWORD")
 LUCI_BASE_URL = os.environ.get(
     "SMARTSRUN_LUCI_BASE_URL", "http://%s/cgi-bin/luci" % ROUTER_HOST
 )
-FORCE_LF_TARGETS = {"/etc/init.d/smart_srun", "/usr/bin/srunnet"}
+FORCE_LF_TARGETS = {
+    "/etc/init.d/smart_srun", "/usr/bin/srunnet", "/lib/upgrade/keep.d/smart-srun",
+}
 EXECUTABLE_TARGETS = ["/usr/bin/srunnet", "/etc/init.d/smart_srun"]
 PROBE_ROOT_PREFIX = "/tmp/smart_srun_probe"
 
@@ -120,6 +122,10 @@ RUNTIME_TARGETS = [
 ]
 
 LUA_AND_SERVICE_TARGETS = [
+    {
+        "local": "root/lib/upgrade/keep.d/smart-srun",
+        "remote": "/lib/upgrade/keep.d/smart-srun",
+    },
     {
         "local": "root/usr/lib/lua/luci/controller/smart_srun.lua",
         "remote": "/usr/lib/lua/luci/controller/smart_srun.lua",
