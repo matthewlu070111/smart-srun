@@ -13,8 +13,9 @@
 </p>
 
 > [!IMPORTANT]
-> **当前稳定版是 [1.6.1](https://github.com/matthewlu070111/smart-srun/releases/tag/v1.6.1)（Python 版）。** 本分支是 2.0 Go 重写版，目前为预发布候选，适合愿意反馈问题的用户。
-> 1.6.1 的源码保留在 [`1.6.1` 分支](https://github.com/matthewlu070111/smart-srun/tree/1.6.1)，已安装的 1.6.1 不会被内置更新推送预发布版本。
+> **当前默认下载版本是 [2.0.0rc1](https://github.com/matthewlu070111/smart-srun/releases/tag/2.0.0rc1)（Go 版，Latest）。** `main` 已采用 Go 实现，版本号仍保留 `rc1`，安装包与原候选版相同。
+> **从 1.x 升级请先在 1.6.1 导出备份，再按设备架构手动安装；不要使用 1.x 内置一键更新跨版本升级。** 旧更新器会看到 Latest，但不支持 Go 安装包的架构选择。详见[备份与迁移指南](https://srun-doc.guiguisocute.com/guide/backup-migration)。
+> Python 1.6.1 的[安装包](https://github.com/matthewlu070111/smart-srun/releases/tag/v1.6.1)和 [`1.6.1` 源码分支](https://github.com/matthewlu070111/smart-srun/tree/1.6.1)继续保留。
 
 ## 使用
 
