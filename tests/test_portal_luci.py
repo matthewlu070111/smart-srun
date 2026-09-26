@@ -6,7 +6,7 @@ import subprocess
 import unittest
 from pathlib import Path
 
-from _portal_urls import PORTAL_IPV4_ORIGIN, PORTAL_ORIGIN
+from _portal_urls import PORTAL_IPV4_ORIGIN
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -16,7 +16,16 @@ CBI_FILE = REPO_ROOT / "root/usr/lib/lua/luci/model/cbi/smart_srun.lua"
 
 
 class PortalLuciTests(unittest.TestCase):
-    def _run_ui(self, status):
+    def test_mutation_handlers_send_csrf_token(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not installed")
+        subprocess.run(
+            [node, str(REPO_ROOT / "tests/js/luci_action_transport_test.js"), str(JS_FILE)],
+            check=True, capture_output=True, text=True, encoding="utf-8", timeout=30,
+        )
+
+    def _run_ui(self, status, receipt="instance-a1", force_response=None):
         node = shutil.which("node")
         if not node:
             self.skipTest("node is not installed")
@@ -26,6 +35,7 @@ class PortalLuciTests(unittest.TestCase):
 const fs = require('fs');
 const vm = require('vm');
 const payload = JSON.parse(process.argv[1]);
+const forceResponse = JSON.parse(process.argv[4]);
 const source = fs.readFileSync(process.argv[2], 'utf8');
 function element(tag, attrs, text) {
   const el = {
@@ -56,10 +66,12 @@ let modal = null;
 let cleared = 0;
 function XHR() {}
 XHR.prototype.open = function(method, url) { this.url = url; urls.push(url); };
+XHR.prototype.setRequestHeader = function() {};
 XHR.prototype.send = function() {
   this.readyState = 4;
-  this.status = 200;
-  this.responseText = JSON.stringify(
+  const force = this.url.indexOf('/enqueue') >= 0;
+  this.status = force ? forceResponse.status : 200;
+  this.responseText = force ? forceResponse.body : JSON.stringify(
     this.url.indexOf('/status?') >= 0 ? payload : {empty: true}
   );
   this.onreadystatechange();
@@ -67,6 +79,7 @@ XHR.prototype.send = function() {
 const context = {
   window: { setInterval() { return 1; }, clearInterval() { cleared += 1; } },
   document: { readyState: 'loading', addEventListener() {},
+    querySelector() { return {value: 'csrf-token'}; },
     getElementById(id) { return nodes[id] || null; },
     createElement(tag) { return element(tag); }, createTextNode(text) { return {textContent: text}; }
   },
@@ -75,13 +88,15 @@ const context = {
   Date, JSON
 };
 vm.runInNewContext(source, context);
-context.window.smartOpenBlockingFeedback('manual_login', 100);
+context.window.smartOpenBlockingFeedback('manual_login', 100, JSON.parse(process.argv[3]));
+if (forceResponse) modal[3].children[1].click({preventDefault() {}});
 console.log(JSON.stringify({result: nodes['smart-srun-manual-result'].textContent,
   tip: modal[0].textContent, portal: modal[2].children,
-  resultPortal: nodes['smart-srun-manual-portal'].children, urls, cleared}));
+  resultPortal: nodes['smart-srun-manual-portal'].children, urls, cleared,
+  progressDisabled: !!modal[3].children[0].disabled, forceDisabled: !!modal[3].children[1].disabled}));
 """
         result = subprocess.run(
-            [node, "-e", script, json.dumps(status), str(JS_FILE)],
+            [node, "-e", script, json.dumps(status), str(JS_FILE), json.dumps(receipt), json.dumps(force_response)],
             stdin=subprocess.DEVNULL,
             check=True,
             capture_output=True,
@@ -92,6 +107,7 @@ console.log(JSON.stringify({result: nodes['smart-srun-manual-result'].textConten
 
     def _status(self, **extra):
         status = {
+            "action_id": "instance-a1",
             "last_action": "manual_login",
             "last_action_ts": 101,
             "action_result": "error",
@@ -128,11 +144,49 @@ console.log(JSON.stringify({result: nodes['smart-srun-manual-result'].textConten
         self.assertEqual("后续守护状态", rendered["tip"])
         self.assertEqual([], rendered["portal"])
 
-    def test_stale_action_does_not_finish_current_modal(self):
-        rendered = self._run_ui(self._status(last_action_ts=99))
+    def test_another_actions_result_does_not_finish_current_modal(self):
+        rendered = self._run_ui(self._status(action_id="instance-a2"))
         self.assertEqual(0, rendered["cleared"])
         self.assertEqual([], rendered["portal"])
         self.assertIn("正在执行", rendered["tip"])
+
+    def test_clock_rollback_cannot_hide_own_terminal_result(self):
+        rendered = self._run_ui(self._status(last_action_ts=-3600))
+        self.assertEqual(1, rendered["cleared"])
+        self.assertIn("尚未联网", rendered["tip"])
+        self.assertTrue(any("status?action_id=instance-a1&" in url for url in rendered["urls"]))
+
+    def test_lost_history_or_stopped_service_is_a_closable_error(self):
+        rendered = self._run_ui(self._status(last_action="", last_action_message="操作记录已失效"))
+        self.assertEqual("操作记录已失效", rendered["tip"])
+        self.assertEqual(1, rendered["cleared"])
+
+    def test_missing_receipt_does_not_poll_global_state(self):
+        rendered = self._run_ui(self._status(), receipt=None)
+        self.assertIn("无法读取操作回执", rendered["tip"])
+        self.assertEqual([], rendered["urls"])
+
+    def test_rejected_force_stop_does_not_claim_stopped_or_end_polling(self):
+        for response in (
+            {"status": 403, "body": "csrf rejected"},
+            {"status": 0, "body": ""},
+            {"status": 200, "body": "invalid json"},
+            {"status": 200, "body": json.dumps({"ok": False, "message": "停止失败"})},
+        ):
+            with self.subTest(response=response):
+                rendered = self._run_ui(self._status(action_result="pending"), force_response=response)
+                self.assertIn("失败", rendered["tip"])
+                self.assertEqual(0, rendered["cleared"])
+                self.assertTrue(rendered["progressDisabled"])
+                self.assertFalse(rendered["forceDisabled"])
+
+    def test_confirmed_force_stop_unlocks_the_dialog(self):
+        rendered = self._run_ui(self._status(action_result="pending"), force_response={
+            "status": 200, "body": json.dumps({"ok": True, "message": "已停止"})})
+        self.assertEqual("已停止", rendered["tip"])
+        self.assertEqual(1, rendered["cleared"])
+        self.assertFalse(rendered["progressDisabled"])
+        self.assertTrue(rendered["forceDisabled"])
 
     def test_unsafe_portal_urls_are_never_rendered(self):
         for url in (
@@ -154,119 +208,65 @@ console.log(JSON.stringify({result: nodes['smart-srun-manual-result'].textConten
         self.assertEqual("登录成功", rendered["tip"])
         self.assertEqual([], rendered["portal"])
 
-    def test_controller_persists_and_exposes_action_specific_feedback(self):
-        text = CONTROLLER_FILE.read_text(encoding="utf-8")
-        for field in ("last_action_message", "last_action_portal_url"):
-            self.assertIn(f'{field} = tostring(data.{field} or "")', text)
-            self.assertIn(f'state.{field} = ""', text)
+    def test_status_projection_publishes_action_specific_feedback(self):
+        """The result of the last action is part of the status answer.
+
+        It is built from the daemon's action record now, not copied out of a
+        state file the page also wrote. Clearing it when a new action starts is
+        the daemon's job (observe.Store.ActionStarted), which is why the page
+        no longer has a line that blanks it. (M00 ledger:
+        replaced_with_stronger_test -> T39;T24.)
+        """
+        bridge = (REPO_ROOT / "root/usr/lib/lua/luci/smart_srun/bridge.lua").read_text(
+            encoding="utf-8"
+        )
+        for field in ("last_action", "last_action_message", "action_result",
+                      "last_action_portal_url", "last_action_ts"):
+            self.assertIn(f"{field} =", bridge)
+        self.assertIn("ACTION_RESULT", bridge)
         self.assertIn(
             'id="smart-srun-manual-portal"', CBI_FILE.read_text(encoding="utf-8")
         )
 
     def test_controller_status_enqueue_and_friendly_logs_execute(self):
+        """Drive the shipped controller against a recording stand-in daemon.
+
+        The old version of this test stubbed the filesystem, because the page
+        used to answer from files it also wrote. It now stubs the control
+        protocol instead, which is where the work went: what is asserted is the
+        request that leaves the page, the credential that does not, and the
+        refusal that reaches the browser unchanged. (M00 ledger:
+        ported_behavior -> T39;T24.)
+        """
         lua = shutil.which("lua")
         if not lua:
             self.skipTest("lua is not installed")
-        script = r"""
-local files, encoded, form = {}, {}, {}
-local portal_url = PORTAL_URL
-local sequence, output = 0, nil
-local function stringify(value)
-    sequence = sequence + 1
-    local key = "json" .. sequence
-    encoded[key] = value
-    return key
-end
-local function parse(value)
-    return encoded[tostring(value or ""):match("^(json%d+)")] or {}
-end
-local state_path = "/var/run/smart_srun/state.json"
-files[state_path] = stringify({
-    last_action="manual_login", action_result="error", message="later tick",
-    last_action_message="original failure", last_action_portal_url=portal_url
-})
-package.preload["luci.dispatcher"] = function() return {test_post_security=function() return true end} end
-package.preload["luci.http"] = function() return {
-    formvalue=function(key) return form[key] end, prepare_content=function() end,
-    write=function(value) output = parse(value) end
-} end
-package.preload["luci.jsonc"] = function() return {parse=parse, stringify=stringify} end
-package.preload["luci.sys"] = function() return {exec=function() return "" end, call=function() return 0 end} end
-package.preload["luci.util"] = function() return {
-    trim=function(value) return tostring(value or ""):match("^%s*(.-)%s*$") end
-} end
-package.preload["nixio.fs"] = function() return {
-    readfile=function(path) return files[path] end,
-    writefile=function(path, value) files[path] = value; return true end,
-    rename=function(from, target) files[target] = files[from]; files[from] = nil; return true end,
-    access=function() return false end, mkdirr=function() return true end,
-    remove=function(path) files[path] = nil; return true end,
-    dir=function() return function() return nil end end
-} end
-package.preload["luci.smart_srun.schema"] = function() return {
-    POINTER_KEYS={}, LIST_KEYS={}, global_scalar_key_set=function() return {} end,
-    with_file_lock=function(_, callback) return callback() end,
-    write_private_json=function(path, value) files[path] = stringify(value) end
-} end
-dofile(CONTROLLER_PATH)
-local controller = package.loaded["luci.controller.smart_srun"]
-controller.action_status()
-assert(output.status == "later tick")
-assert(output.last_action_message == "original failure")
-assert(output.last_action_portal_url == portal_url)
-form.action = "manual_login"
-controller.action_enqueue()
-local saved = parse(files[state_path])
-assert(saved.last_action_message == "")
-assert(saved.last_action_portal_url == "")
-assert(saved.action_result == "pending")
-local config_path = "/usr/lib/smart_srun/config.json"
-files[config_path] = stringify({campus_accounts={{
-    id="campus1", network_interface="wan.old", custom_field="preserved"
-}}})
-form = {
-    action="edit_campus", id="campus1", access_mode="wired", wired_iface="  ",
-    network_interface="  wan.test  ", auth_enabled="1"
-}
-controller.action_enqueue()
-local account = parse(files[config_path]).campus_accounts[1]
-assert(account.wired_iface == "wan.test")
-assert(account.network_interface == nil)
-assert(account.custom_field == "preserved")
-assert(account.auth_enabled == "1")
-form.wired_iface = "  wan.canonical  "
-controller.action_enqueue()
-assert(parse(files[config_path]).campus_accounts[1].wired_iface == "wan.canonical")
-for _, code in ipairs({
-    "no_response_data_error", "not_online_error", "portal_intercept_error",
-    "auth_html_response_error", "auth_response_parse_error"
-}) do
-    local line = controller.friendly_line('[2026-06-01 22:00:00] WARN srun_login_response error_code=' .. code)
-    assert(not line:find(code, 1, true), line)
-end
-local multi = controller.friendly_line(
-    '[2026-06-01 22:00:00] WARN multi_wan_session account_id=campus1 wired_iface=wan.test | offline'
-)
-assert(not multi:find("multi_wan_session", 1, true), multi)
-assert(multi:find("wan.test", 1, true), multi)
-""".replace("CONTROLLER_PATH", json.dumps(CONTROLLER_FILE.as_posix())).replace(
-            "PORTAL_URL", json.dumps(PORTAL_ORIGIN)
-        )
-        subprocess.run(
-            [lua, "-e", script],
+        result = subprocess.run(
+            [lua, (REPO_ROOT / "tests/lua/controller_actions.lua").as_posix(),
+             REPO_ROOT.as_posix()],
+            cwd=str(REPO_ROOT),
             stdin=subprocess.DEVNULL,
-            check=True,
             capture_output=True,
             text=True,
             encoding="utf-8",
+            timeout=30,
         )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
     def test_luci_account_editor_reads_legacy_interface_but_saves_canonical(self):
         controller = CONTROLLER_FILE.read_text(encoding="utf-8")
+        bridge = (REPO_ROOT / "root/usr/lib/lua/luci/smart_srun/bridge.lua").read_text(
+            encoding="utf-8"
+        )
         js = JS_FILE.read_text(encoding="utf-8")
         cbi = CBI_FILE.read_text(encoding="utf-8")
-        self.assertIn('util.trim(fv("network_interface"))', controller)
-        self.assertIn("merged.network_interface = nil", controller)
+        # The alias is read from the form and resolved in one place; the patch
+        # that goes to the daemon carries only the canonical field, so nothing
+        # has to remember to delete the old one afterwards.
+        self.assertIn('network_interface = fv("network_interface")', controller)
+        self.assertIn("trim(form.network_interface)", bridge)
+        self.assertIn("patch.wired_iface", bridge)
+        self.assertNotIn("patch.network_interface", bridge)
         self.assertIn("String(item.network_interface || '').replace", js)
         self.assertIn("fd.append('wired_iface'", js)
         self.assertNotIn("fd.append('network_interface'", js)
@@ -280,7 +280,7 @@ assert(multi:find("wan.test", 1, true), multi)
 
         self.assertIn('"detect_env"}, call("action_detect_env")', controller)
         self.assertIn("function action_detect_env()", controller)
-        self.assertIn('run_srunnet_json("detect env" .. args)', controller)
+        self.assertIn('discovery_job("detect.environment")', controller)
 
         self.assertIn("var path = baseUrl ? 'detect_acid' : 'detect_env';", js)
         self.assertNotIn("请先填写认证地址", js)

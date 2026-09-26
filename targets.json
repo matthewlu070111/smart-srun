@@ -1,0 +1,255 @@
+{
+  "schema_version": 1,
+  "go_version": "1.27.1",
+  "go_source_sha256": "4e408abae126d916b6164627193f2c54f0e3ca1312d693b86db45f862ab238b1",
+  "golang_framework_commit": "d0106a08c903fb3e02436021917c4d7ce9b19705",
+  "development_payload_limit_bytes": 16777216,
+  "targets": [
+    {
+      "id": "x86_64-opkg-24.10.8",
+      "openwrt_arch": "x86_64",
+      "target": "x86/64",
+      "goos": "linux",
+      "goarch": "amd64",
+      "goamd64": "v1",
+      "package_manager": "opkg",
+      "format": "ipk",
+      "sdk_release": "24.10.8",
+      "sdk_url": "https://downloads.openwrt.org/releases/24.10.8/targets/x86/64/openwrt-sdk-24.10.8-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst",
+      "sdk_sha256": "ac4a0405d2eea821b06f93c14ba13ffa90ad0457648903df7dde02570027ab21",
+      "feeds": {
+        "base": "0b795ce79e23b553aa184080c390f9ce92a2b6d4",
+        "packages": "23abaa6f3b0fdfd76b570031107e5718476ff0c8",
+        "luci": "cac97ed67cfbcad90db49f5f3b1245c2c4cbfae5"
+      }
+    },
+    {
+      "id": "x86_64-apk-25.12.2",
+      "openwrt_arch": "x86_64",
+      "target": "x86/64",
+      "goos": "linux",
+      "goarch": "amd64",
+      "goamd64": "v1",
+      "package_manager": "apk",
+      "format": "apk",
+      "sdk_release": "25.12.2",
+      "base_feed_subdir": "package",
+      "sdk_url": "https://downloads.openwrt.org/releases/25.12.2/targets/x86/64/openwrt-sdk-25.12.2-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst",
+      "sdk_sha256": "4abb32a6dd05f80c24fc1a487a94b1f5f0a5d4cd560ff3dd8c1bf77793a2d5dc",
+      "feeds": {
+        "base": "d266501ad6188cce279a487b1ce61f4f327cd496",
+        "packages": "268d92d3d46147efe1e81892e3a618f8bbd4806b",
+        "luci": "067535eaf51a59582b775a8b588a9b05810f8030"
+      }
+    },
+    {
+      "id": "aarch64_cortex-a53-opkg-24.10.8",
+      "openwrt_arch": "aarch64_cortex-a53",
+      "target": "mediatek/filogic",
+      "goos": "linux",
+      "goarch": "arm64",
+      "package_manager": "opkg",
+      "format": "ipk",
+      "sdk_release": "24.10.8",
+      "sdk_url": "https://downloads.openwrt.org/releases/24.10.8/targets/mediatek/filogic/openwrt-sdk-24.10.8-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst",
+      "sdk_sha256": "d9fd074f281823a3023e8f6a73aaac598018c898ec9ac4d1c507b596930d7482",
+      "feeds": {
+        "base": "0b795ce79e23b553aa184080c390f9ce92a2b6d4",
+        "packages": "23abaa6f3b0fdfd76b570031107e5718476ff0c8",
+        "luci": "cac97ed67cfbcad90db49f5f3b1245c2c4cbfae5"
+      }
+    },
+    {
+      "id": "mips_24kc-opkg-24.10.8",
+      "openwrt_arch": "mips_24kc",
+      "target": "ath79/generic",
+      "goos": "linux",
+      "goarch": "mips",
+      "package_manager": "opkg",
+      "format": "ipk",
+      "sdk_release": "24.10.8",
+      "sdk_url": "https://downloads.openwrt.org/releases/24.10.8/targets/ath79/generic/openwrt-sdk-24.10.8-ath79-generic_gcc-13.3.0_musl.Linux-x86_64.tar.zst",
+      "sdk_sha256": "e46c4d0127061486ef4ce681f527f8a3980702011cafbf7801aff965a366dd8d",
+      "feeds": {
+        "base": "0b795ce79e23b553aa184080c390f9ce92a2b6d4",
+        "packages": "23abaa6f3b0fdfd76b570031107e5718476ff0c8",
+        "luci": "cac97ed67cfbcad90db49f5f3b1245c2c4cbfae5"
+      }
+    },
+    {
+      "id": "aarch64_cortex-a53-apk-25.12.2",
+      "openwrt_arch": "aarch64_cortex-a53",
+      "target": "mediatek/filogic",
+      "goos": "linux",
+      "goarch": "arm64",
+      "package_manager": "apk",
+      "format": "apk",
+      "sdk_release": "25.12.2",
+      "sdk_url": "https://downloads.openwrt.org/releases/25.12.2/targets/mediatek/filogic/openwrt-sdk-25.12.2-mediatek-filogic_gcc-14.3.0_musl.Linux-x86_64.tar.zst",
+      "sdk_sha256": "56e60bb1bfac3eb379cbabc3fff126ac2b749b746b007268b27aba2df9d31a4f",
+      "feeds": {
+        "base": "d266501ad6188cce279a487b1ce61f4f327cd496",
+        "packages": "268d92d3d46147efe1e81892e3a618f8bbd4806b",
+        "luci": "067535eaf51a59582b775a8b588a9b05810f8030"
+      },
+      "base_feed_subdir": "package"
+    },
+    {
+      "id": "arm_cortex-a7_neon-vfpv4-opkg-24.10.8",
+      "openwrt_arch": "arm_cortex-a7_neon-vfpv4",
+      "target": "ipq40xx/generic",
+      "goos": "linux",
+      "goarch": "arm",
+      "package_manager": "opkg",
+      "format": "ipk",
+      "sdk_release": "24.10.8",
+      "sdk_url": "https://downloads.openwrt.org/releases/24.10.8/targets/ipq40xx/generic/openwrt-sdk-24.10.8-ipq40xx-generic_gcc-13.3.0_musl_eabi.Linux-x86_64.tar.zst",
+      "sdk_sha256": "b1b6a4a0d18305431c005af5b3750bedcdc4f5578eb757c53a4ce5956337f9f2",
+      "feeds": {
+        "base": "0b795ce79e23b553aa184080c390f9ce92a2b6d4",
+        "packages": "23abaa6f3b0fdfd76b570031107e5718476ff0c8",
+        "luci": "cac97ed67cfbcad90db49f5f3b1245c2c4cbfae5"
+      }
+    },
+    {
+      "id": "aarch64_generic-opkg-24.10.8",
+      "openwrt_arch": "aarch64_generic",
+      "target": "armsr/armv8",
+      "goos": "linux",
+      "goarch": "arm64",
+      "package_manager": "opkg",
+      "format": "ipk",
+      "sdk_release": "24.10.8",
+      "sdk_url": "https://downloads.openwrt.org/releases/24.10.8/targets/armsr/armv8/openwrt-sdk-24.10.8-armsr-armv8_gcc-13.3.0_musl.Linux-x86_64.tar.zst",
+      "sdk_sha256": "5f430f5b30c9ea6dc472710356c139abf916b7ebd5de14e108e9cc204f40a2a4",
+      "feeds": {
+        "base": "0b795ce79e23b553aa184080c390f9ce92a2b6d4",
+        "packages": "23abaa6f3b0fdfd76b570031107e5718476ff0c8",
+        "luci": "cac97ed67cfbcad90db49f5f3b1245c2c4cbfae5"
+      }
+    },
+    {
+      "id": "aarch64_cortex-a72-opkg-24.10.8",
+      "openwrt_arch": "aarch64_cortex-a72",
+      "target": "bcm27xx/bcm2711",
+      "goos": "linux",
+      "goarch": "arm64",
+      "package_manager": "opkg",
+      "format": "ipk",
+      "sdk_release": "24.10.8",
+      "sdk_url": "https://downloads.openwrt.org/releases/24.10.8/targets/bcm27xx/bcm2711/openwrt-sdk-24.10.8-bcm27xx-bcm2711_gcc-13.3.0_musl.Linux-x86_64.tar.zst",
+      "sdk_sha256": "d97df62039b38cfea152de7c4c8981178dd3d078187f0cb00f95c0e86fb07ea0",
+      "feeds": {
+        "base": "0b795ce79e23b553aa184080c390f9ce92a2b6d4",
+        "packages": "23abaa6f3b0fdfd76b570031107e5718476ff0c8",
+        "luci": "cac97ed67cfbcad90db49f5f3b1245c2c4cbfae5"
+      }
+    },
+    {
+      "id": "aarch64_cortex-a76-opkg-24.10.8",
+      "openwrt_arch": "aarch64_cortex-a76",
+      "target": "bcm27xx/bcm2712",
+      "goos": "linux",
+      "goarch": "arm64",
+      "package_manager": "opkg",
+      "format": "ipk",
+      "sdk_release": "24.10.8",
+      "sdk_url": "https://downloads.openwrt.org/releases/24.10.8/targets/bcm27xx/bcm2712/openwrt-sdk-24.10.8-bcm27xx-bcm2712_gcc-13.3.0_musl.Linux-x86_64.tar.zst",
+      "sdk_sha256": "7b5fd1f72047c09986c1c24191971bb7caebf276406c7ea6281d62a1931593c1",
+      "feeds": {
+        "base": "0b795ce79e23b553aa184080c390f9ce92a2b6d4",
+        "packages": "23abaa6f3b0fdfd76b570031107e5718476ff0c8",
+        "luci": "cac97ed67cfbcad90db49f5f3b1245c2c4cbfae5"
+      }
+    },
+    {
+      "id": "arm_cortex-a9_vfpv3-d16-opkg-24.10.8",
+      "openwrt_arch": "arm_cortex-a9_vfpv3-d16",
+      "target": "mvebu/cortexa9",
+      "goos": "linux",
+      "goarch": "arm",
+      "goarm": "7",
+      "package_manager": "opkg",
+      "format": "ipk",
+      "sdk_release": "24.10.8",
+      "sdk_url": "https://downloads.openwrt.org/releases/24.10.8/targets/mvebu/cortexa9/openwrt-sdk-24.10.8-mvebu-cortexa9_gcc-13.3.0_musl_eabi.Linux-x86_64.tar.zst",
+      "sdk_sha256": "4a2ce19ffe18f615135849ba5e0a4b0b83aa324b2551984c38e2df782307860e",
+      "feeds": {
+        "base": "0b795ce79e23b553aa184080c390f9ce92a2b6d4",
+        "packages": "23abaa6f3b0fdfd76b570031107e5718476ff0c8",
+        "luci": "cac97ed67cfbcad90db49f5f3b1245c2c4cbfae5"
+      }
+    },
+    {
+      "id": "arm_cortex-a15_neon-vfpv4-opkg-24.10.8",
+      "openwrt_arch": "arm_cortex-a15_neon-vfpv4",
+      "target": "ipq806x/generic",
+      "goos": "linux",
+      "goarch": "arm",
+      "goarm": "7",
+      "package_manager": "opkg",
+      "format": "ipk",
+      "sdk_release": "24.10.8",
+      "sdk_url": "https://downloads.openwrt.org/releases/24.10.8/targets/ipq806x/generic/openwrt-sdk-24.10.8-ipq806x-generic_gcc-13.3.0_musl_eabi.Linux-x86_64.tar.zst",
+      "sdk_sha256": "ff3f75051f300ac6b846a02ada03afbddd8a677659f7df876f70f7a5e524e60b",
+      "feeds": {
+        "base": "0b795ce79e23b553aa184080c390f9ce92a2b6d4",
+        "packages": "23abaa6f3b0fdfd76b570031107e5718476ff0c8",
+        "luci": "cac97ed67cfbcad90db49f5f3b1245c2c4cbfae5"
+      }
+    },
+    {
+      "id": "mipsel_24kc-opkg-24.10.8",
+      "openwrt_arch": "mipsel_24kc",
+      "target": "ramips/mt7621",
+      "goos": "linux",
+      "goarch": "mipsle",
+      "package_manager": "opkg",
+      "format": "ipk",
+      "sdk_release": "24.10.8",
+      "sdk_url": "https://downloads.openwrt.org/releases/24.10.8/targets/ramips/mt7621/openwrt-sdk-24.10.8-ramips-mt7621_gcc-13.3.0_musl.Linux-x86_64.tar.zst",
+      "sdk_sha256": "9dd11b0517883b016ad7684f5c408a3483eec5b2455b2ffe004c9edd84063e45",
+      "feeds": {
+        "base": "0b795ce79e23b553aa184080c390f9ce92a2b6d4",
+        "packages": "23abaa6f3b0fdfd76b570031107e5718476ff0c8",
+        "luci": "cac97ed67cfbcad90db49f5f3b1245c2c4cbfae5"
+      }
+    },
+    {
+      "id": "mipsel_24kc_24kf-opkg-24.10.8",
+      "openwrt_arch": "mipsel_24kc_24kf",
+      "target": "pistachio/generic",
+      "goos": "linux",
+      "goarch": "mipsle",
+      "package_manager": "opkg",
+      "format": "ipk",
+      "sdk_release": "24.10.8",
+      "sdk_url": "https://downloads.openwrt.org/releases/24.10.8/targets/pistachio/generic/openwrt-sdk-24.10.8-pistachio-generic_gcc-13.3.0_musl.Linux-x86_64.tar.zst",
+      "sdk_sha256": "890633ef42b729f4f1c5238592c79f59490409f2f179c2f2caa47732929b2a88",
+      "feeds": {
+        "base": "0b795ce79e23b553aa184080c390f9ce92a2b6d4",
+        "packages": "23abaa6f3b0fdfd76b570031107e5718476ff0c8",
+        "luci": "cac97ed67cfbcad90db49f5f3b1245c2c4cbfae5"
+      }
+    },
+    {
+      "id": "mipsel_74kc-opkg-24.10.8",
+      "openwrt_arch": "mipsel_74kc",
+      "target": "bcm47xx/mips74k",
+      "goos": "linux",
+      "goarch": "mipsle",
+      "package_manager": "opkg",
+      "format": "ipk",
+      "sdk_release": "24.10.8",
+      "sdk_url": "https://downloads.openwrt.org/releases/24.10.8/targets/bcm47xx/mips74k/openwrt-sdk-24.10.8-bcm47xx-mips74k_gcc-13.3.0_musl.Linux-x86_64.tar.zst",
+      "sdk_sha256": "251ec0f47f0fda3378db6c3f59f810881d34be3e61c2d32afc1fa75836975edf",
+      "feeds": {
+        "base": "0b795ce79e23b553aa184080c390f9ce92a2b6d4",
+        "packages": "23abaa6f3b0fdfd76b570031107e5718476ff0c8",
+        "luci": "cac97ed67cfbcad90db49f5f3b1245c2c4cbfae5"
+      }
+    }
+  ],
+  "pending_architectures": [],
+  "validation_policy": "Targets pin build inputs only. Per-artifact build, ELF, emulation, installation, hardware and campus authentication evidence belongs in the release manifest. Pending architectures remain required work; they are not published as supported artifacts."
+}

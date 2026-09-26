@@ -1,3 +1,13 @@
+*.sh text eol=lf
+*.go text eol=lf
+core/go.mod text eol=lf
+core/go.sum text eol=lf
+# Fixtures are compared as bytes by more than one implementation, so a Windows
+# checkout must not hand the Lua bridge a different file than the Go tests read.
+core/testdata/** text eol=lf
+# A fuzz corpus entry is parsed by the Go toolchain and its bytes are the test
+# input; a checkout that rewrote the line endings would silently change what the
+# regression case exercises.
+core/internal/**/testdata/** text eol=lf
 doc/school-presets.json text eol=lf
-root/usr/lib/smart_srun/school_presets_fallback.json text eol=lf
 root/lib/upgrade/keep.d/smart-srun text eol=lf

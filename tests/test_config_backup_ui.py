@@ -7,6 +7,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 class BackupUITests(unittest.TestCase):
+    def test_lua_backup_routes_preserve_raw_input_and_cas(self):
+        lua = shutil.which("lua")
+        if not lua:
+            self.skipTest("lua unavailable")
+        result = subprocess.run([lua, str(ROOT/"tests/lua/controller_backup.lua"), str(ROOT)], capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_preview_races_commit_token_and_download(self):
         node = shutil.which("node")
         if not node:

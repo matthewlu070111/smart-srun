@@ -1,0 +1,17 @@
+{
+	"up": false,
+	"pending": false,
+	"available": false,
+	"autostart": true,
+	"dynamic": false,
+	"proto": "dhcpv6",
+	"data": {
+		
+	},
+	"errors": [
+		{
+			"subsystem": "interface",
+			"code": "NO_DEVICE"
+		}
+	]
+}

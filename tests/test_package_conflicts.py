@@ -17,12 +17,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PACKAGES = ("smart-srun", "luci-app-smart-srun", "luci-app-smart-srun-bundle")
 BUILD_DEPENDS = {
-    "smart-srun": {"+python3-light", "+python3-urllib", "+python3-codecs", "+python3-openssl"},
-    "luci-app-smart-srun": {"+smart-srun"},
-    "luci-app-smart-srun-bundle": {"+python3-light", "+python3-urllib", "+python3-codecs", "+python3-openssl"},
+    "smart-srun": {"+ca-bundle", "+uci", "+ubus", "+procd", "+rpcd", "+rpcd-mod-iwinfo"},
+    "luci-app-smart-srun": {"+smart-srun", "+luci-base", "+luci-compat"},
+    "luci-app-smart-srun-bundle": {"+ca-bundle", "+uci", "+ubus", "+procd", "+rpcd", "+rpcd-mod-iwinfo", "+luci-base", "+luci-compat"},
 }
 CONFLICTS = {
-    "smart-srun": set(),
+    "smart-srun": {"luci-app-smart-srun-bundle"},
     "luci-app-smart-srun": {"luci-app-smart-srun-bundle"},
     "luci-app-smart-srun-bundle": {"smart-srun", "luci-app-smart-srun"},
 }
@@ -30,17 +30,22 @@ CONFLICTS = {
 
 @unittest.skipUnless(shutil.which("make"), "GNU make is required")
 class PackageConflictTests(unittest.TestCase):
-    def evaluate_metadata(self, use_apk):
+    def evaluate_metadata(self, use_apk, dump=False):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir)
             (path / "rules.mk").write_text("INCLUDE_DIR := .\n", encoding="utf-8")
+            go_framework = path / "feeds/packages/lang/golang/golang-package.mk"
+            go_framework.parent.mkdir(parents=True)
+            go_framework.write_text("# Dependency graph fixture; real builds use the pinned SDK framework.\n")
             (path / "package.mk").write_text(
                 "define BuildPackage\n"
                 "$(eval DEPENDS :=)\n"
                 "$(eval CONFLICTS :=)\n"
+                "$(eval EXTRA_DEPENDS :=)\n"
                 "$(eval $(call Package/$(1)))\n"
                 "$(eval BuildDepends/$(1) := $(DEPENDS))\n"
                 "$(eval Conflicts/$(1) := $(CONFLICTS))\n"
+                "$(eval ExactDepends/$(1) := $(EXTRA_DEPENDS))\n"
                 "$(eval Package/$(1)/DEPENDS := $(subst +,,$(DEPENDS)))\n"
                 "endef\n",
                 encoding="utf-8",
@@ -51,6 +56,7 @@ class PackageConflictTests(unittest.TestCase):
                     ("build", "BuildDepends/" + package),
                     ("conflicts", "Conflicts/" + package),
                     ("runtime", "Package/" + package + "/DEPENDS"),
+                    ("exact", "ExactDepends/" + package),
                 ):
                     makefile += "\n$(info contract:%s:%s:$(%s))" % (
                         package,
@@ -66,6 +72,8 @@ class PackageConflictTests(unittest.TestCase):
                     "-s",
                     "TOPDIR=.",
                     "CONFIG_USE_APK=" + ("y" if use_apk else ""),
+                    "DUMP=" + ("1" if dump else ""),
+                    "VERSION=2.0.0~rc1-r1",
                     "contract",
                 ],
                 cwd=path,
@@ -83,6 +91,18 @@ class PackageConflictTests(unittest.TestCase):
                 )
         self.assertEqual(set(metadata), set(PACKAGES))
         return metadata
+
+    def test_luci_uses_sdk_version_including_its_actual_release_suffix(self):
+        metadata = self.evaluate_metadata(False)
+        self.assertEqual(metadata["luci-app-smart-srun"]["exact"],
+                         {"smart-srun", "(=2.0.0~rc1-r1)"})
+
+    def test_dump_omits_runtime_conflicts_from_kconfig(self):
+        metadata = self.evaluate_metadata(False, dump=True)
+        for package in PACKAGES:
+            with self.subTest(package=package):
+                self.assertEqual(metadata[package]["build"], BUILD_DEPENDS[package])
+                self.assertEqual(metadata[package]["conflicts"], set())
 
     def test_ipk_keeps_conflicts_separate_from_runtime_dependencies(self):
         metadata = self.evaluate_metadata(False)

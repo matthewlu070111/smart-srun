@@ -1,0 +1,12 @@
+{
+	"up": false,
+	"pending": false,
+	"available": true,
+	"autostart": true,
+	"dynamic": false,
+	"proto": "dhcp",
+	"device": "eth1",
+	"data": {
+		
+	}
+}

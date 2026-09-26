@@ -1,0 +1,14 @@
+# Reviewed deterministic protocol fixtures only, not production credentials.
+# RFC 2202 HMAC-MD5 vector and explicitly synthetic XXTEA round-trip keys.
+core/internal/protocol/srun/independent_test.go:generic-api-key:103
+core/internal/protocol/srun/independent_test.go:generic-api-key:188
+# Hex-encoded public inputs generated for the SRun protocol vector corpus.
+core/testdata/protocol/srun-vectors.json:generic-api-key:217
+core/testdata/protocol/srun-vectors.json:generic-api-key:223
+core/testdata/protocol/srun-vectors.json:generic-api-key:235
+core/testdata/protocol/srun-vectors.json:generic-api-key:305
+core/testdata/protocol/srun-vectors.json:generic-api-key:311
+core/testdata/protocol/srun-vectors.json:generic-api-key:329
+core/testdata/protocol/srun-vectors.json:generic-api-key:365
+core/testdata/protocol/srun-vectors.json:generic-api-key:383
+core/testdata/protocol/srun-vectors.json:generic-api-key:401

@@ -71,16 +71,9 @@
     return out.join('\n');
   }
 
-  function requestToken() {
-    var node = document.querySelector ? document.querySelector('input[name="token"]') : null;
-    return (node ? node.value : ((window.L && L.env) ? L.env.token : '')) || '';
-  }
-
   function fetchJson(url, callback) {
     var xhr = new XMLHttpRequest();
-    var writes = /\/(update_start|presets_refresh)$/.test(url.split('?')[0]);
-    xhr.open(writes ? 'POST' : 'GET', url, true);
-    if (writes) xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+    xhr.open('GET', url, true);
     xhr.onreadystatechange = function() {
       if (xhr.readyState !== 4) return;
       if (xhr.status !== 200) {
@@ -93,7 +86,24 @@
         callback(err);
       }
     };
-    xhr.send(writes ? 'token=' + encodeURIComponent(requestToken()) : null);
+    xhr.send(null);
+  }
+
+  function requestToken() {
+    var tokenNode = document.querySelector('input[name="token"]');
+    return (tokenNode ? tokenNode.value : ((window.L && L.env) ? L.env.token : '')) || '';
+  }
+
+  function startUpdate(planId, callback) {
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', UPDATE_START_URL, true);
+    xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded; charset=UTF-8');
+    xhr.onreadystatechange = function() {
+      if (xhr.readyState !== 4) return;
+      if (xhr.status !== 200) { callback(new Error('http_' + xhr.status)); return; }
+      try { callback(null, JSON.parse(xhr.responseText || '{}')); } catch (err) { callback(err); }
+    };
+    xhr.send('plan_id=' + encodeURIComponent(planId || '') + '&token=' + encodeURIComponent(requestToken()));
   }
 
   function initConfigBackup() {
@@ -153,7 +163,7 @@
           if (!data || !data.ok) { result.textContent = (data && data.message) || '备份校验失败'; return; }
           pending = {data:text, expected_revision:data.expected_revision};
           importButton.disabled = false;
-          result.textContent = '备份包含 ' + data.campus_accounts + ' 个校园账号、' + data.hotspot_profiles + ' 个热点。确认导入将替换现有配置并关闭自动守护。';
+          result.textContent = '备份包含 ' + data.campus_accounts + ' 个校园账号、' + data.hotspot_profiles + ' 个热点。确认导入将替换现有配置并关闭自动守护。' + (data.warnings && data.warnings.length ? '\n' + data.warnings.join('\n') : '');
         });
       };
       reader.readAsText(selected);
@@ -240,13 +250,14 @@
         if (!confirm('确认自动更新到 ' + target + '？更新过程中请不要刷新或断电。')) return;
         updateBtn.disabled = true;
         output.textContent = '正在提交后台更新任务...';
-        fetchJson(UPDATE_START_URL, function(err, data) {
+        startUpdate(plan.plan_id, function(err, data) {
           if (err || !data) {
             output.textContent = '提交更新失败';
             updateBtn.disabled = false;
             return;
           }
           output.textContent = formatUpdateStatus(data);
+          if (!data.running) { updateBtn.disabled = false; return; }
           pollUpdateStatus(output);
         });
       }
@@ -274,12 +285,19 @@
       openUpdateModal(updatePlan);
     });
 
-    fetchJson(UPDATE_CHECK_URL, function(err, data) {
+    function checked(err, data) {
+      if (!err && data && data.running && data.job_id) {
+        setTimeout(function() {
+          fetchJson(UPDATE_STATUS_URL + '?job_id=' + encodeURIComponent(data.job_id), checked);
+        }, 1000);
+        return;
+      }
       if (err || !data || !data.ok || !data.update_available) return;
       updatePlan = data;
       dot.style.display = 'inline-block';
       link.title = '发现新版本：' + (data.latest_tag || data.latest_version || '');
-    });
+    }
+    fetchJson(UPDATE_CHECK_URL, checked);
   }
 
   window.smartFetchJson = fetchJson;
@@ -302,7 +320,7 @@
     container.style.display = '';
   }
 
-  function openBlockingFeedback(action, requestedAt) {
+  function openBlockingFeedback(action, requestedAt, actionId) {
     var result = document.getElementById('smart-srun-manual-result') || document.getElementById('smart-srun-switch-result');
     var resultPortal = document.getElementById('smart-srun-manual-portal');
     renderPortalGuidance(resultPortal, '');
@@ -341,16 +359,25 @@
         xhr.open('POST', '/cgi-bin/luci/admin/services/smart_srun/enqueue', true);
         xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded; charset=UTF-8');
         xhr.onreadystatechange = function() {
-          if (xhr.readyState !== 4) return;
-          var text = '已触发强制停止';
+          if (xhr.readyState !== 4 || closed) return;
+          var stopped = false;
+          var text = '强制停止失败，请重试';
           if (xhr.status === 200) {
             try {
               var data = JSON.parse(xhr.responseText || '{}');
+              stopped = data.ok === true;
+              if (stopped) text = '已触发强制停止';
               if (typeof data.message === 'string' && data.message !== '')
                 text = data.message;
             } catch (e) {}
           }
-          unlock(text, false);
+          if (stopped) {
+            unlock(text, false);
+          } else {
+            forceButton.disabled = false;
+            tip.textContent = text;
+            if (result) result.textContent = text;
+          }
         };
         xhr.send('action=' + encodeURIComponent('force_stop') + '&token=' + encodeURIComponent(requestToken()));
       }
@@ -387,8 +414,8 @@
 
     function checkTerminal(statusData) {
       if (!statusData) return false;
-      if (statusData.last_action !== action) return false;
-      if ((statusData.last_action_ts || 0) < requestedAt) return false;
+      if (statusData.action_id !== actionId) return false;
+      if (statusData.last_action && statusData.last_action !== action) return false;
       if (statusData.action_result === 'forced') {
         unlock(statusData.last_action_message || statusData.status || '已强制停止', false);
         return true;
@@ -412,13 +439,17 @@
         }
       });
 
-      fetchJson('/cgi-bin/luci/admin/services/smart_srun/status?_=' + Date.now(), function(err, statusData) {
+      fetchJson('/cgi-bin/luci/admin/services/smart_srun/status?action_id=' + encodeURIComponent(actionId) + '&_=' + Date.now(), function(err, statusData) {
         if (err) return;
         checkTerminal(statusData);
       });
     }
 
     L.showModal(titles[action] || '正在执行动作', [ tip, logBox, portalHelp, footer ], 'cbi-modal');
+    if (typeof actionId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(actionId)) {
+      unlock('无法读取操作回执，请查看当前状态', false);
+      return;
+    }
     timer = window.setInterval(poll, 1000);
     poll();
   }
@@ -553,16 +584,26 @@
     return active;
   }
 
-  function refreshSchoolPresets() {
+  window.smartRefreshPresets = function() {
     var node = document.getElementById('smart-school-preset-data');
     if (!node || window.__smartPresetsRefresh) return;
+    var button = document.getElementById('smart-presets-refresh');
+    var result = document.getElementById('smart-presets-refresh-result');
     window.__smartPresetsRefresh = true;
-    fetchJson('/cgi-bin/luci/admin/services/smart_srun/presets_refresh?_=' + Date.now(), function(err, data) {
-      if (err || !data || !data.ok || !data.schools) return;
+    if (button) button.disabled = true;
+    if (result) result.textContent = '正在更新…';
+    postDiscovery('presets_refresh', {}, function(err, data) {
+      window.__smartPresetsRefresh = false;
+      if (button) button.disabled = false;
+      if (err || !data || !data.ok || !data.schools) {
+        if (result) result.textContent = '更新失败，仍使用本地预设';
+        return;
+      }
       node.value = JSON.stringify(data.schools);
       node.textContent = node.value;
+      if (result) result.textContent = '学校预设已更新';
     });
-  }
+  };
 
   var DEFAULT_LOGIN_SHAPE = {
     n: '200',
@@ -586,7 +627,7 @@
     return null;
   }
 
-  // 用户自定义预设/运营商存储：真身在路由器侧 /usr/lib/smart_srun/user_presets.json，
+  // 用户自定义预设/运营商存储：真身在路由器侧 /etc/smart-srun/user-presets.json，
   // 页面渲染时经 #smart-user-preset-data 注入，增删后整份 POST 回写，跨设备共享。
   var USER_PRESETS_SET_URL = '/cgi-bin/luci/admin/services/smart_srun/user_presets_set';
   var userPresetStore = { presets: [], operators: [] };
@@ -1129,22 +1170,14 @@
       if (nodes.status) {
         nodes.status.textContent = baseUrl ? '嗅探中...' : '正在检查出口是否被认证页拦截...';
       }
-      var xhr = new XMLHttpRequest();
-      xhr.open('POST', '/cgi-bin/luci/admin/services/smart_srun/' + path, true);
-      xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded; charset=UTF-8');
-      xhr.onload = function() {
-        var data = {};
-        try {
-          data = JSON.parse(xhr.responseText || '{}');
-        } catch (e) {}
-        applyDetectResult(data, nodes);
+      var mode = getFieldValue('jm-access_mode');
+      postDiscovery(path, {base_url: baseUrl, access_mode: mode, school: selectedPresetId,
+        iface: mode === 'wired' ? getFieldValue('jm-wired_iface') : (readJson('smart-probe-config', {}).sta_iface || 'wwan'),
+        ssid: mode === 'wifi' ? getFieldValue('jm-ssid') : ''}, function(err, data) {
+        if (!nodes.base || !document.body.contains(nodes.base)) return;
+        applyDetectResult(err ? {ok: false, message: err.message} : data, nodes);
         if (button) button.disabled = false;
-      };
-      xhr.onerror = function() {
-        if (nodes.status) nodes.status.textContent = '嗅探请求失败';
-        if (button) button.disabled = false;
-      };
-      xhr.send(baseUrl ? ('base_url=' + encodeURIComponent(baseUrl)) : '');
+      });
     }
 
     showNativeModal(
@@ -1404,7 +1437,7 @@
           var message = (typeof data.message === 'string' && data.message !== '') ? data.message : '已提交';
           result.textContent = message;
           if (data.ok) {
-            openBlockingFeedback(action, parseInt(data.requested_at || 0, 10) || 0);
+            openBlockingFeedback(action, parseInt(data.requested_at || 0, 10) || 0, data.action_id);
           }
         } catch (e) {
           result.textContent = '提交失败';
@@ -1448,7 +1481,7 @@
           var message = (typeof data.message === 'string' && data.message !== '') ? data.message : '已提交';
           result.textContent = message;
           if (data.ok) {
-            openBlockingFeedback(action, parseInt(data.requested_at || 0, 10) || 0);
+            openBlockingFeedback(action, parseInt(data.requested_at || 0, 10) || 0, data.action_id);
           }
         } catch (e) {
           result.textContent = '提交失败';
@@ -1503,7 +1536,6 @@
     campusData = readJson('smart-campus-data', []);
     hotspotData = readJson('smart-hotspot-data', []);
     initUserPresetStore();
-    refreshSchoolPresets();
   }
 
   var LOG_LEVEL_WEIGHTS = { ALL: 0, DEBUG: 10, INFO: 20, WARN: 30, ERROR: 40 };
@@ -1872,7 +1904,9 @@
       var cancel = new XMLHttpRequest();
       cancel.open('POST', '/cgi-bin/luci/admin/services/smart_srun/setup_wifi', true);
       cancel.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
-      cancel.send('action=cancel&job=' + encodeURIComponent(old.wifiJob) + '&token=' + encodeURIComponent(requestToken()));
+      var tokenNode = document.querySelector('input[name="token"]');
+      var token = tokenNode ? tokenNode.value : ((window.L && L.env) ? L.env.token : '');
+      cancel.send('action=cancel&job=' + encodeURIComponent(old.wifiJob) + '&token=' + encodeURIComponent(token || ''));
     }
     wiz = null;
     if (old && old.xhr) old.xhr.abort();
@@ -1903,14 +1937,86 @@
     return bar;
   }
 
+  // Preserve the wizard's callbacks and presentation while the daemon owns
+  // the bounded job. Polling reads cached action state; it never probes again.
+  function postDiscovery(path, values, done) {
+    var stopped = false, active = null, timer = null, actionId = '';
+    var deadline = Date.now() + (path === 'detect_operator' ? 225000 : (path === 'presets_refresh' ? 75000 : 65000));
+    var tokenNode = document.querySelector('input[name="token"]');
+    var token = tokenNode ? tokenNode.value : ((window.L && L.env) ? L.env.token : '');
+    values.idempotency_key = 'luci-probe-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+    function post(params, callback) {
+      var xhr = new XMLHttpRequest(), encoded = ['token=' + encodeURIComponent(token || '')];
+      active = xhr;
+      for (var key in params) {
+        if (Object.prototype.hasOwnProperty.call(params, key)) encoded.push(encodeURIComponent(key) + '=' + encodeURIComponent(params[key]));
+      }
+      xhr.open('POST', '/cgi-bin/luci/admin/services/smart_srun/' + path, true);
+      xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded; charset=UTF-8');
+      xhr.timeout = 12000;
+      xhr.onload = function() {
+        if (stopped) return;
+        var data;
+        try { data = JSON.parse(xhr.responseText); } catch (e) {}
+        if (xhr.status !== 200 || !data || data.ok === false) {
+          callback(new Error((data && data.message) || '探测请求失败，请检查 LuCI 登录状态。')); return;
+        }
+        callback(null, data);
+      };
+      xhr.onerror = xhr.ontimeout = function() { if (!stopped) callback(new Error('探测请求超时或连接失败，请稍后再试。')); };
+      xhr.send(encoded.join('&'));
+    }
+    function finish(err, data) {
+      if (stopped) return;
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      done(err, data || {});
+    }
+    function poll(err, data) {
+      if (err) { finish(err); return; }
+      actionId = data.action_id || data.id || actionId;
+      if (!data.action_id && data.state === 'succeeded') { finish(null, data.result || {}); return; }
+      if (!data.action_id && (data.state === 'failed' || data.state === 'cancelled' || data.state === 'interrupted')) {
+        finish(new Error(data.message || '探测未完成')); return;
+      }
+      if (!actionId || Date.now() >= deadline) { cancel(); finish(new Error('探测等待超时，请稍后再试。')); return; }
+      timer = setTimeout(function() { post({action: 'status', action_id: actionId}, poll); }, 400);
+    }
+    function cancel() {
+      if (actionId) post({action: 'cancel', action_id: actionId}, function() {});
+    }
+    post(values, poll);
+    return { abort: function() {
+      if (stopped) return;
+      if (active) active.abort();
+      if (timer) clearTimeout(timer);
+      cancel();
+      stopped = true;
+    }};
+  }
+
   function wizPost(path, values, done, timeout) {
     var owner = wiz;
+    if (path === 'detect_acid' || path === 'detect_env' || path === 'discover_operators' || path === 'detect_operator') {
+      var job = postDiscovery(path, values, function(err, data) {
+        if (wiz !== owner || owner.xhr !== job) return;
+        owner.xhr = null;
+        owner.busy = '';
+        if (!owner.root || !document.body.contains(owner.root) ||
+            !document.body.classList.contains('modal-overlay-active')) return;
+        done(err, data || {});
+      });
+      owner.xhr = job;
+      return;
+    }
     var xhr = new XMLHttpRequest();
     owner.xhr = xhr;
     xhr.open('POST', '/cgi-bin/luci/admin/services/smart_srun/' + path, true);
     xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded; charset=UTF-8');
     xhr.timeout = timeout || 120000;
-    var encoded = [];
+    var tokenNode = document.querySelector('input[name="token"]');
+    var token = tokenNode ? tokenNode.value : ((window.L && L.env) ? L.env.token : '');
+    var encoded = ['token=' + encodeURIComponent(token || '')];
     for (var key in values) {
       if (Object.prototype.hasOwnProperty.call(values, key)) encoded.push(encodeURIComponent(key) + '=' + encodeURIComponent(values[key]));
     }
@@ -1934,12 +2040,12 @@
     xhr.ontimeout = function() { finish(new Error(path === 'enqueue' ?
       '保存请求超时，账号可能已保存。请关闭并刷新账号列表核对后再操作。' :
       '请求超时。路由器可能仍在处理，请稍后再试。')); };
-    encoded.push('token=' + encodeURIComponent(requestToken()));
     xhr.send(encoded.join('&'));
   }
 
   function wizConnection() {
-    return { access_mode: wiz.accessMode, iface: wiz.accessMode === 'wired' ? wiz.wiredIface : wiz.wifiIface, ssid: wiz.ssid };
+    return { access_mode: wiz.accessMode, iface: wiz.accessMode === 'wired' ? wiz.wiredIface : wiz.wifiIface,
+      ssid: wiz.accessMode === 'wifi' ? wiz.ssid : '' };
   }
 
   function wizLoginPreview(suffix) {
@@ -2062,7 +2168,10 @@
         owner.busy = 'wifi'; owner.wifiTimer = setTimeout(check, 2000);
       }, 10000);
     }
-    wizPost('setup_wifi', {action: 'cancel', job: owner.wifiJob}, function() { check(); }, 10000);
+    wizPost('setup_wifi', {action: 'cancel', job: owner.wifiJob}, function(err, data) {
+      if (err || data.ok === false) { wizError(err ? err.message : data.message); return; }
+      check();
+    }, 10000);
   }
 
   function wizConnectWifi() {
@@ -2371,8 +2480,11 @@
     if (!readOnly && !suffixes.length) { wizError('请选择认证后缀后验证登录。'); return; }
     var payload = wizConnection();
     payload.base_url = wiz.baseUrl; payload.ac_id = wiz.acId || '1'; payload.school = wiz.school;
-    payload.user_id = wiz.userId; payload.password = readOnly ? '' : wiz.password;
-    payload.max_attempts = suffixes.length; payload.candidates = JSON.stringify(suffixes);
+    payload.user_id = wiz.userId; payload.read_only = readOnly ? '1' : '0';
+    if (!readOnly) {
+      payload.password = wiz.password;
+      payload.max_attempts = suffixes.length; payload.candidates = JSON.stringify(suffixes);
+    }
     WIZ_SHAPE_KEYS.forEach(function(key) { payload[key] = wiz.shape[key] || ''; });
     wizInvalidate(); wiz.verifyExpanded = true; wiz.busy = 'operator'; wiz.error = '';
     wiz.opLog = readOnly ? '正在读取在线账号信息…' : '正在验证登录，请稍候…'; wizRender();

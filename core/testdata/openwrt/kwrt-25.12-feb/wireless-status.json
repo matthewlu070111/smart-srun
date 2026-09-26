@@ -1,0 +1,76 @@
+{
+  "radio0": {
+    "up": true,
+    "pending": false,
+    "autostart": true,
+    "disabled": false,
+    "retry_setup_failed": false,
+    "config": {
+      "type": "mac80211",
+      "band": "2g",
+      "cell_density": 0,
+      "channel": "6",
+      "country": "CN",
+      "htmode": "HE20",
+      "path": "platform/soc/18000000.wifi"
+    },
+    "interfaces": [
+      {
+        "section": "default_radio0",
+        "config": {
+          "network": [
+            "lan"
+          ],
+          "device": [
+            "radio0"
+          ],
+          "mode": "ap",
+          "encryption": "psk2",
+          "key": "redacted-key",
+          "ssid": "HomeNet-4",
+          "radios": []
+        },
+        "ifname": "phy0-ap0",
+        "vlans": [],
+        "stations": []
+      }
+    ]
+  },
+  "radio1": {
+    "up": true,
+    "pending": false,
+    "autostart": true,
+    "disabled": false,
+    "retry_setup_failed": false,
+    "config": {
+      "type": "mac80211",
+      "band": "5g",
+      "cell_density": 0,
+      "channel": "153",
+      "country": "CN",
+      "htmode": "HE80",
+      "path": "platform/soc/18000000.wifi+1"
+    },
+    "interfaces": [
+      {
+        "section": "default_radio1",
+        "config": {
+          "network": [
+            "lan"
+          ],
+          "device": [
+            "radio1"
+          ],
+          "mode": "ap",
+          "encryption": "psk2",
+          "key": "redacted-key",
+          "ssid": "HomeNet-5",
+          "radios": []
+        },
+        "ifname": "phy1-ap0",
+        "vlans": [],
+        "stations": []
+      }
+    ]
+  }
+}

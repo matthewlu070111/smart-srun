@@ -1,0 +1,130 @@
+name: Go SDK candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Candidate display version (X.Y.Z or X.Y.ZrcN)"
+        required: true
+        default: "2.0.0rc1"
+        type: string
+  workflow_call:
+    secrets:
+      SMARTSRUN_APK_SIGNING_KEY:
+        description: "Dedicated APK key; the release-signing environment takes precedence"
+        required: false
+    inputs:
+      version:
+        required: true
+        type: string
+      channel:
+        type: string
+        default: ""
+      official_signing:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    uses: ./.github/workflows/ci.yml
+  targets:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.targets.outputs.matrix }}
+      go_version: ${{ steps.targets.outputs.go_version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - id: targets
+        env:
+          DISPLAY_VERSION: ${{ inputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+          OFFICIAL: ${{ inputs.official_signing }}
+        run: |
+          if [ "$OFFICIAL" = true ] && { [ "$GITHUB_REPOSITORY" != matthewlu070111/smart-srun ] || [ "$GITHUB_REF" != refs/heads/go ]; }; then
+            echo 'Official signing is restricted to the upstream go branch.' >&2
+            exit 1
+          fi
+          args=()
+          if [ -n "$CHANNEL" ]; then args+=(--channel "$CHANNEL"); fi
+          python3 scripts/ci_go_release.py metadata --version "$DISPLAY_VERSION" "${args[@]}"
+  build:
+    needs: [targets, quality]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    environment: ${{ inputs.official_signing && 'release-signing' || 'build-preview' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.targets.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: ${{ needs.targets.outputs.go_version }}
+          cache: false
+      - name: Install SDK and verification dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y build-essential clang flex bison gawk gettext git \
+            libncurses-dev libssl-dev python3 python3-setuptools python3-pyelftools \
+            rsync swig unzip zlib1g-dev file wget curl zstd qemu-user
+      - name: Build, sign and independently verify native packages
+        env:
+          DISPLAY_VERSION: ${{ inputs.version }}
+          TARGET_ID: ${{ matrix.target }}
+          OFFICIAL: ${{ inputs.official_signing }}
+          SMARTSRUN_APK_SIGNING_KEY: ${{ inputs.official_signing && secrets.SMARTSRUN_APK_SIGNING_KEY || '' }}
+          SMARTSRUN_APK_PUBLIC_KEY: ${{ inputs.official_signing && vars.SMARTSRUN_APK_PUBLIC_KEY || '' }}
+        run: |
+          args=()
+          if [ "$OFFICIAL" = true ]; then args+=(--official); fi
+          python3 scripts/ci_go_release.py build --version "$DISPLAY_VERSION" --target "$TARGET_ID" \
+            --work "$RUNNER_TEMP/smart-srun" --output "$RUNNER_TEMP/packages" "${args[@]}"
+      - name: Retain verified packages and exact build records
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: go-sdk-${{ matrix.target }}
+          path: ${{ runner.temp }}/packages/
+          if-no-files-found: error
+      - name: Retain failed SDK logs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: go-sdk-log-${{ matrix.target }}
+          path: ${{ runner.temp }}/smart-srun/sdk/${{ matrix.target }}/build.log
+          if-no-files-found: warn
+      - name: Remove any interrupted signing key
+        if: always()
+        run: rm -f -- "$RUNNER_TEMP/smart-srun/signing/private.pem"
+  candidate:
+    needs: [targets, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: go-sdk-*
+          path: ${{ runner.temp }}/sdk-artifacts
+      - name: Assemble the complete immutable candidate
+        env:
+          DISPLAY_VERSION: ${{ inputs.version }}
+          OFFICIAL: ${{ inputs.official_signing }}
+        run: |
+          args=()
+          if [ "$OFFICIAL" = true ]; then args+=(--official); fi
+          python3 scripts/ci_go_release.py assemble --version "$DISPLAY_VERSION" \
+            --input "$RUNNER_TEMP/sdk-artifacts" --output "$RUNNER_TEMP/release-candidate" "${args[@]}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-candidate-${{ inputs.version }}
+          path: ${{ runner.temp }}/release-candidate/
+          if-no-files-found: error

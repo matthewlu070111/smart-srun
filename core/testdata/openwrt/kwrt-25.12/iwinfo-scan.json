@@ -1,0 +1,154 @@
+{
+	"results": [
+		{
+			"ssid": "jxnu_stu",
+			"bssid": "02:00:5E:00:53:02",
+			"mode": "Master",
+			"band": 5,
+			"channel": 52,
+			"mhz": 5260,
+			"signal": -45,
+			"quality": 65,
+			"quality_max": 70,
+			"encryption": {
+				"enabled": false
+			}
+		},
+		{
+			"ssid": "HomeNet-8",
+			"bssid": "02:00:5E:00:53:03",
+			"mode": "Master",
+			"band": 5,
+			"channel": 153,
+			"mhz": 5765,
+			"signal": -75,
+			"quality": 35,
+			"quality_max": 70,
+			"encryption": {
+				"enabled": true,
+				"wpa": [
+					1,
+					2
+				],
+				"authentication": [
+					"psk"
+				],
+				"ciphers": [
+					"ccmp"
+				]
+			}
+		},
+		{
+			"ssid": "jxnu_stu",
+			"bssid": "02:00:5E:00:53:04",
+			"mode": "Master",
+			"band": 5,
+			"channel": 149,
+			"mhz": 5745,
+			"signal": -63,
+			"quality": 47,
+			"quality_max": 70,
+			"encryption": {
+				"enabled": false
+			}
+		},
+		{
+			"ssid": "jxnu_stu",
+			"bssid": "02:00:5E:00:53:05",
+			"mode": "Master",
+			"band": 5,
+			"channel": 149,
+			"mhz": 5745,
+			"signal": -72,
+			"quality": 38,
+			"quality_max": 70,
+			"encryption": {
+				"enabled": false
+			}
+		},
+		{
+			"ssid": "jxnu_stu",
+			"bssid": "02:00:5E:00:53:06",
+			"mode": "Master",
+			"band": 5,
+			"channel": 36,
+			"mhz": 5180,
+			"signal": -77,
+			"quality": 33,
+			"quality_max": 70,
+			"encryption": {
+				"enabled": false
+			}
+		},
+		{
+			"ssid": "jxnu_stu",
+			"bssid": "02:00:5E:00:53:07",
+			"mode": "Master",
+			"band": 5,
+			"channel": 36,
+			"mhz": 5180,
+			"signal": -78,
+			"quality": 32,
+			"quality_max": 70,
+			"encryption": {
+				"enabled": false
+			}
+		},
+		{
+			"ssid": "jxnu_stu",
+			"bssid": "02:00:5E:00:53:08",
+			"mode": "Master",
+			"band": 5,
+			"channel": 149,
+			"mhz": 5745,
+			"signal": -81,
+			"quality": 29,
+			"quality_max": 70,
+			"encryption": {
+				"enabled": false
+			}
+		},
+		{
+			"ssid": "jxnu_stu",
+			"bssid": "02:00:5E:00:53:09",
+			"mode": "Master",
+			"band": 5,
+			"channel": 52,
+			"mhz": 5260,
+			"signal": -85,
+			"quality": 25,
+			"quality_max": 70,
+			"encryption": {
+				"enabled": false
+			}
+		},
+		{
+			"ssid": "HomeNet-9",
+			"bssid": "02:00:5E:00:53:0A",
+			"mode": "Master",
+			"band": 5,
+			"channel": 149,
+			"mhz": 5745,
+			"signal": -89,
+			"quality": 21,
+			"quality_max": 70,
+			"encryption": {
+				"enabled": false
+			}
+		},
+		{
+			"ssid": "jxnu_stu",
+			"bssid": "02:00:5E:00:53:0B",
+			"mode": "Master",
+			"band": 5,
+			"channel": 36,
+			"mhz": 5180,
+			"signal": -90,
+			"quality": 20,
+			"quality_max": 70,
+			"encryption": {
+				"enabled": false
+			}
+		}
+	]
+}

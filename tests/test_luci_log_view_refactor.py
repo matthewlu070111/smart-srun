@@ -59,10 +59,10 @@ class LuciLogViewRefactorTests(unittest.TestCase):
         self.assertIn('local plugin_text = read_plugin_log_text(source_lines)', self.controller_text)
         self.assertIn('local system_text = read_system_log_text(source_lines)', self.controller_text)
         self.assertIn('local function tail_text(text, lines)', self.controller_text)
-        self.assertIn('local read_file_tail', self.controller_text)
-        self.assertIn('read_file_tail(LOG_FILE, 1)', self.controller_text)
-        self.assertIn('return read_file_tail(LOG_FILE, lines)', self.controller_text)
-        self.assertNotIn('tail -n 1 /var/log/smart_srun.log', self.controller_text)
+        # The plugin log is the daemon's, read over the socket. tail_text stays
+        # for the system log, which is still `logread` output this page trims.
+        self.assertIn('rpc.call("log.tail"', self.controller_text)
+        self.assertNotIn("/var/log/smart_srun.log", self.controller_text)
         self.assertIn('"logread -l " .. lines .. " 2>/dev/null"', self.controller_text)
         self.assertIn('"logread 2>/dev/null"', self.controller_text)
         self.assertIn('return tail_text(text, lines)', self.controller_text)
@@ -91,9 +91,10 @@ class LuciLogViewRefactorTests(unittest.TestCase):
         self.assertIn('is_hidden_friendly_field(key)', self.controller_text)
 
     def test_cbi_log_panel_renders_simple_toolbar(self):
-        self.assertIn('local LOG_FILE = "/var/log/smart_srun.log"', self.cbi_text)
-        self.assertIn('local function read_file_tail(path, lines)', self.cbi_text)
-        self.assertIn('local t = read_file_tail(LOG_FILE, 100)', self.cbi_text)
+        # The first screen is the newest hundred records from the daemon's own
+        # log; the page then polls by cursor. It reads no file of its own.
+        self.assertIn('rpc.call("log.tail", { lines = 100 })', self.cbi_text)
+        self.assertNotIn("/var/log/smart_srun.log", self.cbi_text)
         self.assertNotIn('tail -n 100 /var/log/smart_srun.log', self.cbi_text)
         self.assertIn('log_controller.friendly_log_text(t)', self.cbi_text)
         self.assertNotIn('smart-srun-log-channels', self.cbi_text)
@@ -124,7 +125,10 @@ class LuciLogViewRefactorTests(unittest.TestCase):
     def test_controller_exposes_plugin_log_clear_endpoint(self):
         self.assertIn('log_clear', self.controller_text)
         self.assertIn('function action_log_clear()', self.controller_text)
-        self.assertIn('fs.writefile(LOG_FILE, "")', self.controller_text)
+        # Clearing is the daemon's own operation on its own log. The page never
+        # truncates a file, and the system log is refused before the call.
+        self.assertIn('rpc.call_started("log.clear", nil)', self.controller_text)
+        self.assertIn("系统网络日志不能由插件清空", self.controller_text)
         self.assertIn('channel = "plugin"', self.controller_text)
 
     def test_js_uses_short_live_window_and_full_download_window(self):
@@ -162,7 +166,7 @@ class LuciLogViewRefactorTests(unittest.TestCase):
         # covered by runtime/config tests rather than brittle string laundry lists.
         self.assertIn("smart-school-preset-data", self.cbi_text)
         self.assertIn("presets_refresh", self.controller_text)
-        self.assertIn("refreshSchoolPresets", self.js_text)
+        self.assertIn("window.smartRefreshPresets", self.js_text)
         self.assertIn("jm-apply-school-defaults", self.js_text)
         self.assertIn("applySchoolDefaultsToForm", self.js_text)
         self.assertIn("jm-save-school-preset", self.js_text)

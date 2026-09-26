@@ -5,11 +5,9 @@ local jsonc = require "luci.jsonc"
 local log_controller = require "luci.controller.smart_srun"
 local schema = require "luci.smart_srun.schema"
 
-local CONFIG_FILE = "/usr/lib/smart_srun/config.json"
-local STATE_FILE = "/var/run/smart_srun/state.json"
-local LOG_FILE = "/var/log/smart_srun.log"
-local PRESETS_CACHE_FILE = "/usr/lib/smart_srun/school_presets_cache.json"
-local USER_PRESETS_FILE = "/usr/lib/smart_srun/user_presets.json"
+local rpc = require "luci.smart_srun.rpc"
+local bridge = require "luci.smart_srun.bridge"
+
 local JS_ASSET_PATH = "/luci-static/resources/smart_srun.js"
 local GLOBAL_SCALAR_KEYS = schema.GLOBAL_SCALAR_KEYS
 local POINTER_KEYS = schema.POINTER_KEYS
@@ -26,30 +24,9 @@ local changed = false
 local dirty_scalar_keys = {}
 local school_extra_dirty = false
 local SCALAR_DEFAULTS = schema.SCALAR_DEFAULTS
--- 旧版字段（用于迁移检测）
-local LEGACY_CAMPUS_KEYS = {
-    "user_id", "operator", "password", "base_url", "ac_id",
-    "campus_ssid", "campus_encryption", "campus_key",
-}
-
-local function ensure_json_file()
-    local dir = CONFIG_FILE:match("^(.+)/[^/]+$")
-    if dir and not fs.access(dir) then
-        fs.mkdirr(dir)
-    end
-    if not fs.access(CONFIG_FILE) then
-        schema.with_file_lock(CONFIG_FILE, function()
-            if not fs.access(CONFIG_FILE) then schema.write_private_json(CONFIG_FILE, {}) end
-        end)
-    end
-    fs.chmod(CONFIG_FILE, "600")
-end
-
-local function write_config_json_atomic(data)
-    schema.with_file_lock(CONFIG_FILE, function()
-        schema.write_private_json(CONFIG_FILE, data)
-    end)
-end
+-- 配置版本号来自守护进程，保存时原样带回做 CAS；读失败时的说明留给页面显示。
+local config_revision = 0
+local config_error = nil
 
 local function render_js_asset_tag()
     local asset_url = JS_ASSET_PATH
@@ -62,175 +39,61 @@ local function render_js_asset_tag()
     return '<script src="' .. util.pcdata(asset_url) .. '"></script>'
 end
 
-local function read_file_tail(path, lines)
-    lines = tonumber(lines) or 0
-    local text = fs.readfile(path) or ""
-    if lines <= 0 or text == "" then
-        return text
-    end
-
-    local entries = {}
-    for line in text:gmatch("[^\n]+") do
-        entries[#entries + 1] = line
-    end
-    if #entries <= lines then
-        return table.concat(entries, "\n")
-    end
-
-    local kept = {}
-    for idx = #entries - lines + 1, #entries do
-        kept[#kept + 1] = entries[idx]
-    end
-    return table.concat(kept, "\n")
-end
-
-local function is_legacy_config(parsed)
-    if type(parsed.campus_accounts) == "table" then return false end
-    for _, k in ipairs(LEGACY_CAMPUS_KEYS) do
-        if parsed[k] ~= nil then return true end
-    end
-    return false
-end
-
-local function migrate_legacy_config(parsed)
-    local migrated = {}
-    for _, key in ipairs(GLOBAL_SCALAR_KEYS) do
-        migrated[key] = parsed[key] ~= nil and tostring(parsed[key]) or (SCALAR_DEFAULTS[key] or "")
-    end
-    local uid = tostring(parsed.user_id or ""):match("^%s*(.-)%s*$")
-    local op = tostring(parsed.operator or ""):match("^%s*(.-)%s*$"):lower()
-    local suffix = op ~= "xn" and op ~= "??" and op or ""
-    local ca = {
-        id = "campus-1", label = "",
-        base_url = tostring(parsed.base_url or ""):match("^%s*(.-)%s*$"),
-        ac_id = tostring(parsed.ac_id or "1"):match("^%s*(.-)%s*$"),
-        user_id = uid, password = tostring(parsed.password or ""):match("^%s*(.-)%s*$"),
-        operator = op, operator_suffix = suffix,
-        wired_iface = "wan",
-        auth_enabled = "0",
-        ssid = tostring(parsed.campus_ssid or ""):match("^%s*(.-)%s*$"),
-        bssid = tostring(parsed.campus_bssid or ""):match("^%s*(.-)%s*$"),
-        ap_selection = schema.normalize_ap_selection(parsed.campus_ap_selection, parsed.campus_bssid),
-    }
-    ca.label = (uid ~= "" and suffix ~= "") and (uid .. "@" .. suffix) or (uid ~= "" and uid or "未命名账号")
-    migrated.campus_accounts = uid ~= "" and { ca } or {}
-    migrated.active_campus_id = uid ~= "" and "campus-1" or ""
-    migrated.default_campus_id = migrated.active_campus_id
-
-    local hssid = tostring(parsed.hotspot_ssid or ""):match("^%s*(.-)%s*$")
-    local hp = {
-        id = "hotspot-1", label = hssid ~= "" and hssid or "未命名热点",
-        ssid = hssid,
-        encryption = tostring(parsed.hotspot_encryption or "psk2"):match("^%s*(.-)%s*$"):lower(),
-        key = tostring(parsed.hotspot_key or ""):match("^%s*(.-)%s*$"),
-        radio = tostring(parsed.hotspot_radio or ""):match("^%s*(.-)%s*$"),
-    }
-    migrated.hotspot_profiles = hssid ~= "" and { hp } or {}
-    migrated.active_hotspot_id = hssid ~= "" and "hotspot-1" or ""
-    migrated.default_hotspot_id = migrated.active_hotspot_id
-    return migrated
-end
-
 local function load_cfg()
-    ensure_json_file()
-    local raw = fs.readfile(CONFIG_FILE) or "{}"
-    local parsed = jsonc.parse(raw)
-    if type(parsed) ~= "table" then parsed = {} end
-    if is_legacy_config(parsed) then
-        parsed = migrate_legacy_config(parsed)
-        write_config_json_atomic(parsed)
+    local flat, err = bridge.config()
+    if not flat then
+        config_error = rpc.message(err, "无法读取配置")
+        flat = { campus_accounts = {}, hotspot_profiles = {}, school_extra = {}, revision = 0 }
     end
-    local cfg = {}
+    config_revision = tonumber(flat.revision) or 0
+    -- 被决策删除的旧开关在 Go 配置里没有对应字段，退回内置默认值，
+    -- 免得表单把空字符串当成用户的选择显示出来。
     for _, key in ipairs(GLOBAL_SCALAR_KEYS) do
-        cfg[key] = parsed[key] ~= nil and tostring(parsed[key]) or (SCALAR_DEFAULTS[key] or "")
+        if flat[key] == nil then
+            flat[key] = SCALAR_DEFAULTS[key] or ""
+        end
     end
     for _, key in ipairs(POINTER_KEYS) do
-        cfg[key] = tostring(parsed[key] or "")
+        flat[key] = tostring(flat[key] or "")
     end
     for _, key in ipairs(LIST_KEYS) do
-        cfg[key] = type(parsed[key]) == "table" and parsed[key] or {}
+        flat[key] = type(flat[key]) == "table" and flat[key] or {}
     end
-    cfg[SCHOOL_EXTRA_KEY] = type(parsed[SCHOOL_EXTRA_KEY]) == "table" and parsed[SCHOOL_EXTRA_KEY] or {}
-    return cfg
+    flat[SCHOOL_EXTRA_KEY] = type(flat[SCHOOL_EXTRA_KEY]) == "table" and flat[SCHOOL_EXTRA_KEY] or {}
+    return flat
 end
 
+-- 保存带上读到的版本号：页面打开期间别处（CLI、向导、另一个标签页）改过配置，
+-- 这次保存会被拒绝，而不是把对方的修改覆盖掉。
 local function save_cfg(cfg)
-    ensure_json_file()
-    schema.with_file_lock(CONFIG_FILE, function()
-        local latest = jsonc.parse(fs.readfile(CONFIG_FILE) or "{}")
-        if type(latest) ~= "table" then
-            latest = {}
-        end
+    if config_error then
+        return false, "打开页面时没能读到当前配置（" .. config_error .. "），请刷新后再保存"
+    end
+    local dirty = {}
+    for key in pairs(dirty_scalar_keys) do
+        dirty[key] = true
+    end
+    if school_extra_dirty then
+        dirty[SCHOOL_EXTRA_KEY] = true
+    end
 
-        local out = {}
-        for _, key in ipairs(GLOBAL_SCALAR_KEYS) do
-            out[key] = dirty_scalar_keys[key]
-                and tostring(cfg[key] or SCALAR_DEFAULTS[key] or "")
-                or tostring(latest[key] or SCALAR_DEFAULTS[key] or "")
-        end
-        for _, key in ipairs(POINTER_KEYS) do
-            out[key] = tostring(latest[key] or "")
-        end
-        for _, key in ipairs(LIST_KEYS) do
-            out[key] = type(latest[key]) == "table" and latest[key] or {}
-        end
-        out[SCHOOL_EXTRA_KEY] = school_extra_dirty
-            and (type(cfg[SCHOOL_EXTRA_KEY]) == "table" and cfg[SCHOOL_EXTRA_KEY] or {})
-            or (type(latest[SCHOOL_EXTRA_KEY]) == "table" and latest[SCHOOL_EXTRA_KEY] or {})
-
-        schema.write_private_json(CONFIG_FILE, out)
-    end)
+    local patch = bridge.settings_patch(cfg, dirty)
+    if not patch then
+        return true
+    end
+    local result, err = rpc.call_started("config.apply", {
+        expected_revision = config_revision,
+        settings = patch,
+    })
+    if not result then
+        return false, rpc.message(err, "保存失败")
+    end
+    config_revision = tonumber(result.config_revision) or config_revision
+    return true
 end
 
 local function load_state()
-    local raw = fs.readfile(STATE_FILE) or "{}"
-    local parsed = jsonc.parse(raw)
-    return type(parsed) == "table" and parsed or {}
-end
-
-local function has_cmd(name)
-    return util.trim(sys.exec("command -v " .. name .. " 2>/dev/null") or "") ~= ""
-end
-
-local HAS_TIMEOUT = has_cmd("timeout")
-
-local function find_python()
-    local py = util.trim(sys.exec("command -v python3 2>/dev/null") or "")
-    if py ~= "" then
-        return py
-    end
-    py = util.trim(sys.exec("command -v python3.11 2>/dev/null") or "")
-    if py ~= "" then
-        return py
-    end
-    return ""
-end
-
-local function run_client(args, stderr_to_stdout)
-    local py = find_python()
-    if py == "" then
-        return "", "未找到 Python3，请先安装。"
-    end
-
-    local cmd = py .. " -B /usr/lib/smart_srun/client.py " .. (args or "")
-    if HAS_TIMEOUT then
-        cmd = "timeout 12 " .. cmd
-    end
-
-    if stderr_to_stdout then
-        cmd = cmd .. " 2>&1"
-    else
-        cmd = cmd .. " 2>/dev/null"
-    end
-
-    return util.trim(sys.exec(cmd) or ""), nil
-end
-
-local function refresh_presets_cache_once()
-    if fs.access(PRESETS_CACHE_FILE) then
-        return
-    end
-    sys.call("(/usr/bin/srunnet presets refresh >/dev/null 2>&1) >/dev/null 2>&1 &")
+    return bridge.status() or {}
 end
 
 local function validate_hhmm(v)
@@ -392,14 +255,6 @@ local function normalize_school_runtime_descriptor(descriptor)
     return item
 end
 
-local function parse_school_runtime_contract(raw_json)
-    local parsed = jsonc.parse(raw_json or "")
-    if type(parsed) ~= "table" then
-        parsed = {}
-    end
-    return parsed
-end
-
 local function bind_school_extra_flag(opt, descriptor, school_changed_ref)
     opt.rmempty = false
     function opt.cfgvalue()
@@ -457,24 +312,21 @@ end
 cfg = load_cfg()
 changed = false
 
--- 加载已安装的认证策略列表。
-local schools_json = select(1, run_client("schools", false)) or ""
-local schools = jsonc.parse(schools_json)
-if type(schools) ~= "table" then schools = {} end
+-- 认证策略列表与所选策略的字段契约由 Go 的策略注册表提供（M06），
+-- 本次尚未接通：列表为空时下拉框保留当前值，不会把 school 悄悄改掉。
+local schools = {}
 
-local school_presets_json = select(1, run_client("presets list", false)) or ""
-local school_presets = jsonc.parse(school_presets_json)
-if type(school_presets) ~= "table" then school_presets = {} end
-refresh_presets_cache_once()
+-- 学校参数预设来自守护进程的合并目录（内置 + 缓存 + 用户自定义）。
+-- 只读、不联网：远程刷新是独立任务，不在页面渲染里发起。
+local school_presets = bridge.presets() or {}
 
-local school_runtime_json = select(1, run_client("schools inspect --selected", false)) or ""
-local school_runtime_contract = parse_school_runtime_contract(school_runtime_json)
-if type(school_runtime_contract.school_extra) == "table" then
-    cfg[SCHOOL_EXTRA_KEY] = school_runtime_contract.school_extra
-end
+-- 学校私有字段的描述符来自守护进程发布的 schema，值来自上面已读取的配置。
+-- 这里曾经是 parse_school_runtime_contract("")，传字面空串，描述符恒为空，
+-- 下面整段控件渲染永远不会执行。
+local school_runtime_contract = { field_descriptors = bridge.school_extra_descriptors() or {} }
 local school_runtime_descriptors = {}
 local school_runtime_renderable = type(school_runtime_contract.field_descriptors) == "table"
-    and type(school_runtime_contract.school_extra) == "table"
+    and type(cfg[SCHOOL_EXTRA_KEY]) == "table"
 
 if school_runtime_renderable then
     for _, descriptor in ipairs(school_runtime_contract.field_descriptors) do
@@ -546,6 +398,10 @@ if not m.uci:get("smart_srun", "main") then
     m.uci:section("smart_srun", "main", "main")
     m.uci:save("smart_srun")
     m.uci:commit("smart_srun")
+end
+-- 读不到配置时先说清楚，页面上显示的就只是内置默认值，不是用户保存过的设置。
+if config_error then
+    m.message = "读取配置失败：" .. config_error .. "。页面显示的是默认值，请先确认认证服务状态。"
 end
 
 overview = m:section(SimpleSection)
@@ -965,10 +821,12 @@ function tables_html.cfgvalue()
     local campus_json = jsonc.stringify(campus) or "[]"
     local hotspot_json = jsonc.stringify(hotspots) or "[]"
     local school_presets_json = jsonc.stringify(school_presets or {}) or "[]"
-    -- 用户自定义预设/运营商（路由器侧文件，跨设备共享）；解析失败时按空存储处理。
-    local user_presets_raw = fs.readfile(USER_PRESETS_FILE) or ""
-    if user_presets_raw == "" or type(jsonc.parse(user_presets_raw)) ~= "table" then
-        user_presets_raw = "{}"
+    -- 用户自定义预设/运营商由守护进程持有；读不到时按空存储渲染，
+    -- 页面不会拿一份空表去覆盖对方的文件（保存另有 CAS 把关）。
+    local user_presets_raw = "{}"
+    local user_presets = rpc.call("user_presets.get", nil)
+    if type(user_presets) == "table" and type(user_presets.document) == "table" then
+        user_presets_raw = jsonc.stringify(user_presets.document) or "{}"
     end
 
     return [[
@@ -1012,11 +870,39 @@ function tables_html.cfgvalue()
   </div>
 </div>
 <textarea id="smart-campus-data" style="display:none;">]] .. util.pcdata(campus_json) .. [[</textarea>
+<textarea id="smart-probe-config" style="display:none;">]] .. util.pcdata(jsonc.stringify({sta_iface = cfg.sta_iface or ""})) .. [[</textarea>
 <textarea id="smart-hotspot-data" style="display:none;">]] .. util.pcdata(hotspot_json) .. [[</textarea>
 <textarea id="smart-radio-options" style="display:none;">]] .. util.pcdata(radio_options) .. [[</textarea>
 <textarea id="smart-school-preset-data" style="display:none;">]] .. util.pcdata(school_presets_json) .. [[</textarea>
 <textarea id="smart-user-preset-data" style="display:none;">]] .. util.pcdata(user_presets_raw) .. [[</textarea>
 ]]
+end
+
+local preset_auto_update = s:taboption("advanced", Flag, "preset_auto_update_enabled", "自动更新学校预设")
+preset_auto_update.description = "每天检查一次；关闭后仍可手动更新。"
+bind_flag(preset_auto_update, "preset_auto_update_enabled")
+
+local preset_update_time = s:taboption("advanced", ListValue, "preset_update_time", "每天更新时间（北京时间，24 小时制）")
+for hour = 0, 23 do
+    local value = string.format("%02d:00", hour)
+    preset_update_time:value(value, value)
+end
+-- Keep a precise time configured through the CLI selectable in the form.
+local saved_preset_time = validate_hhmm(cfg.preset_update_time or "")
+if saved_preset_time and saved_preset_time:sub(4) ~= "00" then
+    preset_update_time:value(saved_preset_time, saved_preset_time)
+end
+preset_update_time:depends("preset_auto_update_enabled", "1")
+bind_text(preset_update_time, "preset_update_time", validate_hhmm)
+-- CBI calls remove for an unmet dependency. Keep the chosen time when the
+-- checkbox is off, including in the page rendered immediately after saving.
+function preset_update_time.remove() end
+preset_update_time.description = "到点后检查；错过时间会补查一次。更新失败时继续使用本地预设。"
+
+local preset_refresh = s:taboption("advanced", DummyValue, "_preset_refresh", "学校预设")
+preset_refresh.rawhtml = true
+function preset_refresh.cfgvalue()
+    return [[<button id="smart-presets-refresh" type="button" class="cbi-button cbi-button-action" onclick="smartRefreshPresets()">立即更新</button> <span id="smart-presets-refresh-result" role="status" aria-live="polite"></span>]]
 end
 
 backoff_enable = s:taboption("advanced", Flag, "backoff_enable", "登录失败时启用退避重试")
@@ -1079,9 +965,8 @@ bind_text(connectivity_check_mode, "connectivity_check_mode")
 
 interval = s:taboption("advanced", Value, "interval", "检测间隔（秒）")
 interval.datatype = "uinteger"
-bind_text(interval, "interval")
 
-config_backup = s:taboption("advanced", DummyValue, "_config_backup", "配置备份")
+local config_backup = s:taboption("advanced", DummyValue, "_config_backup", "配置备份")
 config_backup.rawhtml = true
 function config_backup.cfgvalue()
     return [[<div id="smart-srun-config-backup">
@@ -1092,6 +977,7 @@ function config_backup.cfgvalue()
 <p class="cbi-value-description">备份含插件设置、校园账号和热点密码，请妥善保管。自建学校预设需单独备份。导入会替换配置并关闭自动守护，请核对账号和网口后再启用。</p>
 <p id="smart-srun-config-result" role="status" aria-live="polite"></p></div>]]
 end
+bind_text(interval, "interval")
 
 log_level = s:taboption("log", ListValue, "log_level", "日志等级",
     "ALL = 全部；DEBUG = 含调试细节；INFO = 默认；WARN/ERROR 仅记录警告与错误。")
@@ -1107,7 +993,10 @@ bind_text(log_level, "log_level")
 log_text = s:taboption("log", DummyValue, "_log_text", "运行日志")
 log_text.rawhtml = true
 function log_text.cfgvalue(self, section)
-    local t = read_file_tail(LOG_FILE, 100)
+    -- 首屏的最近 100 行；之后由页面自己按游标增量轮询。
+    local page = rpc.call("log.tail", { lines = 100 })
+    local t = type(page) == "table" and type(page.lines) == "table"
+        and table.concat(page.lines, "\n") or ""
     if t ~= "" then
         t = log_controller.friendly_log_text(t)
     end
@@ -1142,15 +1031,20 @@ function m.parse(self, ...)
     dirty_scalar_keys = {}
     school_extra_dirty = false
     Map.parse(self, ...)
-    if changed then
-        save_cfg(cfg)
-        m.uci:set("smart_srun", "main", "_stamp", tostring(os.time()))
-        m.message = (m.message and (m.message .. "；") or "") .. "配置已保存到 JSON"
+    if not changed then
+        return
     end
+    -- 保存失败必须说出来。旧版无论如何都写“已保存”，于是一次被拒绝的提交
+    -- 看起来和成功一模一样。
+    local saved, failure = save_cfg(cfg)
+    local note = saved and "配置已保存" or ("配置未保存：" .. tostring(failure))
+    if saved then
+        m.uci:set("smart_srun", "main", "_stamp", tostring(os.time()))
+    end
+    m.message = (m.message and (m.message .. "；") or "") .. note
 end
 
-function m.on_before_commit(self)
-    sys.call("(sleep 1; /etc/init.d/smart_srun restart >/dev/null 2>&1) >/dev/null 2>&1 &")
-end
+-- 没有 on_before_commit。配置提交后由守护进程自行重新读取和观测，
+-- 页面不再重启服务：服务生命周期只经固定 helper（规范 02）。
 
 return m

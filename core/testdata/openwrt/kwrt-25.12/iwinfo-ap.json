@@ -1,0 +1,54 @@
+{
+	"phy": "phy0",
+	"ssid": "HomeNet-1",
+	"bssid": "02:00:5E:00:53:01",
+	"country": "CN",
+	"mode": "Master",
+	"channel": 1,
+	"center_chan1": 1,
+	"frequency": 2412,
+	"frequency_offset": 0,
+	"txpower": 29,
+	"txpower_offset": 0,
+	"quality": 70,
+	"quality_max": 70,
+	"signal": -29,
+	"noise": -79,
+	"bitrate": 82300,
+	"encryption": {
+		"enabled": true,
+		"wpa": [
+			2
+		],
+		"authentication": [
+			"psk"
+		],
+		"ciphers": [
+			"ccmp"
+		]
+	},
+	"htmodes": [
+		"HT20",
+		"HT40",
+		"HE20",
+		"HE40"
+	],
+	"hwmodes": [
+		"b",
+		"g",
+		"n",
+		"ax"
+	],
+	"hwmodes_text": "ax/b/g/n",
+	"hwmode": "n",
+	"htmode": "HT20",
+	"hardware": {
+		"id": [
+			0,
+			0,
+			0,
+			0
+		],
+		"name": "MediaTek MT7986"
+	}
+}

@@ -1,0 +1,18 @@
+{
+  "note": "values are uci's own `uci get` output, base64-decoded; the list is spelled out as item0..item2 because `uci get` on a list is itself ambiguous",
+  "options": {
+    "awkward.device": "radio0",
+    "awkward.key": "line1\nwireless.awkward.ssid='HIJACKED'",
+    "awkward.mode": "sta",
+    "awkward.ssid": "Bob's Cafe",
+    "awkward2.encryption": "psk2",
+    "awkward2.key": "$(id); `whoami` | tee /tmp/pwn",
+    "awkward2.ssid": "ends-with-backslash\\",
+    "listy.item0": "2412",
+    "listy.item1": "has space",
+    "listy.item2": "has'quote",
+    "radio0.band": "2g",
+    "radio0.type": "mac80211"
+  },
+  "source": "uci_roundtrip_probe.sh on a real OpenWrt device"
+}

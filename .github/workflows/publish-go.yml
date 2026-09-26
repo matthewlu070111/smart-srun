@@ -1,0 +1,62 @@
+name: Create verified Go release draft
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      prerelease:
+        required: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  draft:
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: release-candidate-${{ inputs.version }}
+          path: ${{ runner.temp }}/release-candidate
+      - name: Verify and create the draft without rebuilding or overwriting
+        working-directory: ${{ runner.temp }}/release-candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISPLAY_VERSION: ${{ inputs.version }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          test "$GITHUB_REPOSITORY" = matthewlu070111/smart-srun
+          test "$GITHUB_REF" = refs/heads/go
+          sha256sum --strict --check SHA256SUMS
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          data = json.loads(Path('release-manifest.json').read_text())
+          assert data['release'] == os.environ['DISPLAY_VERSION']
+          assert data['source_commit'] == os.environ['GITHUB_SHA']
+          assert data['channel'] == ('rc' if os.environ['PRERELEASE'] == 'true' else 'stable')
+          assert Path('smart-srun-apk.pem').is_file()
+          PY
+          if gh release view "$DISPLAY_VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo 'Release already exists; create a new version instead of replacing assets.' >&2
+            exit 1
+          fi
+          args=()
+          if [ "$PRERELEASE" = true ]; then args+=(--prerelease); fi
+          gh release create "$DISPLAY_VERSION" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --draft --latest=false --title "$DISPLAY_VERSION" --notes-file release-notes.md \
+            "${args[@]}" ./*.ipk ./*.apk ./*.zip release-manifest.json SHA256SUMS \
+            build-records.tar.gz smart-srun-apk.pem release-notes.md
+          release_api=$(gh release view "$DISPLAY_VERSION" --repo "$GITHUB_REPOSITORY" --json apiUrl --jq .apiUrl)
+          gh api "$release_api" > "$RUNNER_TEMP/published-draft.json"
+          python3 "$GITHUB_WORKSPACE/scripts/ci_go_release.py" verify-published \
+            --candidate . --metadata "$RUNNER_TEMP/published-draft.json"

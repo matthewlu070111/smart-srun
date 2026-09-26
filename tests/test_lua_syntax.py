@@ -119,6 +119,25 @@ class LuaSyntaxSmokeTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            # The controller reaches the daemon through luci.smart_srun.rpc,
+            # which opens a Unix socket. Loading it needs nixio present; this
+            # stub answers the one call made while the module loads and refuses
+            # the rest, so a future top-level socket call fails loudly here.
+            (stub_root / "nixio" / "init.lua").write_text(
+                "\n".join(
+                    [
+                        "local M = {}",
+                        "function M.getpid() return 4242 end",
+                        "function M.socket() error('no socket in the syntax probe') end",
+                        "function M.fork() error('no fork in the syntax probe') end",
+                        "return M",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            # rpc.lua loads nixio.util itself for writeall/readall, rather
+            # than relying on a sibling module having loaded nixio.fs first.
+            (stub_root / "nixio" / "util.lua").write_text("return {}\n", encoding="utf-8")
             (stub_root / "luci" / "smart_srun" / "schema.lua").write_text(
                 "\n".join(
                     [

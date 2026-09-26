@@ -1,0 +1,142 @@
+{
+  "note": "Reference frames for the local control protocol v1. The Go tests check every entry, and the Lua bridge (M13) is expected to reuse the same file so both sides agree on the bytes rather than on a description of them. Each `line` is the frame without its trailing newline.",
+  "rpc_version": 1,
+  "valid_requests": [
+    {
+      "name": "the example from the contract",
+      "method": "action.submit",
+      "line": "{\"rpc_version\":1,\"request_id\":\"req-example-001\",\"method\":\"action.submit\",\"params\":{\"kind\":\"login\",\"account_id\":\"c1\",\"expected_revision\":7,\"idempotency_key\":\"click-example-001\"}}"
+    },
+    {
+      "name": "a read with no parameters",
+      "method": "status.get",
+      "line": "{\"rpc_version\":1,\"request_id\":\"poll-0001\",\"method\":\"status.get\"}"
+    },
+    {
+      "name": "explicit null parameters",
+      "method": "version.get",
+      "line": "{\"rpc_version\":1,\"request_id\":\"v-1\",\"method\":\"version.get\",\"params\":null}"
+    },
+    {
+      "name": "a CAS write",
+      "method": "config.apply",
+      "line": "{\"rpc_version\":1,\"request_id\":\"save-42\",\"method\":\"config.apply\",\"params\":{\"expected_revision\":7,\"config\":{\"schema_version\":2}}}"
+    },
+    {
+      "name": "non-ASCII values are carried as UTF-8, not escaped by the sender",
+      "method": "campus.upsert",
+      "line": "{\"rpc_version\":1,\"request_id\":\"edit-1\",\"method\":\"campus.upsert\",\"params\":{\"id\":\"c1\",\"label\":\"宿舍有线\"}}"
+    },
+    {
+      "name": "a newline inside a value must arrive escaped, so the frame stays one line",
+      "method": "user_presets.set",
+      "line": "{\"rpc_version\":1,\"request_id\":\"preset-1\",\"method\":\"user_presets.set\",\"params\":{\"note\":\"第一行\\n第二行\"}}"
+    }
+  ],
+  "invalid_requests": [
+    {
+      "name": "future protocol version",
+      "expect_code": "UnsupportedCapability",
+      "line": "{\"rpc_version\":2,\"request_id\":\"r\",\"method\":\"status.get\"}"
+    },
+    {
+      "name": "missing protocol version",
+      "expect_code": "UnsupportedCapability",
+      "line": "{\"request_id\":\"r\",\"method\":\"status.get\"}"
+    },
+    {
+      "name": "an extra envelope field, which is how a privilege parameter would be smuggled in",
+      "expect_code": "InvalidArgument",
+      "line": "{\"rpc_version\":1,\"request_id\":\"r\",\"method\":\"status.get\",\"as_root\":true}"
+    },
+    {
+      "name": "empty request id",
+      "expect_code": "InvalidArgument",
+      "line": "{\"rpc_version\":1,\"request_id\":\"\",\"method\":\"status.get\"}"
+    },
+    {
+      "name": "empty method",
+      "expect_code": "InvalidArgument",
+      "line": "{\"rpc_version\":1,\"request_id\":\"r\",\"method\":\"\"}"
+    },
+    {
+      "name": "two objects on one line",
+      "expect_code": "InvalidArgument",
+      "line": "{\"rpc_version\":1,\"request_id\":\"r\",\"method\":\"status.get\"}{\"rpc_version\":1,\"request_id\":\"r2\",\"method\":\"status.get\"}"
+    },
+    {
+      "name": "an array instead of an object",
+      "expect_code": "InvalidArgument",
+      "line": "[\"status.get\"]"
+    },
+    {
+      "name": "not JSON at all",
+      "expect_code": "InvalidArgument",
+      "line": "status.get"
+    },
+    {
+      "name": "an empty frame",
+      "expect_code": "InvalidArgument",
+      "line": ""
+    },
+    {
+      "name": "a request id longer than 128 characters, which every response and log line would carry",
+      "expect_code": "InvalidArgument",
+      "line": "{\"rpc_version\":1,\"request_id\":\"rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr\",\"method\":\"status.get\"}"
+    }
+  ],
+  "undeclared_methods": [
+    {
+      "name": "a method that does not exist",
+      "expect_code": "NotFound",
+      "line": "{\"rpc_version\":1,\"request_id\":\"r\",\"method\":\"config.destroy\"}"
+    },
+    {
+      "name": "a shell-looking name is just an unknown name; nothing here executes strings",
+      "expect_code": "NotFound",
+      "line": "{\"rpc_version\":1,\"request_id\":\"r\",\"method\":\"/bin/sh\"}"
+    },
+    {
+      "name": "the CLI command name, which is not an RPC method",
+      "expect_code": "NotFound",
+      "line": "{\"rpc_version\":1,\"request_id\":\"r\",\"method\":\"login\"}"
+    }
+  ],
+  "responses": [
+    {
+      "name": "the success example from the contract",
+      "ok": true,
+      "line": "{\"rpc_version\":1,\"request_id\":\"req-example-001\",\"ok\":true,\"result\":{\"action_id\":\"a1\",\"state\":\"queued\"},\"error\":null}"
+    },
+    {
+      "name": "a permanent failure",
+      "ok": false,
+      "line": "{\"rpc_version\":1,\"request_id\":\"save-42\",\"ok\":false,\"result\":null,\"error\":{\"code\":\"Conflict\",\"message\":\"配置已被其他地方修改，请重新加载后再保存\",\"details\":{\"expected_revision\":\"7\",\"actual_revision\":\"8\"},\"retryable\":false}}"
+    },
+    {
+      "name": "a transient failure",
+      "ok": false,
+      "line": "{\"rpc_version\":1,\"request_id\":\"login-1\",\"ok\":false,\"result\":null,\"error\":{\"code\":\"BindingUnavailable\",\"message\":\"所选线路当前没有可用的 IPv4 地址\",\"details\":{\"interface\":\"wan.v2\"},\"retryable\":true}}"
+    },
+    {
+      "name": "a parse failure, answered with an empty request id because none was readable",
+      "ok": false,
+      "line": "{\"rpc_version\":1,\"request_id\":\"\",\"ok\":false,\"result\":null,\"error\":{\"code\":\"InvalidArgument\",\"message\":\"请求不是有效的 JSON 对象\",\"retryable\":false}}"
+    },
+    {
+      "name": "a read that ran out of its three seconds; the same request unchanged may well succeed",
+      "ok": false,
+      "line": "{\"rpc_version\":1,\"request_id\":\"poll-0002\",\"ok\":false,\"result\":null,\"error\":{\"code\":\"DeadlineExceeded\",\"message\":\"操作超时\",\"retryable\":true}}"
+    },
+    {
+      "name": "a busy daemon telling the caller how long to wait",
+      "ok": false,
+      "line": "{\"rpc_version\":1,\"request_id\":\"login-2\",\"ok\":false,\"result\":null,\"error\":{\"code\":\"Busy\",\"message\":\"已有动作正在执行，请稍后再试\",\"details\":{\"retry_after_seconds\":\"5\"},\"retryable\":true}}"
+    },
+    {
+      "name": "a fault inside the daemon: a stable code and nothing about the cause",
+      "ok": false,
+      "line": "{\"rpc_version\":1,\"request_id\":\"save-43\",\"ok\":false,\"result\":null,\"error\":{\"code\":\"Internal\",\"message\":\"服务内部错误\",\"retryable\":false}}"
+    }
+  ]
+}

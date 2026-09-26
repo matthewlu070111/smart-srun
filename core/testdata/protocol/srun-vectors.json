@@ -1,0 +1,441 @@
+{
+  "schema_version": 1,
+  "note": "Generated from the baseline crypto.py at the frozen commit. Byte sequences are lowercase hex. Do not hand-edit: rerun .codex/go-loop/tools/gen_protocol_vectors.py. This file is one of the two required bases; the Go tests carry the other.",
+  "spec_digest": "b0b1d83862174c28fd8b6bafc0996eeaec0082e128a12d568ea7f39461100f3b",
+  "baseline_commit": "9da28b57d4a4fa24a3e7f7b4219aeb2b1b884061",
+  "oracle_source": "root/usr/lib/smart_srun/crypto.py",
+  "oracle_sha256": "9ab91f5bbf9d9007784688a2b5df6651be3a318088591227c0eec08706807993",
+  "default_alphabet": "LVoJPiCN2R8G90yg+hmFHuacZ1OWMnrsSTXkYpUq/3dlbfKwv6xztjI7DeBE45QA",
+  "pad_char": "=",
+  "vectors": {
+    "info": [
+      {
+        "name": "a typical login",
+        "username": "2020123456",
+        "password": "pw123456",
+        "ip": "10.0.0.2",
+        "ac_id": "1",
+        "enc": "srun_bx1",
+        "info": "{\"username\":\"2020123456\",\"password\":\"pw123456\",\"ip\":\"10.0.0.2\",\"acid\":\"1\",\"enc_ver\":\"srun_bx1\"}",
+        "info_hex": "7b22757365726e616d65223a2232303230313233343536222c2270617373776f7264223a227077313233343536222c226970223a2231302e302e302e32222c2261636964223a2231222c22656e635f766572223a227372756e5f627831227d"
+      },
+      {
+        "name": "empty everywhere",
+        "username": "",
+        "password": "",
+        "ip": "",
+        "ac_id": "",
+        "enc": "",
+        "info": "{\"username\":\"\",\"password\":\"\",\"ip\":\"\",\"acid\":\"\",\"enc_ver\":\"\"}",
+        "info_hex": "7b22757365726e616d65223a22222c2270617373776f7264223a22222c226970223a22222c2261636964223a22222c22656e635f766572223a22227d"
+      },
+      {
+        "name": "a quote in the password",
+        "username": "u",
+        "password": "he said \"hi\"",
+        "ip": "10.0.0.2",
+        "ac_id": "1",
+        "enc": "srun_bx1",
+        "info": "{\"username\":\"u\",\"password\":\"he said \\\"hi\\\"\",\"ip\":\"10.0.0.2\",\"acid\":\"1\",\"enc_ver\":\"srun_bx1\"}",
+        "info_hex": "7b22757365726e616d65223a2275222c2270617373776f7264223a2268652073616964205c2268695c22222c226970223a2231302e302e302e32222c2261636964223a2231222c22656e635f766572223a227372756e5f627831227d"
+      },
+      {
+        "name": "a backslash in the password",
+        "username": "u",
+        "password": "back\\slash",
+        "ip": "10.0.0.2",
+        "ac_id": "1",
+        "enc": "srun_bx1",
+        "info": "{\"username\":\"u\",\"password\":\"back\\\\slash\",\"ip\":\"10.0.0.2\",\"acid\":\"1\",\"enc_ver\":\"srun_bx1\"}",
+        "info_hex": "7b22757365726e616d65223a2275222c2270617373776f7264223a226261636b5c5c736c617368222c226970223a2231302e302e302e32222c2261636964223a2231222c22656e635f766572223a227372756e5f627831227d"
+      },
+      {
+        "name": "a forward slash, which is not escaped",
+        "username": "u",
+        "password": "a/b",
+        "ip": "10.0.0.2",
+        "ac_id": "1",
+        "enc": "srun_bx1",
+        "info": "{\"username\":\"u\",\"password\":\"a/b\",\"ip\":\"10.0.0.2\",\"acid\":\"1\",\"enc_ver\":\"srun_bx1\"}",
+        "info_hex": "7b22757365726e616d65223a2275222c2270617373776f7264223a22612f62222c226970223a2231302e302e302e32222c2261636964223a2231222c22656e635f766572223a227372756e5f627831227d"
+      },
+      {
+        "name": "the short control escapes",
+        "username": "u",
+        "password": "\b\f\n\r\t",
+        "ip": "10.0.0.2",
+        "ac_id": "1",
+        "enc": "srun_bx1",
+        "info": "{\"username\":\"u\",\"password\":\"\\b\\f\\n\\r\\t\",\"ip\":\"10.0.0.2\",\"acid\":\"1\",\"enc_ver\":\"srun_bx1\"}",
+        "info_hex": "7b22757365726e616d65223a2275222c2270617373776f7264223a225c625c665c6e5c725c74222c226970223a2231302e302e302e32222c2261636964223a2231222c22656e635f766572223a227372756e5f627831227d"
+      },
+      {
+        "name": "control characters with no short form",
+        "username": "u",
+        "password": "\u0000\u0001\u001f",
+        "ip": "10.0.0.2",
+        "ac_id": "1",
+        "enc": "srun_bx1",
+        "info": "{\"username\":\"u\",\"password\":\"\\u0000\\u0001\\u001f\",\"ip\":\"10.0.0.2\",\"acid\":\"1\",\"enc_ver\":\"srun_bx1\"}",
+        "info_hex": "7b22757365726e616d65223a2275222c2270617373776f7264223a225c75303030305c75303030315c7530303166222c226970223a2231302e302e302e32222c2261636964223a2231222c22656e635f766572223a227372756e5f627831227d"
+      },
+      {
+        "name": "DEL, which is above the printable range",
+        "username": "u",
+        "password": "",
+        "ip": "10.0.0.2",
+        "ac_id": "1",
+        "enc": "srun_bx1",
+        "info": "{\"username\":\"u\",\"password\":\"\\u007f\",\"ip\":\"10.0.0.2\",\"acid\":\"1\",\"enc_ver\":\"srun_bx1\"}",
+        "info_hex": "7b22757365726e616d65223a2275222c2270617373776f7264223a225c7530303766222c226970223a2231302e302e302e32222c2261636964223a2231222c22656e635f766572223a227372756e5f627831227d"
+      },
+      {
+        "name": "Chinese, escaped rather than sent as UTF-8",
+        "username": "张三",
+        "password": "密码",
+        "ip": "10.0.0.2",
+        "ac_id": "1",
+        "enc": "srun_bx1",
+        "info": "{\"username\":\"\\u5f20\\u4e09\",\"password\":\"\\u5bc6\\u7801\",\"ip\":\"10.0.0.2\",\"acid\":\"1\",\"enc_ver\":\"srun_bx1\"}",
+        "info_hex": "7b22757365726e616d65223a225c75356632305c7534653039222c2270617373776f7264223a225c75356263365c7537383031222c226970223a2231302e302e302e32222c2261636964223a2231222c22656e635f766572223a227372756e5f627831227d"
+      },
+      {
+        "name": "an emoji, which needs a surrogate pair",
+        "username": "u",
+        "password": "😀",
+        "ip": "10.0.0.2",
+        "ac_id": "1",
+        "enc": "srun_bx1",
+        "info": "{\"username\":\"u\",\"password\":\"\\ud83d\\ude00\",\"ip\":\"10.0.0.2\",\"acid\":\"1\",\"enc_ver\":\"srun_bx1\"}",
+        "info_hex": "7b22757365726e616d65223a2275222c2270617373776f7264223a225c75643833645c7564653030222c226970223a2231302e302e302e32222c2261636964223a2231222c22656e635f766572223a227372756e5f627831227d"
+      },
+      {
+        "name": "angle brackets and ampersand, which are NOT html-escaped",
+        "username": "u",
+        "password": "a<b>c&d",
+        "ip": "10.0.0.2",
+        "ac_id": "1",
+        "enc": "srun_bx1",
+        "info": "{\"username\":\"u\",\"password\":\"a<b>c&d\",\"ip\":\"10.0.0.2\",\"acid\":\"1\",\"enc_ver\":\"srun_bx1\"}",
+        "info_hex": "7b22757365726e616d65223a2275222c2270617373776f7264223a22613c623e632664222c226970223a2231302e302e302e32222c2261636964223a2231222c22656e635f766572223a227372756e5f627831227d"
+      },
+      {
+        "name": "the JS line separators",
+        "username": "u",
+        "password": "a b c",
+        "ip": "10.0.0.2",
+        "ac_id": "1",
+        "enc": "srun_bx1",
+        "info": "{\"username\":\"u\",\"password\":\"a\\u2028b\\u2029c\",\"ip\":\"10.0.0.2\",\"acid\":\"1\",\"enc_ver\":\"srun_bx1\"}",
+        "info_hex": "7b22757365726e616d65223a2275222c2270617373776f7264223a22615c7532303238625c753230323963222c226970223a2231302e302e302e32222c2261636964223a2231222c22656e635f766572223a227372756e5f627831227d"
+      },
+      {
+        "name": "a suffixed username",
+        "username": "2020123456@cmcc",
+        "password": "pw",
+        "ip": "192.168.1.100",
+        "ac_id": "12",
+        "enc": "srun_bx1",
+        "info": "{\"username\":\"2020123456@cmcc\",\"password\":\"pw\",\"ip\":\"192.168.1.100\",\"acid\":\"12\",\"enc_ver\":\"srun_bx1\"}",
+        "info_hex": "7b22757365726e616d65223a223230323031323334353640636d6363222c2270617373776f7264223a227077222c226970223a223139322e3136382e312e313030222c2261636964223a223132222c22656e635f766572223a227372756e5f627831227d"
+      },
+      {
+        "name": "an operator suffix that is a full realm",
+        "username": "u@stu.example.edu.cn",
+        "password": "pw",
+        "ip": "10.0.0.2",
+        "ac_id": "1",
+        "enc": "srun_bx1",
+        "info": "{\"username\":\"u@stu.example.edu.cn\",\"password\":\"pw\",\"ip\":\"10.0.0.2\",\"acid\":\"1\",\"enc_ver\":\"srun_bx1\"}",
+        "info_hex": "7b22757365726e616d65223a2275407374752e6578616d706c652e6564752e636e222c2270617373776f7264223a227077222c226970223a2231302e302e302e32222c2261636964223a2231222c22656e635f766572223a227372756e5f627831227d"
+      }
+    ],
+    "xencode": [
+      {
+        "name": "empty message returns empty",
+        "msg_hex": "",
+        "key_hex": "746f6b656e",
+        "out_hex": ""
+      },
+      {
+        "name": "one byte",
+        "msg_hex": "61",
+        "key_hex": "746f6b656e",
+        "out_hex": "2cd6455786359373"
+      },
+      {
+        "name": "three bytes, one short of a word",
+        "msg_hex": "616263",
+        "key_hex": "746f6b656e",
+        "out_hex": "723c6bd44e430443"
+      },
+      {
+        "name": "exactly one word",
+        "msg_hex": "61626364",
+        "key_hex": "746f6b656e",
+        "out_hex": "8c0b52039a2ed054"
+      },
+      {
+        "name": "one byte into the second word",
+        "msg_hex": "6162636465",
+        "key_hex": "746f6b656e",
+        "out_hex": "db599e2f33912b318f2a1f62"
+      },
+      {
+        "name": "two words",
+        "msg_hex": "6162636465666768",
+        "key_hex": "746f6b656e",
+        "out_hex": "a80c10ca309ade24675b6458"
+      },
+      {
+        "name": "an empty key, padded to four words",
+        "msg_hex": "61626364",
+        "key_hex": "",
+        "out_hex": "8ee18ef5e204993f"
+      },
+      {
+        "name": "a one-byte key",
+        "msg_hex": "61626364",
+        "key_hex": "6b",
+        "out_hex": "bc335d505156065e"
+      },
+      {
+        "name": "a three-byte key",
+        "msg_hex": "61626364",
+        "key_hex": "6b6579",
+        "out_hex": "99d130ad48c7fa1d"
+      },
+      {
+        "name": "a four-byte key, the first that needs no padding",
+        "msg_hex": "61626364",
+        "key_hex": "6b657978",
+        "out_hex": "9cbcd2a732827c53"
+      },
+      {
+        "name": "a sixteen-byte key",
+        "msg_hex": "61626364",
+        "key_hex": "30313233343536373839616263646566",
+        "out_hex": "292aea716896da55"
+      },
+      {
+        "name": "a key longer than four words",
+        "msg_hex": "61626364",
+        "key_hex": "303132333435363738396162636465666768696a",
+        "out_hex": "292aea716896da55"
+      },
+      {
+        "name": "high bytes, to pin the 32-bit overflow",
+        "msg_hex": "ffffffffffffffff",
+        "key_hex": "ffffffff",
+        "out_hex": "966961cfb24f6f3eda8fb12f"
+      },
+      {
+        "name": "a realistic info payload",
+        "msg_hex": "7b22757365726e616d65223a2232303230313233343536222c2270617373776f7264223a227077313233343536222c226970223a2231302e302e302e32222c2261636964223a2231222c22656e635f766572223a227372756e5f627831227d",
+        "key_hex": "6162636465663132333435363738393061626364656631323334353637383930",
+        "out_hex": "5521fa217aabb11981723c88c5aba7bcb671e5cd97011c2d2ae2eee1c7614f814ab0f13082acbed799c068590462302340f65340e19c9156ac5c79eea597f9378bf1b507480f90abab52d84c45e41ffdcd404144649781d7992107b54f64e99f0c09720b"
+      }
+    ],
+    "base64": [
+      {
+        "name": "empty",
+        "input_hex": "",
+        "srun_alphabet": "",
+        "standard_alphabet": ""
+      },
+      {
+        "name": "one byte",
+        "input_hex": "61",
+        "srun_alphabet": "Z+==",
+        "standard_alphabet": "YQ=="
+      },
+      {
+        "name": "two bytes",
+        "input_hex": "6162",
+        "srun_alphabet": "Za2=",
+        "standard_alphabet": "YWI="
+      },
+      {
+        "name": "three bytes, no padding",
+        "input_hex": "616263",
+        "srun_alphabet": "ZaRk",
+        "standard_alphabet": "YWJj"
+      },
+      {
+        "name": "four bytes",
+        "input_hex": "61626364",
+        "srun_alphabet": "ZaRk1L==",
+        "standard_alphabet": "YWJjZA=="
+      },
+      {
+        "name": "five bytes",
+        "input_hex": "6162636465",
+        "srun_alphabet": "ZaRk1CH=",
+        "standard_alphabet": "YWJjZGU="
+      },
+      {
+        "name": "six bytes",
+        "input_hex": "616263646566",
+        "srun_alphabet": "ZaRk1CuU",
+        "standard_alphabet": "YWJjZGVm"
+      },
+      {
+        "name": "a zero byte",
+        "input_hex": "00",
+        "srun_alphabet": "LL==",
+        "standard_alphabet": "AA=="
+      },
+      {
+        "name": "all bit patterns in one block",
+        "input_hex": "001083",
+        "srun_alphabet": "LVoJ",
+        "standard_alphabet": "ABCD"
+      },
+      {
+        "name": "high bytes",
+        "input_hex": "fffefd",
+        "srun_alphabet": "AAE5",
+        "standard_alphabet": "//79"
+      }
+    ],
+    "hmac_md5": [
+      {
+        "name": "a typical password and token",
+        "password": "pw123456",
+        "token": "abcdef1234567890",
+        "hmd5": "9866d5e72cb2e489ae49569e2d22638e"
+      },
+      {
+        "name": "an empty password",
+        "password": "",
+        "token": "abcdef1234567890",
+        "hmd5": "c961a00416b4b7922a8a332ae98304a8"
+      },
+      {
+        "name": "an empty token",
+        "password": "pw123456",
+        "token": "",
+        "hmd5": "4373de304fb6ee90931877deffe3b274"
+      },
+      {
+        "name": "both empty",
+        "password": "",
+        "token": "",
+        "hmd5": "74e6f7298a9c2d168935f58c001bad88"
+      },
+      {
+        "name": "a non-ASCII password, hashed as UTF-8",
+        "password": "密码",
+        "token": "abcdef1234567890",
+        "hmd5": "f06a153b5648b204b50ec4959ef576c4"
+      }
+    ],
+    "sha1": [
+      {
+        "name": "empty",
+        "input": "",
+        "sha1": "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+      },
+      {
+        "name": "abc",
+        "input": "abc",
+        "sha1": "a9993e364706816aba3e25717850c26c9cd0d89d"
+      },
+      {
+        "name": "a chksum-shaped string",
+        "input": "tokusertokdeadbeef",
+        "sha1": "794fee6838b6dfbcc11b5bf73a795f347bfb4d30"
+      },
+      {
+        "name": "non-ASCII, hashed as UTF-8",
+        "input": "张三",
+        "sha1": "ced07fb42b05a2ed9efa330250e2bb9175f962ce"
+      }
+    ],
+    "composite": [
+      {
+        "name": "the default profile with an ASCII account",
+        "username": "2020123456",
+        "password": "pw123456",
+        "ip": "10.0.0.2",
+        "ac_id": "1",
+        "enc": "srun_bx1",
+        "n": "200",
+        "type": "1",
+        "token": "abcdef1234567890abcdef1234567890",
+        "info_prefix": "SRBX1",
+        "info_json": "{\"username\":\"2020123456\",\"password\":\"pw123456\",\"ip\":\"10.0.0.2\",\"acid\":\"1\",\"enc_ver\":\"srun_bx1\"}",
+        "encrypted_info": "{SRBX1}umNB2cdlbhUVMkx26OKqwG16eMIcLhvf8KGKDMnTFDi8bgPvSdxQjeqLOiYPZkLk+g1F+yCMYuObcNqK31se0Dw6f+n2JeoldjGZFPcYNA70+PiP1RrVjeYTVEug1yUsJLpxov==",
+        "hmd5": "499ec8aceebe5d0f02837c6f3d78e4b9",
+        "chkstr": "abcdef1234567890abcdef12345678902020123456abcdef1234567890abcdef1234567890499ec8aceebe5d0f02837c6f3d78e4b9abcdef1234567890abcdef12345678901abcdef1234567890abcdef123456789010.0.0.2abcdef1234567890abcdef1234567890200abcdef1234567890abcdef12345678901abcdef1234567890abcdef1234567890{SRBX1}umNB2cdlbhUVMkx26OKqwG16eMIcLhvf8KGKDMnTFDi8bgPvSdxQjeqLOiYPZkLk+g1F+yCMYuObcNqK31se0Dw6f+n2JeoldjGZFPcYNA70+PiP1RrVjeYTVEug1yUsJLpxov==",
+        "chksum": "97f1a39eb3835f2ab363e5b1df00833be711e19e",
+        "wire_password": "{MD5}499ec8aceebe5d0f02837c6f3d78e4b9"
+      },
+      {
+        "name": "a suffixed account on another ac_id",
+        "username": "2020123456@cmcc",
+        "password": "p@ss w0rd!",
+        "ip": "192.168.1.100",
+        "ac_id": "12",
+        "enc": "srun_bx1",
+        "n": "200",
+        "type": "1",
+        "token": "0123456789abcdef0123456789abcdef",
+        "info_prefix": "SRBX1",
+        "info_json": "{\"username\":\"2020123456@cmcc\",\"password\":\"p@ss w0rd!\",\"ip\":\"192.168.1.100\",\"acid\":\"12\",\"enc_ver\":\"srun_bx1\"}",
+        "encrypted_info": "{SRBX1}prQntXZsnzjFlyfySI2gmzyriLWTyLV36pYkrH9ro9nmGiNAZAQ2biX/lAOk0z7p+KsGpjIa4/oS9PFzUtPL9UecWIObh8yIxLzBfeNyysk4huhEq28yp854F8E6VVBbtNPgDnM/R2nSt0PqMYIoES==",
+        "hmd5": "e8cf2f467157fd36c40ff6a377bfb20e",
+        "chkstr": "0123456789abcdef0123456789abcdef2020123456@cmcc0123456789abcdef0123456789abcdefe8cf2f467157fd36c40ff6a377bfb20e0123456789abcdef0123456789abcdef120123456789abcdef0123456789abcdef192.168.1.1000123456789abcdef0123456789abcdef2000123456789abcdef0123456789abcdef10123456789abcdef0123456789abcdef{SRBX1}prQntXZsnzjFlyfySI2gmzyriLWTyLV36pYkrH9ro9nmGiNAZAQ2biX/lAOk0z7p+KsGpjIa4/oS9PFzUtPL9UecWIObh8yIxLzBfeNyysk4huhEq28yp854F8E6VVBbtNPgDnM/R2nSt0PqMYIoES==",
+        "chksum": "cc7e5466ccc8498a4db8e3b9a296bb295babb744",
+        "wire_password": "{MD5}e8cf2f467157fd36c40ff6a377bfb20e"
+      },
+      {
+        "name": "a non-ASCII password, which the escaping has to survive",
+        "username": "u",
+        "password": "密码😀",
+        "ip": "10.0.0.2",
+        "ac_id": "1",
+        "enc": "srun_bx1",
+        "n": "200",
+        "type": "1",
+        "token": "abcdef1234567890abcdef1234567890",
+        "info_prefix": "SRBX1",
+        "info_json": "{\"username\":\"u\",\"password\":\"\\u5bc6\\u7801\\ud83d\\ude00\",\"ip\":\"10.0.0.2\",\"acid\":\"1\",\"enc_ver\":\"srun_bx1\"}",
+        "encrypted_info": "{SRBX1}LIjeYdrJIttgY40bCmqGmfRvvdqnZbMPuEoCVugmspdccY8SWAeUWo9tJ1jOPFzSH7auyut+NHsrLZJChf/fHsIhtXxFBnNJELrs1ZtfcbPCnZmL5+L9FKYZmeSURfaYso66LDPUjEeJjoJV",
+        "hmd5": "c6d8bc515f3ce576b384d4e10f4402aa",
+        "chkstr": "abcdef1234567890abcdef1234567890uabcdef1234567890abcdef1234567890c6d8bc515f3ce576b384d4e10f4402aaabcdef1234567890abcdef12345678901abcdef1234567890abcdef123456789010.0.0.2abcdef1234567890abcdef1234567890200abcdef1234567890abcdef12345678901abcdef1234567890abcdef1234567890{SRBX1}LIjeYdrJIttgY40bCmqGmfRvvdqnZbMPuEoCVugmspdccY8SWAeUWo9tJ1jOPFzSH7auyut+NHsrLZJChf/fHsIhtXxFBnNJELrs1ZtfcbPCnZmL5+L9FKYZmeSURfaYso66LDPUjEeJjoJV",
+        "chksum": "46e9e486905e575082d3895696ce373a29783d3e",
+        "wire_password": "{MD5}c6d8bc515f3ce576b384d4e10f4402aa"
+      }
+    ],
+    "logout_sign": [
+      {
+        "name": "a bare account",
+        "time_seconds": 1758000000,
+        "username": "2020123456",
+        "ip": "10.0.0.2",
+        "unbind": "1",
+        "sign_input": "1758000000202012345610.0.0.211758000000",
+        "sign": "332e69f249702bb21f8f11b4435d5ff200715fae"
+      },
+      {
+        "name": "an account with a suffix kept",
+        "time_seconds": 1758000000,
+        "username": "2020123456@cmcc",
+        "ip": "192.168.1.100",
+        "unbind": "1",
+        "sign_input": "17580000002020123456@cmcc192.168.1.10011758000000",
+        "sign": "a7fa034310230a83949976ad79cdc07a6f6f2bd9"
+      },
+      {
+        "name": "epoch zero",
+        "time_seconds": 0,
+        "username": "u",
+        "ip": "0.0.0.0",
+        "unbind": "1",
+        "sign_input": "0u0.0.0.010",
+        "sign": "07ff0c0424fd7b340392dc924c51f4da110da1d4"
+      }
+    ]
+  }
+}

@@ -56,6 +56,7 @@ XHR.prototype.send = function(body) {
 };
 const context = { window: {setInterval() {}}, document: {
   readyState: 'loading', addEventListener() {},
+  querySelector(selector) { return selector === 'input[name="token"]' ? {value: 'test-csrf'} : null; },
   getElementById(id) { return nodes[id] || null; }
 }, XMLHttpRequest: XHR, FormData, alert(value) { alerts.push(value); }, Date, JSON };
 vm.runInNewContext(source, context);
@@ -73,9 +74,10 @@ console.log(JSON.stringify({ sent, alerts, bssidDisabled: nodes['jm-bssid'].disa
   pending: nodes['smart-srun-overview-pending'].textContent }));
 """
         output = subprocess.run(
-            [node, "-e", script, json.dumps(scenario), str(JS)], check=True,
+            [node, "-e", script, json.dumps(scenario), str(JS)],
             stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", timeout=15,
         )
+        self.assertEqual(output.returncode, 0, output.stderr)
         result = json.loads(output.stdout)
         result["fields"] = dict(re.findall(r"<dt>(.*?)</dt><dd[^>]*>(.*?)</dd>", result["overview"]))
         return result
@@ -165,90 +167,26 @@ console.log(JSON.stringify({ sent, alerts, bssidDisabled: nodes['jm-bssid'].disa
         self.assertNotIn('<details id="smart-srun-overview-details" open', overview)
         self.assertIn('ap_selection == "fixed"', cbi)
 
-    def test_real_lua_schema_and_controller_reject_invalid_fixed_and_persist_policy(self):
+    def test_real_lua_controller_relays_policy_and_the_daemons_refusal(self):
+        """The policy reaches the daemon intact and a refusal reaches the user.
+
+        The Lua no longer validates the address itself: spec 02 puts business
+        validation in Go, the frozen dialog keeps its client-side hint, and
+        this asserts the third part -- that the page relays both the value and
+        the refusal rather than deciding either. (M00 ledger: ported_behavior
+        -> T27;T39;T51.)
+        """
         lua = shutil.which("lua")
         if not lua:
             self.skipTest("lua is not installed")
-        script = r"""
-local files, encoded, form = {}, {}, {}
-local sequence, output = 0, nil
-local function stringify(value)
-    sequence = sequence + 1
-    local key = "json" .. sequence
-    encoded[key] = value
-    return key
-end
-local function parse(value) return encoded[tostring(value or ""):match("^(json%d+)")] or {} end
-local config_path = "/usr/lib/smart_srun/config.json"
-local state_path = "/var/run/smart_srun/state.json"
-files[config_path] = stringify({campus_accounts={{id="one", bssid="02:11:22:33:44:55", custom=7}}})
-files[state_path] = stringify({current_bssid="02:11:22:33:44:55", current_signal=-47,
-    current_channel=36, current_wireless_ifname="phy0-sta0", ap_selection_policy="strongest",
-    ap_selection_reason="fixture"})
-package.preload["luci.dispatcher"] = function() return {test_post_security=function() return true end} end
-package.preload["luci.http"] = function() return {
-    formvalue=function(key) return form[key] end, prepare_content=function() end,
-    write=function(value) output = parse(value) end
-} end
-package.preload["luci.jsonc"] = function() return {parse=parse, stringify=stringify} end
-package.preload["luci.sys"] = function() return {exec=function() return "" end, call=function() return 0 end} end
-package.preload["luci.util"] = function() return {
-    trim=function(value) return tostring(value or ""):match("^%s*(.-)%s*$") end
-} end
-package.preload["nixio.fs"] = function() return {
-    readfile=function(path) return files[path] end,
-    writefile=function(path, value) files[path] = value; return true end,
-    access=function() return false end, mkdirr=function() return true end,
-    remove=function(path) files[path] = nil; return true end,
-    dir=function() return function() return nil end end
-} end
-package.preload["nixio"] = function() return {
-    getpid=function() return 99 end,
-    open_flags=function() return 0 end,
-    open=function(path) return {lock=function() return true end, close=function() end,
-        write=function(_, body) files[path] = body; return #body end} end
-} end
-os.rename = function(from, target) files[target] = files[from]; files[from] = nil; return true end
-package.preload["luci.smart_srun.schema"] = function() return dofile(SCHEMA_PATH) end
-local schema = require "luci.smart_srun.schema"
-assert(schema.normalize_ap_selection(nil, "02:11:22:33:44:55") == "fixed")
-assert(schema.normalize_ap_selection("auto", "02:11:22:33:44:55") == "auto")
-dofile(CONTROLLER_PATH)
-local controller = package.loaded["luci.controller.smart_srun"]
-for _, address in ipairs({"", "invalid", "01:11:22:33:44:55", "ff:ff:ff:ff:ff:ff"}) do
-    local before = files[config_path]
-    form = {action="edit_campus", id="one", access_mode="wifi", ap_selection="fixed", bssid=address}
-    controller.action_enqueue()
-    assert(output.ok == false)
-    assert(files[config_path] == before)
-end
-for _, policy in ipairs({"auto", "strongest", "fixed"}) do
-    form = {action="edit_campus", id="one", access_mode="wifi", ap_selection=policy, bssid="02:11:22:33:44:55"}
-    controller.action_enqueue()
-    local account = parse(files[config_path]).campus_accounts[1]
-    assert(output.ok == true)
-    assert(account.ap_selection == policy and account.custom == 7)
-    assert(account.bssid == "02:11:22:33:44:55")
-end
-form.access_mode = "wired"; form.bssid = ""; form.ap_selection = "fixed"
-controller.action_enqueue()
-assert(output.ok == true)
-assert(parse(files[config_path]).campus_accounts[1].ap_selection == "")
-controller.action_status()
-assert(output.current_signal == -47 and output.current_channel == 36)
-assert(output.current_wireless_ifname == "phy0-sta0" and output.ap_selection_reason == "fixture")
-files[state_path] = stringify({campus_bssid="02:11:22:33:44:55"})
-controller.action_status()
-assert(output.current_bssid == "" and output.current_signal == nil)
-for _, event in ipairs({"ap_selection", "ap_association"}) do
-    local line = controller.friendly_line('[2026-06-01 22:00:00] INFO ' .. event .. ' | fixture')
-    assert(not line:find(event, 1, true), line)
-end
-""".replace("SCHEMA_PATH", json.dumps((LUA / "smart_srun/schema.lua").as_posix())).replace(
-            "CONTROLLER_PATH", json.dumps((LUA / "controller/smart_srun.lua").as_posix())
+        result = subprocess.run(
+            [lua, (ROOT / "tests/lua/controller_ap_selection.lua").as_posix(),
+             ROOT.as_posix()],
+            cwd=str(ROOT), stdin=subprocess.DEVNULL, capture_output=True,
+            text=True, encoding="utf-8", timeout=15,
         )
-        subprocess.run([lua, "-e", script], check=True, stdin=subprocess.DEVNULL,
-                       capture_output=True, text=True, encoding="utf-8", timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
 
     def test_account_table_only_displays_remembered_bssid_for_fixed_policy(self):
         lua = shutil.which("lua")
@@ -260,6 +198,7 @@ local jsonc = {parse=function() return nil end, stringify=function() return "[]"
 package.preload["nixio.fs"] = function() return fs end
 package.preload["luci.jsonc"] = function() return jsonc end
 package.preload["nixio"] = function() return {} end
+package.preload["nixio.util"] = function() return {} end
 local schema = dofile(SCHEMA_PATH)
 local util = {pcdata=function(value) return tostring(value or "") end,
     trim=function(value) return tostring(value or ""):match("^%s*(.-)%s*$") end}
@@ -270,8 +209,11 @@ local source = handle:read("*a"):gsub("\r\n", "\n")
 handle:close()
 local body = assert(source:match("function tables_html%.cfgvalue%(%)\n(.-)\nend"))
 local render = assert(loadstring("return function() " .. body .. " end"))()
-local context = setmetatable({cfg={}, RADIO_CHOICES={}, school_presets={}, USER_PRESETS_FILE="",
-    schema=schema, util=util, fs=fs, jsonc=jsonc, load_state=load_state}, {__index=_G})
+-- The user-preset store now comes from the daemon; a page that cannot reach
+-- it still has to render the account table.
+local rpc = {call=function() return nil end}
+local context = setmetatable({cfg={}, RADIO_CHOICES={}, school_presets={},
+    schema=schema, util=util, fs=fs, jsonc=jsonc, rpc=rpc, load_state=load_state}, {__index=_G})
 setfenv(render, context)
 for _, case in ipairs({
     {policy="auto"}, {policy="strongest"}, {policy="fixed", fixed=true},

@@ -1,0 +1,50 @@
+{
+	"phy": "phy1",
+	"ssid": "jxnu_stu",
+	"bssid": "02:00:5E:00:53:00",
+	"country": "CN",
+	"mode": "Client",
+	"channel": 52,
+	"center_chan1": 58,
+	"frequency": 5260,
+	"frequency_offset": 0,
+	"txpower": 28,
+	"txpower_offset": 0,
+	"quality": 58,
+	"quality_max": 70,
+	"signal": -52,
+	"noise": -91,
+	"bitrate": 6000,
+	"encryption": {
+		"enabled": false
+	},
+	"htmodes": [
+		"HT20",
+		"HT40",
+		"VHT20",
+		"VHT40",
+		"VHT80",
+		"VHT160",
+		"HE20",
+		"HE40",
+		"HE80",
+		"HE160"
+	],
+	"hwmodes": [
+		"n",
+		"ac",
+		"ax"
+	],
+	"hwmodes_text": "ac/ax/n",
+	"hwmode": "ac",
+	"htmode": "VHT80",
+	"hardware": {
+		"id": [
+			0,
+			0,
+			0,
+			0
+		],
+		"name": "MediaTek MT7986"
+	}
+}
