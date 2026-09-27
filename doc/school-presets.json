@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-13",
+  "updated_at": "2026-09-27",
   "source": "https://github.com/matthewlu070111/smart-srun/issues",
   "schools": [
     {
@@ -374,6 +374,28 @@
         "@RCaquaer"
       ],
       "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/29"
+    },
+    {
+      "id": "cjxy-xc",
+      "name": "昌吉学院（新城校区）",
+      "status": "active",
+      "description": "适用于新城校区的 CJXY-Wlan 无线网络，账号无需后缀，已通过插件登录验证。有线接入和其他账号类型尚未验证。",
+      "defaults": {
+        "base_url": "http://219.247.65.252",
+        "ac_id": "2",
+        "ssid": "CJXY-Wlan",
+        "access_mode": "wifi"
+      },
+      "operators": [
+        {
+          "suffix": "",
+          "label": "校园网"
+        }
+      ],
+      "contributors": [
+        "@Sheen1119"
+      ],
+      "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/62"
     }
   ]
 }
