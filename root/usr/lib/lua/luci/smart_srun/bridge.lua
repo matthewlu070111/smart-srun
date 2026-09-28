@@ -67,6 +67,7 @@ local SCALARS = {
     manual_terminal_check_max_attempts     = { path = { "checks", "terminal_attempts" }, kind = "int" },
     manual_terminal_check_interval_seconds = { path = { "checks", "terminal_interval_seconds" }, kind = "int" },
     log_level                              = { path = { "log", "level" }, kind = "string" },
+    log_file_omit_info                     = { path = { "log", "file_omit_info" }, kind = "bool" },
     n                                      = { path = { "login_defaults", "n" }, kind = "string" },
     type                                   = { path = { "login_defaults", "type" }, kind = "string" },
     enc                                    = { path = { "login_defaults", "enc" }, kind = "string" },

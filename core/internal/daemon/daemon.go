@@ -265,6 +265,7 @@ func Run(ctx context.Context, options Options) error {
 	// every run with lines the user asked not to see.
 	initial := repository.Snapshot()
 	events.SetLevel(initial.Log.Level)
+	events.SetFileOmitInfo(initial.Log.FileOmitInfo)
 	service.log(logstore.EventDaemonStart, "", logstore.F("version", options.Version),
 		logstore.F("pid", strconv.Itoa(os.Getpid())))
 	service.log(logstore.EventConfigLoaded, "",
@@ -322,7 +323,9 @@ func Run(ctx context.Context, options Options) error {
 		// The threshold follows the setting on the same transaction that
 		// changed it, so the first line after a save is already at the level
 		// the user just chose.
-		events.SetLevel(repository.Snapshot().Log.Level)
+		applied := repository.Snapshot().Log
+		events.SetLevel(applied.Level)
+		events.SetFileOmitInfo(applied.FileOmitInfo)
 		service.log(logstore.EventConfigApplied, "",
 			logstore.F("revision", strconv.FormatUint(revision, 10)))
 		service.markDirty()
