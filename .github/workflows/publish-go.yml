@@ -35,7 +35,7 @@ jobs:
           PRERELEASE: ${{ inputs.prerelease }}
         run: |
           test "$GITHUB_REPOSITORY" = matthewlu070111/smart-srun
-          test "$GITHUB_REF" = refs/heads/go
+          test "$GITHUB_REF" = refs/heads/main
           sha256sum --strict --check SHA256SUMS
           python3 - <<'PY'
           import json, os
