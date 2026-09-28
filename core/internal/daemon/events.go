@@ -102,11 +102,49 @@ func (d *Daemon) logAction(action application.Action) {
 			level = domain.LogWarn
 		}
 		d.logAt(level, logstore.EventActionResult, action.Message, fields...)
+		d.logConnectivity(action)
 		// Terminal states are irreversible, so nothing more will be published
 		// about this action and the signature can go. Without this the map
 		// would grow for as long as the service runs.
 		delete(d.published, action.ID)
 	}
+}
+
+// logConnectivity records the Internet check's diagnosis at DEBUG.
+//
+// The result line already says whether the action succeeded; this one says
+// how the connectivity verdict was reached -- which endpoints failed over the
+// bound line and why, and whether the router's own route confirmed access
+// instead. A user chasing "TransportFailure while the router can curl" turns
+// the level to DEBUG and reads this line.
+func (d *Daemon) logConnectivity(action application.Action) {
+	diagnosis := action.Connectivity
+	if diagnosis == nil {
+		return
+	}
+	fields := append(actionFields(action), logstore.F("bound", diagnosis.Bound))
+	if diagnosis.BoundLast != "" {
+		fields = append(fields, logstore.F("bound_last_error", diagnosis.BoundLast))
+	}
+	if diagnosis.Fallback != "" {
+		fields = append(fields, logstore.F("system_fallback", diagnosis.Fallback))
+	}
+	if diagnosis.System != "" {
+		fields = append(fields, logstore.F("system", diagnosis.System))
+	}
+	via := diagnosis.Via
+	if via == "" {
+		via = "none"
+	}
+	fields = append(fields, logstore.F("via", via))
+	message := ""
+	switch diagnosis.Via {
+	case "system":
+		message = "绑定线路探测未通过，已通过系统路由确认互联网连通"
+	case "":
+		message = "未能确认互联网连通"
+	}
+	d.log(logstore.EventConnectivityProbe, message, fields...)
 }
 
 // logMaintenance records what the automatic loop decided.

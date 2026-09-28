@@ -274,6 +274,9 @@ type Action struct {
 	// MaintenanceDeferred means the current uplink intentionally is a hotspot;
 	// this is a pause, not a failed password attempt that spends retry budget.
 	MaintenanceDeferred bool
+	// Connectivity is copied from the worker's Outcome for the daemon's
+	// DEBUG log; it is not part of any RPC view.
+	Connectivity *ConnectivityDiagnosis
 
 	// ordinal is submission order. It breaks ties in the queue, where the id
 	// string cannot: "a10" sorts before "a2".
@@ -316,6 +319,9 @@ type Outcome struct {
 	// is the second writer this whole design exists to avoid.
 	Observation *observe.Observation
 	ResultJSON  string
+	// Connectivity is the Internet check's diagnosis, for a DEBUG line. It is
+	// never shown to a user as the result message.
+	Connectivity *ConnectivityDiagnosis
 }
 
 // Runner performs one action.

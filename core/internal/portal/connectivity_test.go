@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/matthewlu070111/smart-srun/core/internal/domain"
 	"github.com/matthewlu070111/smart-srun/core/internal/transport"
@@ -97,3 +100,82 @@ func TestConnectivityRejectsCredentialedURLsWithoutSendingThem(t *testing.T) {
 		t.Fatalf("%s / %v", level, err)
 	}
 }
+
+func TestConnectivityReportNamesEachEndpointFailure(t *testing.T) {
+	answers := []func() (*http.Response, error){
+		func() (*http.Response, error) { return nil, domain.Errorf(domain.CodeDNSFailure, "no answer") },
+		func() (*http.Response, error) { return nil, domain.Errorf(domain.CodeDeadlineExceeded, "slow") },
+		func() (*http.Response, error) { return nil, errors.New("connection refused") },
+	}
+	calls := 0
+	client := environmentFetcher(func(*http.Request) (*http.Response, error) {
+		answer := answers[calls]
+		calls++
+		return answer()
+	})
+	report, err := CheckConnectivityReport(t.Context(), client,
+		[]string{"http://a.invalid/generate_204", "http://b.invalid/generate_204", "http://c.invalid/generate_204"}, time.Second)
+	if err != nil || report.Level != domain.ConnectivityUnknown {
+		t.Fatalf("%+v / %v", report, err)
+	}
+	if got := report.Summary(); got != "a.invalid=dns,b.invalid=timeout,c.invalid=transport" {
+		t.Fatalf("summary = %q", got)
+	}
+	if report.LastFailure() != FailureTransport {
+		t.Fatalf("last = %q", report.LastFailure())
+	}
+}
+
+func TestConnectivityReportKeepsStatusAndSuccess(t *testing.T) {
+	calls := 0
+	client := environmentFetcher(func(*http.Request) (*http.Response, error) {
+		calls++
+		if calls == 1 {
+			return page(302, "", "http://portal.invalid/"), nil
+		}
+		return page(204, "", ""), nil
+	})
+	report, err := CheckConnectivityReport(t.Context(), client,
+		[]string{"http://a.invalid/", "http://b.invalid/"}, 0)
+	if err != nil || report.Level != domain.ConnectivityInternetReachable {
+		t.Fatalf("%+v / %v", report, err)
+	}
+	if got := report.Summary(); got != "a.invalid=status_302,b.invalid=ok" {
+		t.Fatalf("summary = %q", got)
+	}
+	if report.LastFailure() != FailureStatus {
+		t.Fatalf("last = %q", report.LastFailure())
+	}
+	if (ConnectivityReport{}).Summary() != "no_endpoints" || (ConnectivityReport{}).LastFailure() != FailureNone {
+		t.Fatal("empty report")
+	}
+}
+
+func TestProbeErrorClassification(t *testing.T) {
+	deadline := &net.OpError{Op: "dial", Err: timeoutError{}}
+	cases := []struct {
+		err      error
+		timedOut bool
+		want     FailureKind
+	}{
+		{&url.Error{Op: "Get", URL: "http://x", Err: &net.DNSError{Name: "x", IsTimeout: true}}, true, FailureDNS},
+		{context.DeadlineExceeded, false, FailureTimeout},
+		{errors.New("reset"), true, FailureTimeout},
+		{deadline, false, FailureTimeout},
+		{errors.New("reset"), false, FailureTransport},
+	}
+	for _, c := range cases {
+		if got := classifyProbeError(c.err, c.timedOut); got != c.want {
+			t.Errorf("%v -> %q, want %q", c.err, got, c.want)
+		}
+	}
+	if endpointHost("://bad") != "invalid" {
+		t.Error("bad endpoint host")
+	}
+}
+
+type timeoutError struct{}
+
+func (timeoutError) Error() string   { return "i/o timeout" }
+func (timeoutError) Timeout() bool   { return true }
+func (timeoutError) Temporary() bool { return true }

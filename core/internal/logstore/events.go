@@ -57,6 +57,10 @@ const (
 	// records the line and how many addresses were visited, never a credential:
 	// discovery does not have one.
 	EventDetectProbe = "detect_probe"
+	// EventConnectivityProbe is the Internet check's diagnosis: what each
+	// endpoint answered over the bound line and, when the bound line could
+	// not prove access, whether the system route did. DEBUG only.
+	EventConnectivityProbe = "connectivity_probe_result"
 
 	// EventInternalError is a fault with nobody to return it to: a snapshot
 	// that could not be written, a connection that failed mid-answer.
@@ -97,6 +101,7 @@ var catalogue = []Event{
 
 	{EventPresetsRefresh, domain.LogInfo, true, ""},
 	{EventDetectProbe, domain.LogInfo, true, "只读探测，永远没有凭据字段"},
+	{EventConnectivityProbe, domain.LogDebug, true, "互联网判定的逐端点诊断，默认等级下不写"},
 
 	{EventInternalError, domain.LogError, false, ""},
 	{EventLogCleared, domain.LogInfo, false, ""},

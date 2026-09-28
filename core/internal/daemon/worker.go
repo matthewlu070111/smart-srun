@@ -78,6 +78,9 @@ func newDeviceRunner(settings application.Settings, pool *transport.Pool,
 		Settings: settings,
 		Clock:    clock,
 		Wireless: radio,
+		// Only the Internet check reads it, and only after the bound line has
+		// verified the session on a single-uplink router (issue #64).
+		SystemProbe: transport.NewSystemProbeClient(),
 	})
 }
 

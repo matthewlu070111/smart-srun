@@ -71,6 +71,9 @@ type Authenticator struct {
 	wireless  Wireless
 	clock     policy.Clock
 	probeURLs []string
+	// systemProbe answers the Internet check by the router's own route when
+	// the bound check could not. Nil disables the fallback.
+	systemProbe portalprobe.Fetcher
 
 	generation atomic.Uint64
 
@@ -97,6 +100,10 @@ type AuthenticatorOptions struct {
 	// ConnectivityURLs replaces the ordered, credential-free probe endpoints
 	// for an isolated environment. Nil uses the shipped endpoint list.
 	ConnectivityURLs []string
+	// SystemProbe is an unbound client used only to confirm Internet access
+	// after the bound check failed on a single-uplink router whose account is
+	// already verified online. Nil disables that fallback.
+	SystemProbe portalprobe.Fetcher
 }
 
 // NewAuthenticator wires one.
@@ -110,13 +117,14 @@ func NewAuthenticator(options AuthenticatorOptions) *Authenticator {
 		urls = portalprobe.ConnectivityURLs()
 	}
 	return &Authenticator{
-		binder:    options.Binder,
-		lines:     options.Lines,
-		settings:  options.Settings,
-		wireless:  options.Wireless,
-		clock:     clock,
-		probeURLs: append([]string(nil), urls...),
-		seen:      map[string]domain.Binding{},
+		binder:      options.Binder,
+		lines:       options.Lines,
+		settings:    options.Settings,
+		wireless:    options.Wireless,
+		clock:       clock,
+		probeURLs:   append([]string(nil), urls...),
+		systemProbe: options.SystemProbe,
+		seen:        map[string]domain.Binding{},
 	}
 }
 
@@ -187,6 +195,10 @@ type attempt struct {
 	intent    auth.Intent
 	checkMode domain.CheckMode
 	checks    domain.ChecksConfig
+	// kind and multiWAN decide whether the system-route fallback may speak
+	// for this line: never with several uplinks, never mid-switch.
+	kind     Kind
+	multiWAN bool
 	// Scheduled transitions wait for the portal to settle before moving on.
 	// Their authentication intent remains automatic: another user's session
 	// must never be cleared merely because a timetable fired.
@@ -502,6 +514,8 @@ func (a *Authenticator) prepare(ctx context.Context, action Action,
 		intent:          intentOf(action.Request.Kind),
 		checkMode:       cfg.Checks.Mode,
 		checks:          cfg.Checks,
+		kind:            action.Request.Kind,
+		multiWAN:        cfg.MultiWANEnabled,
 		revision:        revision,
 		sequence:        action.Sequence,
 		confirmTerminal: action.Request.Kind == KindForcedLogout || action.Request.Kind == KindQuietCampus,
