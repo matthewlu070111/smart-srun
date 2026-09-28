@@ -174,6 +174,7 @@ func (c *Coordinator) onFinish(done completion) {
 			action.ResultJSON = outcome.ResultJSON
 		}
 		action.MaintenanceDeferred = outcome.MaintenanceDeferred
+		action.Connectivity = outcome.Connectivity
 	}
 
 	// What the attempt learned travels whatever became of the action. A

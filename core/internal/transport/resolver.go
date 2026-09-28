@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/matthewlu070111/smart-srun/core/internal/domain"
 )
@@ -158,6 +159,34 @@ func (r *Resolver) takeDialFailure() error {
 	return err
 }
 
+// lookupBudget is DNSTimeout, or less when the caller's own deadline is
+// closer.
+//
+// A lookup that ran exactly as long as its caller's budget would end together
+// with it, and the caller would see only "deadline exceeded" -- losing the
+// fact that it was the resolver that never answered, which is the one thing
+// that tells a user to look at a DNS hijack rather than at the line (#64).
+// Leaving a quarter of a short budget over keeps the DNS diagnosis intact.
+func lookupBudget(ctx context.Context) time.Duration {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		// net/http dials on a context detached from the request's deadline,
+		// keeping only its values; Client.Do leaves the deadline there.
+		deadline, ok = ctx.Value(requestDeadlineKey{}).(time.Time)
+	}
+	if !ok {
+		return DNSTimeout
+	}
+	if remaining := time.Until(deadline); remaining <= DNSTimeout {
+		return max(remaining*3/4, time.Millisecond)
+	}
+	return DNSTimeout
+}
+
+// requestDeadlineKey carries a request's deadline to the name lookup its dial
+// performs. See lookupBudget.
+type requestDeadlineKey struct{}
+
 // LookupIPv4 resolves a host to the addresses this line can reach.
 //
 // A host that is already an address is returned as it is. Campus gateways are
@@ -171,7 +200,7 @@ func (r *Resolver) LookupIPv4(ctx context.Context, host string) ([]netip.Addr, e
 		return []netip.Addr{address}, nil
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, DNSTimeout)
+	ctx, cancel := context.WithTimeout(ctx, lookupBudget(ctx))
 	defer cancel()
 	r.takeDialFailure()
 

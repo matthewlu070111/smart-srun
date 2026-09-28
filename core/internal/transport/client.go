@@ -167,6 +167,11 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 		return nil, domain.FieldErrorf(domain.CodeBindingUnavailable,
 			"wired_iface", "线路 %s 尚未就绪", c.binding.LogicalIface)
 	}
+	if deadline, ok := req.Context().Deadline(); ok {
+		// The dial runs on a context without this deadline; the lookup inside
+		// it reads the deadline from here to finish first (lookupBudget).
+		req = req.WithContext(context.WithValue(req.Context(), requestDeadlineKey{}, deadline))
+	}
 	response, err := c.inner.Do(req)
 	if err != nil {
 		return nil, c.classify(req, err)

@@ -1,11 +1,13 @@
 package transport
 
 import (
+	"context"
 	"net"
 	"net/netip"
 	"slices"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/matthewlu070111/smart-srun/core/internal/domain"
 )
@@ -223,5 +225,33 @@ func TestABindingFailureIsNotReportedAsANameProblem(t *testing.T) {
 	if code := codeOf(t, err); code != domain.CodeBindingUnavailable {
 		t.Errorf("code = %s, want BindingUnavailable; the line is the problem, "+
 			"not the name", code)
+	}
+}
+
+func TestLookupBudgetLeavesRoomForTheDNSDiagnosis(t *testing.T) {
+	if got := lookupBudget(context.Background()); got != DNSTimeout {
+		t.Fatalf("no deadline: %v", got)
+	}
+	long, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if got := lookupBudget(long); got != DNSTimeout {
+		t.Fatalf("long deadline: %v", got)
+	}
+	short, cancelShort := context.WithTimeout(context.Background(), DNSTimeout)
+	defer cancelShort()
+	if got := lookupBudget(short); got >= DNSTimeout || got < DNSTimeout/2 {
+		t.Fatalf("short deadline: %v", got)
+	}
+	expired, cancelExpired := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancelExpired()
+	if got := lookupBudget(expired); got != time.Millisecond {
+		t.Fatalf("expired deadline: %v", got)
+	}
+}
+
+func TestLookupBudgetReadsTheDeadlineADetachedDialKeeps(t *testing.T) {
+	ctx := context.WithValue(context.Background(), requestDeadlineKey{}, time.Now().Add(DNSTimeout))
+	if got := lookupBudget(context.WithoutCancel(ctx)); got >= DNSTimeout || got < DNSTimeout/2 {
+		t.Fatalf("detached deadline ignored: %v", got)
 	}
 }

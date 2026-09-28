@@ -570,3 +570,47 @@ func TestNoGlobalServiceLocator(t *testing.T) {
 		t.Fatalf("walk: %v", err)
 	}
 }
+
+// The system-route probe client is the one deliberate exception to "there is
+// one HTTP client, and it is the bound one" (issue #64). It answers only the
+// Internet check after the bound line has verified the session on a
+// single-uplink router, so it is built in exactly one place -- the daemon's
+// wiring -- and handed to the worker as a portal.Fetcher. Anything else that
+// constructed it could send a campus request, or a credential, by the default
+// route.
+func TestOnlyTheDaemonBuildsTheSystemProbeClient(t *testing.T) {
+	allowed := map[string]bool{
+		"internal/transport/system.go": true,
+		"internal/daemon/worker.go":    true,
+	}
+	root := coreRoot(t)
+	users := 0
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() || !strings.HasSuffix(path, ".go") ||
+			strings.HasSuffix(path, "_test.go") {
+			return err
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		if !strings.Contains(string(data), "NewSystemProbeClient") {
+			return nil
+		}
+		relative, _ := filepath.Rel(root, path)
+		relative = filepath.ToSlash(relative)
+		if !allowed[relative] {
+			t.Errorf("%s builds the unbound system-route client; only the "+
+				"daemon's wiring may, for the Internet check alone", relative)
+		}
+		users++
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	if users != len(allowed) {
+		t.Errorf("found the system probe client in %d allowed files, want %d; "+
+			"this check is looking in the wrong place", users, len(allowed))
+	}
+}

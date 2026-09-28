@@ -27,6 +27,54 @@ func (a *Authenticator) checkExisting(ctx context.Context, tx *auth.Transaction,
 	}
 }
 
+// ConnectivityDiagnosis records how an Internet check reached its verdict.
+//
+// It is for a DEBUG log line: which endpoints failed and how over the bound
+// line, whether the system route was consulted, and what it answered. None of
+// it names a credential.
+type ConnectivityDiagnosis struct {
+	// Via is "bound" when the bound line proved Internet access, "system"
+	// when only the system route did, and empty when neither did.
+	Via string
+	// Bound is the per-endpoint summary over the bound line.
+	Bound string
+	// BoundLast is the kind of the last bound endpoint failure.
+	BoundLast string
+	// System is the per-endpoint summary over the system route, when asked.
+	System string
+	// Fallback says why the system route was or was not consulted.
+	Fallback string
+}
+
+const (
+	fallbackUsed      = "used"
+	fallbackMultiWAN  = "skipped_multi_wan"
+	fallbackSwitching = "skipped_switch"
+	fallbackNoClient  = "unavailable"
+	viaBound          = "bound"
+	viaSystem         = "system"
+)
+
+// systemFallback reports whether the unbound system route may answer the
+// Internet question for this attempt, and if not, why.
+//
+// Only on a router with one uplink: with multi-WAN the default route may be a
+// different line, and its answer would say nothing about this one. Never while
+// switching to campus: the hotspot this switch is replacing can still own the
+// default route, and a 204 through it would retire a working uplink.
+func (a *Authenticator) systemFallback(p *attempt) (bool, string) {
+	switch {
+	case a.systemProbe == nil:
+		return false, fallbackNoClient
+	case p.multiWAN:
+		return false, fallbackMultiWAN
+	case p.kind == KindSwitchCampus || p.kind == KindQuietCampus:
+		return false, fallbackSwitching
+	default:
+		return true, fallbackUsed
+	}
+}
+
 // Authentication and connectivity remain separate evidence. A timed-out probe
 // must not erase a verified identity, trigger an unbind, or blame the password.
 func (a *Authenticator) verifyConnectivity(ctx context.Context, p *attempt, message, identity string) Outcome {
@@ -34,8 +82,29 @@ func (a *Authenticator) verifyConnectivity(ctx context.Context, p *attempt, mess
 	var err error
 	switch p.checkMode {
 	case domain.CheckInternet:
-		var level domain.Connectivity
-		level, err = portalprobe.CheckConnectivity(ctx, p.line, a.probeURLs)
+		report, cause := portalprobe.CheckConnectivityReport(ctx, p.line, a.probeURLs, portalprobe.EndpointBudget)
+		err = cause
+		level := report.Level
+		diagnosis := &ConnectivityDiagnosis{Bound: report.Summary(), BoundLast: string(report.LastFailure())}
+		if err == nil && level == domain.ConnectivityInternetReachable {
+			diagnosis.Via = viaBound
+		}
+		// The identity was verified over the bound line moments ago, so the
+		// account is online. A local proxy that hijacks the router's DNS can
+		// still make every bound probe fail; the router's own route is then
+		// the better witness for "is the Internet reachable".
+		if err == nil && level != domain.ConnectivityInternetReachable {
+			allowed, reason := a.systemFallback(p)
+			diagnosis.Fallback = reason
+			if allowed {
+				system, systemErr := portalprobe.CheckConnectivityReport(ctx, a.systemProbe, a.probeURLs, portalprobe.SystemEndpointBudget)
+				diagnosis.System = system.Summary()
+				if systemErr == nil && system.Level == domain.ConnectivityInternetReachable {
+					level, diagnosis.Via = system.Level, viaSystem
+				}
+			}
+		}
+		out.Connectivity = diagnosis
 		if level != domain.ConnectivityUnknown {
 			out.Observation.Connectivity = level
 		}
