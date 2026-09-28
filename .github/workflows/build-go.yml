@@ -45,8 +45,8 @@ jobs:
           CHANNEL: ${{ inputs.channel }}
           OFFICIAL: ${{ inputs.official_signing }}
         run: |
-          if [ "$OFFICIAL" = true ] && { [ "$GITHUB_REPOSITORY" != matthewlu070111/smart-srun ] || [ "$GITHUB_REF" != refs/heads/go ]; }; then
-            echo 'Official signing is restricted to the upstream go branch.' >&2
+          if [ "$OFFICIAL" = true ] && { [ "$GITHUB_REPOSITORY" != matthewlu070111/smart-srun ] || [ "$GITHUB_REF" != refs/heads/main ]; }; then
+            echo 'Official signing is restricted to the upstream main branch.' >&2
             exit 1
           fi
           args=()

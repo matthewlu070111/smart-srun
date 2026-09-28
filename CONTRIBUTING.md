@@ -54,7 +54,7 @@ CI 在 push、PR 和手动运行时检查 Go 门禁、五种 Go 架构编译、L
 - `build-prerelease.yml`：输入完整 RC 版本，默认仅预览构建；启用 `publish_release` 后使用维护者密钥，生成待核对的 GitHub prerelease 草稿。
 - `build-release.yml`：输入正式版本，构建并创建正式 release 草稿。发布阶段复用本次已校验产物，不再编译，不覆盖已有版本。
 
-正式签名和草稿创建只允许上游 `matthewlu070111/smart-srun` 的 `go` 分支。维护者需要配置 `release-signing` environment：secret `SMARTSRUN_APK_SIGNING_KEY` 为 PEM 私钥，variable `SMARTSRUN_APK_PUBLIC_KEY` 为匹配的 PEM 公钥；建议限制分支并设置审核人。`release` environment 控制草稿创建，也应设置维护者审核。缺少正式密钥时任务失败，不自动生成发布身份，不降级为跳过验签。
+正式签名和草稿创建只允许上游 `matthewlu070111/smart-srun` 的 `main` 分支。维护者需要配置 `release-signing` environment：secret `SMARTSRUN_APK_SIGNING_KEY` 为 PEM 私钥，variable `SMARTSRUN_APK_PUBLIC_KEY` 为匹配的 PEM 公钥；建议限制分支并设置审核人。`release` environment 控制草稿创建，也应设置维护者审核。缺少正式密钥时任务失败，不自动生成发布身份，不降级为跳过验签。
 
 每个候选附带真实架构包、同 SDK 分体 ZIP、`release-manifest.json`、覆盖所有文件的 `SHA256SUMS`、`build-records.tar.gz` 和正式公钥。PKG_VERSION 在源码中保留 `0.0.0`；SDK 副本分别使用 opkg `~rc` 和 APK `_rc`，二进制与页面显示统一的 `2.0.0rcN`。版本标签不加 `v`，与 Go 更新器的不可变下载地址一致。
 
