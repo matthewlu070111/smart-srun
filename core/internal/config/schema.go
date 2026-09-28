@@ -216,6 +216,8 @@ func globalFields(defaults domain.Config) []Field {
 		{Path: "log.level", Kind: KindEnum, Default: string(defaults.Log.Level),
 			Choices: enumStrings(domain.LogLevels()),
 			Note:    "ALL 只是最低阈值，不是事件等级"},
+		{Path: "log.file_omit_info", Kind: KindBool, Default: defaults.Log.FileOmitInfo,
+			Note: "开启时 INFO 事件只进内存（页面实时日志），不写入日志文件；WARN/ERROR 与启动/停止/保存/清空事件照常写入；等级为 DEBUG 或 ALL 时不生效"},
 
 		{Path: "campus_accounts", Kind: KindList},
 		{Path: "hotspot_profiles", Kind: KindList},

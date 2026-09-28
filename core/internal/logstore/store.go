@@ -53,8 +53,10 @@ type Store struct {
 	mu        sync.Mutex
 	path      string
 	threshold domain.LogLevel
-	sequence  uint64
-	records   []entry
+	// fileOmitInfo keeps INFO events out of the file (log.file_omit_info).
+	fileOmitInfo bool
+	sequence     uint64
+	records      []entry
 	// dropped counts records that left the memory window, so a reader whose
 	// cursor is older than the window can be told rather than silently handed a
 	// gap.
@@ -95,6 +97,45 @@ func (s *Store) SetLevel(level domain.LogLevel) {
 	s.threshold = level
 }
 
+// SetFileOmitInfo decides whether INFO events reach the file. The memory tail
+// is not affected: the page's live view still shows every INFO line.
+func (s *Store) SetFileOmitInfo(omit bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.fileOmitInfo = omit
+}
+
+// FileOmitInfo reports the current setting.
+func (s *Store) FileOmitInfo() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.fileOmitInfo
+}
+
+// fileLifecycle are the INFO events that are written whatever the switch
+// says. They are what makes a file readable after the fact: where a run began
+// and ended, when a setting changed, and where a user cleared the log.
+var fileLifecycle = map[string]bool{
+	EventDaemonStart:   true,
+	EventDaemonStop:    true,
+	EventConfigApplied: true,
+	EventLogCleared:    true,
+}
+
+// writesToFile reports whether an emitted record also goes to the file. The
+// caller holds the lock.
+func (s *Store) writesToFile(level domain.LogLevel, event string) bool {
+	if !s.fileOmitInfo || level != domain.LogInfo {
+		return true
+	}
+	// Somebody who turned the level up to DEBUG or ALL is collecting detail
+	// for a report, and the file is what they will download.
+	if s.threshold == domain.LogDebug || s.threshold == domain.LogAll {
+		return true
+	}
+	return fileLifecycle[event]
+}
+
 func (s *Store) Level() domain.LogLevel {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -124,6 +165,9 @@ func (s *Store) Emit(at time.Time, level domain.LogLevel, event, message string,
 	if len(s.records) > MemoryRecords {
 		s.dropped += uint64(len(s.records) - MemoryRecords)
 		s.records = append([]entry(nil), s.records[len(s.records)-MemoryRecords:]...)
+	}
+	if !s.writesToFile(level, event) {
+		return
 	}
 	s.append(line)
 }

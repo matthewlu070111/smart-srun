@@ -62,7 +62,7 @@ func Defaults() domain.Config {
 			Enabled:                true,
 			HotspotFailbackEnabled: true,
 		},
-		Log:           domain.LogConfig{Level: domain.LogInfo},
+		Log:           domain.LogConfig{Level: domain.LogInfo, FileOmitInfo: true},
 		PresetUpdates: domain.PresetUpdateConfig{Enabled: true, Time: mustClock(9, 0)},
 
 		CampusAccounts:  []domain.CampusAccount{},

@@ -47,7 +47,7 @@ local CONFIG = {
         terminal_attempts = 5, terminal_interval_seconds = 2,
     },
     failover = { enabled = true, hotspot_failback_enabled = true },
-    log = { level = "INFO" },
+    log = { level = "INFO", file_omit_info = true },
     campus_accounts = {
         {
             id = "c1", label = "宿舍有线", user_id = "2021001", password = "",
@@ -87,6 +87,12 @@ equal("flatten.interval", flat.interval, "60")
 equal("flatten.retry_cooldown", flat.retry_cooldown_seconds, "10")
 equal("flatten.max_retries", flat.backoff_max_retries, "4")
 equal("flatten.log_level", flat.log_level, "INFO")
+equal("flatten.log_file_omit_info", flat.log_file_omit_info, "1")
+local omit_off = bridge.settings_patch({ log_file_omit_info = "0", log_level = "WARN" }, { log_file_omit_info = true })
+equal("patch.log_file_omit_info_off", omit_off.log.file_omit_info, false)
+check("patch.log_file_omit_info_keeps_level", omit_off.log.level == nil, "the level must not travel with the flag")
+local omit_on = bridge.settings_patch({ log_file_omit_info = "1" }, { log_file_omit_info = true })
+equal("patch.log_file_omit_info_on", omit_on.log.file_omit_info, true)
 equal("flatten.login_default_n", flat.n, "200")
 equal("flatten.active_campus", flat.active_campus_id, "c1")
 equal("flatten.default_campus", flat.default_campus_id, "c2")
@@ -491,6 +497,15 @@ equal("feedback.logout_has_no_portal", bridge.action_feedback("a1").last_action_
 answers["action.get"] = { id = "a1", kind = "manual_login", account_id = "c1", state = "failed", message = "x" }
 answers["config.get"] = nil
 equal("feedback.config_unreadable", bridge.action_feedback("a1").last_action_portal_url, "")
+-- The form's default comes from the daemon's schema, so a page rendered with
+-- a configuration that lacks the key still shows the flag checked.
+answers["schema.get"] = { global = {
+    { path = "log.level", kind = "enum", default = "INFO" },
+    { path = "log.file_omit_info", kind = "bool", default = true },
+} }
+local defaults = bridge.defaults()
+equal("defaults.log_file_omit_info", defaults.log_file_omit_info, "1")
+equal("defaults.log_level", defaults.log_level, "INFO")
 rpc.call = real_call
 
 if failures > 0 then

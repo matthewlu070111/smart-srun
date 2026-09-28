@@ -990,6 +990,12 @@ log_level.rmempty = false
 log_level.default = "INFO"
 bind_text(log_level, "log_level")
 
+local log_file_omit_info = s:taboption("log", Flag, "log_file_omit_info", "日志文件不记录 INFO 信息",
+    "默认开启。INFO 信息仍显示在下方运行日志中，但不写入日志文件（下载的日志也不含这些信息）；" ..
+    "警告、错误以及服务启动、停止、保存配置、清空日志的记录照常写入。日志等级为 DEBUG 或 ALL 时不生效。")
+log_file_omit_info.default = "1"
+bind_flag(log_file_omit_info, "log_file_omit_info")
+
 log_text = s:taboption("log", DummyValue, "_log_text", "运行日志")
 log_text.rawhtml = true
 function log_text.cfgvalue(self, section)

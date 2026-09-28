@@ -100,6 +100,12 @@ type FailoverConfig struct {
 
 type LogConfig struct {
 	Level LogLevel `json:"level"`
+	// FileOmitInfo keeps routine INFO events out of the log file while the
+	// in-memory tail the page reads still has them. WARN and ERROR are always
+	// written, as are the lifecycle events that bracket a run; the switch is
+	// ignored when the threshold is DEBUG or ALL, because somebody asking for
+	// detail wants all of it in the file they will download.
+	FileOmitInfo bool `json:"file_omit_info"`
 }
 
 // PresetUpdateConfig schedules one catalogue check per Beijing calendar day.
