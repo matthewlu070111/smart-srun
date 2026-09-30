@@ -48,16 +48,26 @@ func Check(ctx context.Context, source ReleaseSource, inventory Inventory, chann
 		return Candidate{}, result, err
 	}
 	var candidate Candidate
+	var rejected error
 	for _, version := range versions {
+		if result.LatestVersion == "" {
+			result.LatestVersion, result.LatestTag = version.String(), version.String()
+		}
 		manifest, err := source.Manifest(ctx, version)
 		if err != nil {
 			if code, _ := domain.CodeOf(err); code == domain.CodeNotFound {
+				if rejected == nil {
+					rejected = domain.Errorf(domain.CodePackageIncompatible, "该版本尚未提供 Go 发布清单，无法确认兼容性")
+				}
 				continue
 			}
 			return candidate, result, err
 		}
 		plan, err := BuildPlan(manifest, inventory, channel)
 		if err != nil {
+			if rejected == nil {
+				rejected = err
+			}
 			continue
 		} // a release can have no asset for this device
 		candidate.Plan = plan
@@ -66,6 +76,11 @@ func Check(ctx context.Context, source ReleaseSource, inventory Inventory, chann
 	if candidate.Plan.ID == "" {
 		result.OK = true
 		result.Message = "没有更新的兼容版本"
+		if rejected != nil {
+			result.Code, result.Message = ErrorStatus(rejected)
+			result.Message = "发现版本 " + result.LatestVersion + "，但本设备暂不能自动更新（" +
+				inventory.PackageManager + " / " + inventory.Architecture + " / " + inventory.FirmwareFamily + "）：" + result.Message
+		}
 		return candidate, result, nil
 	}
 	recovery, err := source.Manifest(ctx, current)

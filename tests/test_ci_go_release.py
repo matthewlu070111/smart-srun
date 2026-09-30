@@ -17,6 +17,49 @@ import check_go_source as source  # noqa: E402
 
 
 class ReleaseAutomationTests(unittest.TestCase):
+    def test_assembly_forwards_exact_firmware_install_evidence(self):
+        digest = 'b' * 64
+        evidence = {'schema_version': 1, 'assets': {digest: {'elf': True}},
+                    'firmware_compatibility': {digest: {'25.12': {'openwrt_install': True}}}}
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            folder = root / 'one'
+            folder.mkdir()
+            target = {'id': 'synthetic-target', 'format': 'apk'}
+            (folder / 'build-record.json').write_text(json.dumps({
+                'source_commit': 'a' * 40, 'source_dirty': False, 'display_version': '2.0.0rc3',
+                'target': target, 'artifacts': [{'signature_spki_sha256': 'c' * 64}]}))
+            (folder / 'ci.json').write_text(json.dumps({
+                'official_signing': False, 'repository': 'synthetic/repo', 'run_id': '123'}))
+            (folder / 'validation.json').write_text(json.dumps(evidence))
+            (folder / 'apk-public.pem').write_text('synthetic public key')
+            (folder / 'apk-tools').write_bytes(b'synthetic tool')
+            args = SimpleNamespace(input=root, output=root / 'release', version='2.0.0rc3', official=False)
+            with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'synthetic/repo', 'GITHUB_RUN_ID': '123'}), \
+                    patch.object(release, 'catalog', return_value={'targets': [target]}), \
+                    patch.object(release, 'run', return_value='a' * 40), \
+                    patch.object(release.manifest, 'export_release') as export, \
+                    patch.object(release, 'add_release_extras'):
+                release.assemble(args)
+            self.assertEqual(export.call_args.args[2], evidence)
+
+    def test_validation_merge_rejects_conflicts_and_unverified_firmware(self):
+        digest = 'b' * 64
+        checks = {'schema_version': 1, 'assets': {}}
+        evidence = {'schema_version': 1, 'assets': {digest: {'elf': True}},
+                    'firmware_compatibility': {digest: {'25.12': {'openwrt_install': True}}}}
+        release.merge_validation(checks, evidence)
+        release.merge_validation(checks, evidence)
+        self.assertEqual(checks, evidence)
+        conflicting = dict(evidence, assets={digest: {'elf': False}})
+        with self.assertRaisesRegex(ValueError, 'Conflicting validation'):
+            release.merge_validation(checks, conflicting)
+        invalid = dict(evidence, firmware_compatibility={digest: {'25.12': {'openwrt_install': False}}})
+        with self.assertRaises(ValueError):
+            release.merge_validation(checks, invalid)
+        with self.assertRaisesRegex(ValueError, 'Invalid validation'):
+            release.merge_validation(checks, dict(evidence, schema_version=2))
+
     def test_apk_export_unwraps_sdk_launcher_and_checks_relocated_tool(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

@@ -23,6 +23,7 @@ type updateController struct {
 	cancel    context.CancelFunc
 	closing   bool
 	check     update.CheckResult
+	channel   string
 	source    update.ReleaseSource
 	inventory func(context.Context, string) (update.Inventory, error)
 	launch    func() error
@@ -80,6 +81,14 @@ func (d *Daemon) updateCheck(_ context.Context, raw json.RawMessage) (any, error
 	if params.Channel != "" && params.Channel != "stable" && params.Channel != "rc" {
 		return nil, domain.Errorf(domain.CodeInvalidArgument, "更新通道无效")
 	}
+	channel := params.Channel
+	if channel == "" {
+		version, err := update.ParseVersion(d.version)
+		if err != nil {
+			return nil, err
+		}
+		channel = version.Channel()
+	}
 	u := d.updater
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -87,11 +96,15 @@ func (d *Daemon) updateCheck(_ context.Context, raw json.RawMessage) (any, error
 		return nil, domain.Errorf(domain.CodeServiceStopped, "服务正在停止")
 	}
 	if u.check.Running {
+		if u.channel != channel {
+			return nil, domain.Errorf(domain.CodeBusy, "正在检查另一个更新通道，请稍后重试")
+		}
 		return u.check, nil
 	}
 	var id [16]byte
 	_, _ = rand.Read(id[:])
 	u.check = update.CheckResult{OK: true, Running: true, JobID: hex.EncodeToString(id[:]), CurrentVersion: d.version, Message: "正在检查兼容更新"}
+	u.channel = channel
 	u.wg.Add(1)
 	go func() {
 		defer u.wg.Done()
@@ -101,7 +114,7 @@ func (d *Daemon) updateCheck(_ context.Context, raw json.RawMessage) (any, error
 		result := update.CheckResult{CurrentVersion: d.version}
 		if err == nil {
 			var candidate update.Candidate
-			candidate, result, err = update.Check(ctx, u.source, inventory, params.Channel)
+			candidate, result, err = update.Check(ctx, u.source, inventory, channel)
 			if err == nil && result.UpdateAvailable {
 				err = update.SaveCandidate(d.paths.Update(), candidate)
 			}

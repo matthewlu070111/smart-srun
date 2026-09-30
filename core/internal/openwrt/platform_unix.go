@@ -3,11 +3,24 @@
 package openwrt
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"os/exec"
 	"syscall"
 )
+
+func installSignal(err error) string {
+	exit, ok := errors.AsType[*exec.ExitError](err)
+	if !ok || exit.ProcessState == nil {
+		return ""
+	}
+	status, ok := exit.ProcessState.Sys().(syscall.WaitStatus)
+	if ok && status.Signaled() {
+		return status.Signal().String()
+	}
+	return ""
+}
 
 // executable reports whether a path can be run.
 //

@@ -73,19 +73,26 @@
 
   function fetchJson(url, callback) {
     var xhr = new XMLHttpRequest();
+    var finished = false;
+    function finish(err, data) {
+      if (finished) return;
+      finished = true;
+      callback(err, data);
+    }
     xhr.open('GET', url, true);
+    xhr.timeout = 30000;
     xhr.onreadystatechange = function() {
       if (xhr.readyState !== 4) return;
       if (xhr.status !== 200) {
-        callback(new Error('http_' + xhr.status));
+        finish(new Error('http_' + xhr.status));
         return;
       }
-      try {
-        callback(null, JSON.parse(xhr.responseText || '{}'));
-      } catch (err) {
-        callback(err);
-      }
+      var data;
+      try { data = JSON.parse(xhr.responseText || '{}'); } catch (err) { finish(err); return; }
+      finish(null, data);
     };
+    xhr.onerror = function() { finish(new Error('network_error')); };
+    xhr.ontimeout = function() { finish(new Error('request_timeout')); };
     xhr.send(null);
   }
 
@@ -96,13 +103,24 @@
 
   function startUpdate(planId, callback) {
     var xhr = new XMLHttpRequest();
+    var finished = false;
+    function finish(err, data) {
+      if (finished) return;
+      finished = true;
+      callback(err, data);
+    }
     xhr.open('POST', UPDATE_START_URL, true);
+    xhr.timeout = 30000;
     xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded; charset=UTF-8');
     xhr.onreadystatechange = function() {
       if (xhr.readyState !== 4) return;
-      if (xhr.status !== 200) { callback(new Error('http_' + xhr.status)); return; }
-      try { callback(null, JSON.parse(xhr.responseText || '{}')); } catch (err) { callback(err); }
+      if (xhr.status !== 200) { finish(new Error('http_' + xhr.status)); return; }
+      var data;
+      try { data = JSON.parse(xhr.responseText || '{}'); } catch (err) { finish(err); return; }
+      finish(null, data);
     };
+    xhr.onerror = function() { finish(new Error('network_error')); };
+    xhr.ontimeout = function() { finish(new Error('request_timeout')); };
     xhr.send('plan_id=' + encodeURIComponent(planId || '') + '&token=' + encodeURIComponent(requestToken()));
   }
 
@@ -278,8 +296,16 @@
     window.__smartSrunVersionInit = true;
 
     link.href = RELEASES_PAGE_URL;
-    var updatePlan = null;
+    var updatePlan = null, retry = false, checking = false;
+    var message = document.createElement('span');
+    message.setAttribute('aria-live', 'polite');
+    container.appendChild(message);
     link.addEventListener('click', function(ev) {
+      if (retry) {
+        ev.preventDefault();
+        if (!checking) checkVersion();
+        return;
+      }
       if (!updatePlan || !updatePlan.update_available) return;
       ev.preventDefault();
       openUpdateModal(updatePlan);
@@ -292,12 +318,30 @@
         }, 1000);
         return;
       }
-      if (err || !data || !data.ok || !data.update_available) return;
+      checking = false;
+      if (err || !data || !data.ok || (!data.update_available && data.code)) {
+        retry = true;
+        var reason = (data && data.message) || '检查更新失败，请检查网络';
+        message.textContent = '（' + reason + '；点击版本号重试）';
+        link.title = reason + '；点击重试';
+        return;
+      }
+      retry = false;
+      message.textContent = '';
+      if (!data.update_available) { link.title = data.message || '当前没有兼容更新'; return; }
       updatePlan = data;
       dot.style.display = 'inline-block';
       link.title = '发现新版本：' + (data.latest_tag || data.latest_version || '');
     }
-    fetchJson(UPDATE_CHECK_URL, checked);
+    function checkVersion() {
+      checking = true;
+      updatePlan = null;
+      dot.style.display = 'none';
+      message.textContent = '（正在检查更新）';
+      link.title = '正在检查更新';
+      fetchJson(UPDATE_CHECK_URL, checked);
+    }
+    checkVersion();
   }
 
   window.smartFetchJson = fetchJson;
