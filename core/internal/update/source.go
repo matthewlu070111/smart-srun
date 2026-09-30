@@ -77,13 +77,7 @@ func (s *Source) open(ctx context.Context, raw string) (*http.Response, error) {
 	request.Header.Set("Accept-Encoding", "identity")
 	response, err := s.client.Do(request)
 	if err != nil {
-		code := domain.CodeTransportFailure
-		if errors.Is(ctx.Err(), context.Canceled) {
-			code = domain.CodeCancelled
-		} else if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			code = domain.CodeDeadlineExceeded
-		}
-		return nil, domain.Errorf(code, "无法从官方来源下载更新").Wrap(err)
+		return nil, releaseRequestError(ctx, err)
 	}
 	if response.StatusCode != http.StatusOK {
 		response.Body.Close()
@@ -102,10 +96,29 @@ func (s *Source) read(ctx context.Context, raw string, limit int64) ([]byte, err
 	}
 	defer response.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
-	if err != nil || int64(len(data)) > limit {
+	if err != nil {
+		return nil, releaseRequestError(ctx, err)
+	}
+	if int64(len(data)) > limit {
 		return nil, domain.Errorf(domain.CodePackageIncompatible, "发布元数据不完整或超出大小上限")
 	}
 	return data, nil
+}
+
+func releaseRequestError(ctx context.Context, err error) error {
+	code := transport.RequestErrorCode(ctx, err)
+	message := "无法从官方来源下载更新，请检查 GitHub 连通性与本机代理规则"
+	switch code {
+	case domain.CodeDNSFailure:
+		message = "无法解析官方更新来源，请检查 DNS 与本机代理规则"
+	case domain.CodeTLSFailure:
+		message = "官方更新来源 TLS 校验失败，请检查系统时间和证书"
+	case domain.CodeDeadlineExceeded:
+		message = "连接官方更新来源超时，请检查网络与本机代理规则"
+	case domain.CodeCancelled:
+		message = "更新检查已取消"
+	}
+	return domain.Errorf(code, "%s", message).Wrap(err)
 }
 
 // Candidates returns at most ten newer releases, in numerical version order.
@@ -134,9 +147,12 @@ func (s *Source) Candidates(ctx context.Context, current Version, channel string
 	for _, release := range releases {
 		version, err := ParseVersion(release.Tag)
 		if err != nil || release.Draft || version.Major != current.Major || version.Major < 2 || version.Compare(current) <= 0 ||
-			release.Prerelease != (version.RC != 0) || (channel == "stable" && version.RC != 0) || seen[version] {
+			(version.RC == 0 && release.Prerelease) || (channel == "stable" && version.RC != 0) || seen[version] {
 			continue
 		}
+		// GitHub's editable prerelease flag is not the version's channel.
+		// RC tags remain RC even if published without that flag. The official
+		// manifest must still agree with the tag before a plan can be built.
 		seen[version] = true
 		versions = append(versions, version)
 	}
@@ -187,7 +203,13 @@ func (s *Source) Download(ctx context.Context, asset Asset, destination string) 
 	}()
 	hash := sha256.New()
 	count, err := io.Copy(io.MultiWriter(file, hash), io.LimitReader(response.Body, asset.Bytes+1))
-	if err != nil || count != asset.Bytes || hex.EncodeToString(hash.Sum(nil)) != asset.SHA256 {
+	if err != nil {
+		if _, ok := errors.AsType[*os.PathError](err); ok {
+			return domain.Errorf(domain.CodeInternal, "无法写入更新下载文件").Wrap(err)
+		}
+		return releaseRequestError(ctx, err)
+	}
+	if count != asset.Bytes || hex.EncodeToString(hash.Sum(nil)) != asset.SHA256 {
 		return domain.Errorf(domain.CodeChecksumMismatch, "安装包大小或 SHA256 校验失败")
 	}
 	if err := file.Sync(); err != nil {

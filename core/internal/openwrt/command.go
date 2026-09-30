@@ -300,9 +300,36 @@ func (r Runner) RunInstall(program string, args ...string) (Result, error) {
 		if exit, ok := errors.AsType[*exec.ExitError](err); ok {
 			result.ExitCode = exit.ExitCode()
 		}
-		return result, domain.Errorf(domain.CodeInstallFailed, "包管理器安装未成功完成，请查看恢复状态").Wrap(err)
+		return result, domain.Errorf(domain.CodeInstallFailed, "%s，请查看恢复状态", installFailureSummary(result, err)).Wrap(err)
 	}
 	return result, nil
+}
+
+// Installer output is untrusted and package scripts may print secrets. Retain
+// useful failure evidence as fixed summaries, never arbitrary output lines.
+func installFailureSummary(result Result, err error) string {
+	status := "安装进程未正常结束"
+	if _, ok := errors.AsType[*exec.ExitError](err); ok {
+		status = fmt.Sprintf("退出码 %d", result.ExitCode)
+	}
+	if signal := installSignal(err); signal != "" {
+		status = "信号 " + signal
+	}
+	message := result.Program + " 安装失败（" + status + "）"
+	output := strings.ToLower(string(result.Stdout))
+	for _, hint := range []struct{ needle, message string }{
+		{"segmentation fault", "检测到段错误"},
+		{"no space left", "存储空间不足"},
+		{"not enough space", "存储空间不足"},
+		{"cannot allocate memory", "无法分配内存"},
+		{"cannot find dependency", "缺少依赖包"},
+		{"signature", "请检查安装包签名与信任密钥"},
+	} {
+		if strings.Contains(output, hint.needle) {
+			return message + "：" + hint.message
+		}
+	}
+	return message
 }
 
 // boundedBuffer keeps at most limit bytes and counts the rest.

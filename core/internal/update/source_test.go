@@ -107,6 +107,7 @@ func TestCandidatesRespectChannelDraftsMajorVersionAndNumericOrder(t *testing.T)
 		{"tag_name":"2.0.0rc10","prerelease":true},
 		{"tag_name":"2.0.0"},
 		{"tag_name":"2.1.0","draft":true},
+		{"tag_name":"2.2.0","prerelease":true},
 		{"tag_name":"3.0.0"},
 		{"tag_name":"2.0.0rc99","prerelease":false},
 		{"tag_name":"2.0.0rc10","prerelease":true},
@@ -119,7 +120,7 @@ func TestCandidatesRespectChannelDraftsMajorVersionAndNumericOrder(t *testing.T)
 		return response(request, index, http.StatusOK), nil
 	})
 	for channel, wanted := range map[string][]Version{
-		"rc":     {{Major: 2}, {Major: 2, RC: 10}, {Major: 2, RC: 2}},
+		"rc":     {{Major: 2}, {Major: 2, RC: 99}, {Major: 2, RC: 10}, {Major: 2, RC: 2}},
 		"stable": {{Major: 2}},
 	} {
 		got, err := source.Candidates(t.Context(), Version{Major: 2, RC: 1}, channel)

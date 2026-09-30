@@ -78,6 +78,27 @@ func TestUpdateCheckRunsIndependentlyOfStatusAndStopsWithDaemon(t *testing.T) {
 	}
 }
 
+func TestUpdateCheckDoesNotShareJobsAcrossDifferentChannels(t *testing.T) {
+	source := &checkSource{entered: make(chan struct{}), release: make(chan struct{})}
+	r := start(t, func(o *Options) { o.UpdateSource = source; o.UpdateDevice = checkDevice{} })
+	var check update.CheckResult
+	json.Unmarshal(r.call("update.check", UpdateCheckParams{Channel: "rc"}), &check)
+	<-source.entered
+	err := r.callExpectingError("update.check", UpdateCheckParams{Channel: "stable"})
+	if codeOf(t, err) != domain.CodeBusy || source.calls.Load() != 1 {
+		t.Fatalf("different channel shared job: %v", err)
+	}
+	var duplicate update.CheckResult
+	json.Unmarshal(r.call("update.check", UpdateCheckParams{Channel: "rc"}), &duplicate)
+	if duplicate.JobID != check.JobID {
+		t.Fatal("same channel no longer deduplicates")
+	}
+	r.stop()
+	if err := r.wait(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestUpdateJournalBlocksConfigurationAndActionsButNotStatus(t *testing.T) {
 	r := setupSwitchRPC(t)
 	if err := os.MkdirAll(r.paths.Recovery(), 0o700); err != nil {

@@ -161,10 +161,7 @@ def assemble(args):
         if provenance['repository'] != os.environ.get('GITHUB_REPOSITORY') or provenance['run_id'] != os.environ.get('GITHUB_RUN_ID'):
             raise ValueError('Artifacts must come from this same workflow run')
         evidence = json.loads((path.parent/'validation.json').read_text())
-        for digest, flags in evidence['assets'].items():
-            if digest in checks['assets'] and checks['assets'][digest] != flags:
-                raise ValueError('Conflicting validation evidence')
-            checks['assets'][digest] = flags
+        merge_validation(checks, evidence)
         if record['target']['format'] == 'apk':
             keys.append(path.parent/'apk-public.pem')
             fingerprints.update(a['signature_spki_sha256'] for a in record['artifacts'])
@@ -182,6 +179,24 @@ def assemble(args):
     tools[0].chmod(0o755)
     release = manifest.export_release(records, args.output, checks, apk=tools[0], keys=trust)
     add_release_extras(release, records, keys, fingerprints, args)
+
+
+def merge_validation(checks, evidence):
+    if evidence.get('schema_version') != 1 or not isinstance(evidence.get('assets'), dict):
+        raise ValueError('Invalid validation evidence')
+    # Validate exact-digest installation reports before forwarding them.
+    manifest.firmware_compatibility(evidence)
+    for digest, flags in evidence['assets'].items():
+        if digest in checks['assets'] and checks['assets'][digest] != flags:
+            raise ValueError('Conflicting validation evidence')
+        checks['assets'][digest] = flags
+    compatibility = checks.setdefault('firmware_compatibility', {})
+    for digest, families in evidence.get('firmware_compatibility', {}).items():
+        reports = compatibility.setdefault(digest, {})
+        for family, report in families.items():
+            if family in reports and reports[family] != report:
+                raise ValueError('Conflicting firmware compatibility evidence')
+            reports[family] = dict(report)
 
 
 def add_release_extras(release, records, keys, fingerprints, args):

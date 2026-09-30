@@ -28,6 +28,8 @@ func executable(path string) error {
 
 func setProcessGroup(*exec.Cmd) {}
 
+func installSignal(error) string { return "" }
+
 func killProcessGroup(cmd *exec.Cmd) error {
 	if cmd.Process == nil {
 		return nil
