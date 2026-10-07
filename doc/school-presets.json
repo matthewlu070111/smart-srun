@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-27",
+  "updated_at": "2026-10-07",
   "source": "https://github.com/matthewlu070111/smart-srun/issues",
   "schools": [
     {
@@ -396,6 +396,32 @@
         "@Sheen1119"
       ],
       "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/62"
+    },
+    {
+      "id": "hxg",
+      "name": "哈尔滨信息工程学院",
+      "status": "draft",
+      "description": "适用于 HXGNET-5.8G 无线网络，参数来自插件一键配置；提交者尚未通过插件登录验证，也未确认校园网可用，暂作草稿。无后缀与 all_portal 后缀、有线接入均未验证。",
+      "defaults": {
+        "base_url": "https://yun.m5d.cn",
+        "ac_id": "2",
+        "ssid": "HXGNET-5.8G",
+        "access_mode": "wifi"
+      },
+      "operators": [
+        {
+          "suffix": "",
+          "label": "不加后缀"
+        },
+        {
+          "suffix": "all_portal",
+          "label": "all_portal"
+        }
+      ],
+      "contributors": [
+        "@Len-001"
+      ],
+      "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/70"
     }
   ]
 }
