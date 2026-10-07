@@ -401,18 +401,14 @@
       "id": "hxg",
       "name": "哈尔滨信息工程学院",
       "status": "draft",
-      "description": "适用于 HXGNET-5.8G 无线网络，参数来自插件一键配置；提交者尚未通过插件登录验证，也未确认校园网可用，暂作草稿。无后缀与 all_portal 后缀、有线接入均未验证。",
+      "description": "适用于 HXGNET-5.8G 无线网络，参数来自插件一键配置（#70，#72 中更正 ac_id 为 4 并只保留 all_portal 后缀）；提交者已确认校园网可用，但尚未通过插件登录验证，暂作草稿。all_portal 后缀与有线接入均未经插件登录验证。",
       "defaults": {
         "base_url": "https://yun.m5d.cn",
-        "ac_id": "2",
+        "ac_id": "4",
         "ssid": "HXGNET-5.8G",
         "access_mode": "wifi"
       },
       "operators": [
-        {
-          "suffix": "",
-          "label": "不加后缀"
-        },
         {
           "suffix": "all_portal",
           "label": "all_portal"
@@ -421,7 +417,7 @@
       "contributors": [
         "@Len-001"
       ],
-      "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/70"
+      "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/72"
     }
   ]
 }
