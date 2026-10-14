@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-10-13",
+  "updated_at": "2026-10-14",
   "source": "https://github.com/matthewlu070111/smart-srun/issues",
   "schools": [
     {
@@ -422,8 +422,8 @@
     {
       "id": "heu-qd",
       "name": "哈尔滨工程大学（青岛校区）",
-      "status": "draft",
-      "description": "适用于青岛校区的 HEU-WLAN 无线网络，账号无需后缀，参数来自插件一键配置（#74）；尚未通过插件登录验证，提交者也未确认校园网可用，暂作草稿。有线接入和其他账号类型尚未验证。",
+      "status": "active",
+      "description": "适用于青岛校区的 HEU-WLAN 无线网络，账号无需后缀，参数来自插件一键配置（#74）；提交者已确认插件登录成功且可用。有线接入和其他账号类型尚未验证。",
       "defaults": {
         "base_url": "http://172.24.223.3",
         "ac_id": "4",
@@ -435,9 +435,6 @@
           "suffix": "",
           "label": "不加后缀"
         }
-      ],
-      "contributors": [
-        "@AzusaShikibu"
       ],
       "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/74"
     }
