@@ -34,6 +34,16 @@ local RUNNING = {
 harness.responses["config.get"] = CONFIG
 harness.responses["status.get"] = RUNNING
 
+harness.reset()
+harness.responses["config.get"] = { error = { code = "Unavailable", message = "配置读取暂时失败" } }
+controller.action_status()
+assert(harness.output.ok == false, "a configuration failure must not appear as an empty configuration")
+assert(harness.output.service == "unknown", "a read failure cannot confirm that the service stopped")
+assert(harness.output.status == "配置读取暂时失败", harness.output.status)
+assert(#harness.calls == 2 and #harness.helpers == 0)
+for _, call in ipairs(harness.calls) do assert(not call.started) end
+harness.responses["config.get"] = CONFIG
+
 -- The explanation of the last action survives routine status polling, which is
 -- the failure the baseline hit: a daemon tick replaced it seconds after it
 -- appeared, while the user was still reading it.
@@ -60,6 +70,7 @@ end
 harness.reset()
 harness.responses["status.get"] = { error = { code = "ServiceStopped", message = "认证服务未在运行" } }
 controller.action_status()
+assert(harness.output.ok == false, "a failed status read must be explicit")
 assert(harness.output.status == "认证服务未在运行", harness.output.status)
 assert(harness.output.service == "stopped", harness.output.service)
 assert(harness.output.connectivity_level == "offline")
@@ -253,7 +264,7 @@ harness.stop_failure = nil
 harness.reset()
 harness.responses["campus.upsert"] = { config_revision = 12, id = "c1" }
 harness.form = {
-    action = "edit_campus", id = "c1", access_mode = "wired", wired_iface = "  ",
+    action = "edit_campus", id = "c1", expected_revision = "11", access_mode = "wired", wired_iface = "  ",
     network_interface = "  wan.test  ", auth_enabled = "1", password = "",
     user_id = "student", operator_suffix = "telecom", double_stack = "",
 }
@@ -271,7 +282,7 @@ assert(harness.output.message == "已更新", harness.output.message)
 -- lets the daemon choose the identifier.
 harness.reset()
 harness.responses["campus.upsert"] = { config_revision = 13, id = "c3" }
-harness.form = { action = "add_campus", access_mode = "wired", wired_iface = "wan",
+harness.form = { action = "add_campus", expected_revision = "11", access_mode = "wired", wired_iface = "wan",
                  user_id = "fresh", password = "", operator_suffix = "" }
 controller.action_enqueue()
 local created = harness.last_call("campus.upsert").params.account
@@ -282,7 +293,7 @@ assert(harness.output.message == "已添加", harness.output.message)
 
 -- A base URL typed as a bare host still reaches the daemon as a URL.
 harness.reset()
-harness.form = { action = "add_campus", access_mode = "wired", wired_iface = "wan",
+harness.form = { action = "add_campus", expected_revision = "11", access_mode = "wired", wired_iface = "wan",
                  user_id = "fresh", base_url = "10.0.0.55/srun_portal" }
 controller.action_enqueue()
 assert(harness.last_call("campus.upsert").params.account.base_url == "http://10.0.0.55",
@@ -297,7 +308,7 @@ for _, case in ipairs({
 }) do
     harness.reset()
     harness.responses[case.method] = { config_revision = 14 }
-    harness.form = { action = case.action, id = "c1" }
+    harness.form = { action = case.action, id = "c1", expected_revision = "11" }
     controller.action_enqueue()
     local call = assert(harness.last_call(case.method), case.method .. " was not called")
     assert(call.params.id == "c1" and call.params.expected_revision == 11)
@@ -309,7 +320,7 @@ harness.reset()
 harness.responses["campus.remove"] = {
     error = { code = "Conflict", message = "配置已变化，请重新读取后再保存" },
 }
-harness.form = { action = "delete_campus", id = "c1" }
+harness.form = { action = "delete_campus", id = "c1", expected_revision = "11" }
 controller.action_enqueue()
 assert(harness.output.ok == false, "a conflict must not report success")
 assert(harness.output.message == "配置已变化，请重新读取后再保存", harness.output.message)
@@ -321,7 +332,7 @@ package.preload["luci.dispatcher"] = function()
 end
 harness.reset()
 harness.responses["setup_wifi.account"] = { error = { code = "NotFound", message = "没有当前会话的无线任务" } }
-harness.form = { action = "add_campus", setup_job = string.rep("a", 32), access_mode = "wifi" }
+harness.form = { action = "add_campus", expected_revision = "11", setup_job = string.rep("a", 32), access_mode = "wifi" }
 controller.action_enqueue()
 assert(harness.output.ok == false, "a wizard save must not pretend to work")
 assert(harness.last_call("campus.upsert") == nil)

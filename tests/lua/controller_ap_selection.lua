@@ -25,12 +25,12 @@ harness.responses["campus.upsert"] = { config_revision = 4, id = "c1" }
 
 for _, policy in ipairs({ "auto", "strongest", "fixed" }) do
     harness.reset()
-    harness.form = { action = "edit_campus", id = "c1", access_mode = "wifi",
+    harness.form = { action = "edit_campus", id = "c1", expected_revision = "3", access_mode = "wifi",
                      ap_selection = policy, bssid = "02:11:22:33:44:55", ssid = "Campus" }
     controller.action_enqueue()
     local call = assert(harness.last_call("campus.upsert"), "the save must reach the daemon")
     assert(call.started, "a save may start the service")
-    assert(call.params.expected_revision == 3, "the save carries the revision it read")
+    assert(call.params.expected_revision == 3, "the save carries the browser revision")
     local account = call.params.account
     assert(account.id == "c1", account.id)
     assert(account.ap_selection == policy, account.ap_selection)
@@ -43,7 +43,7 @@ end
 -- An unset policy with a pinned address still means "fixed": the frozen dialog
 -- can submit an empty selector, and losing the pin would silently roam.
 harness.reset()
-harness.form = { action = "edit_campus", id = "c1", access_mode = "wifi",
+harness.form = { action = "edit_campus", id = "c1", expected_revision = "3", access_mode = "wifi",
                  ap_selection = "", bssid = "02:11:22:33:44:55", ssid = "Campus" }
 controller.action_enqueue()
 assert(harness.last_call("campus.upsert").params.account.ap_selection == "fixed")
@@ -51,7 +51,7 @@ assert(harness.last_call("campus.upsert").params.account.ap_selection == "fixed"
 -- The wired half clears the wireless one, so a stored account never carries an
 -- effective setting for the mode it is not in.
 harness.reset()
-harness.form = { action = "edit_campus", id = "c1", access_mode = "wired",
+harness.form = { action = "edit_campus", id = "c1", expected_revision = "3", access_mode = "wired",
                  wired_iface = "wan", ap_selection = "fixed", bssid = "02:11:22:33:44:55" }
 controller.action_enqueue()
 local wired = harness.last_call("campus.upsert").params.account
@@ -66,7 +66,7 @@ harness.responses["campus.upsert"] = {
     error = { code = "InvalidConfig", message = "不是有效的单播 BSSID（形如 aa:bb:cc:dd:ee:ff）",
               field = "campus_accounts[0].bssid" },
 }
-harness.form = { action = "edit_campus", id = "c1", access_mode = "wifi",
+harness.form = { action = "edit_campus", id = "c1", expected_revision = "3", access_mode = "wifi",
                  ap_selection = "fixed", bssid = "01:11:22:33:44:55", ssid = "Campus" }
 controller.action_enqueue()
 assert(harness.output.ok == false, "an invalid address must not report success")
