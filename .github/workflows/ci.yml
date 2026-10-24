@@ -18,6 +18,28 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+          fetch-depth: 0
+      - name: Documentation links and changed-path guidance
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          python3 scripts/check_docs.py
+          base=""
+          if [ "$EVENT_NAME" = pull_request ]; then base="$PR_BASE"; fi
+          if [ "$EVENT_NAME" = push ]; then base="$PUSH_BEFORE"; fi
+          if [[ "$base" =~ ^0+$ ]]; then base=""; fi
+          if [ -z "$base" ] && [ "$EVENT_NAME" != push ]; then
+            base=$(git rev-parse --verify HEAD^ 2>/dev/null || true)
+          fi
+          if [ -n "$base" ] && git cat-file -e "$base^{commit}" 2>/dev/null; then
+            python3 scripts/doc_context.py --base "$base"
+          else
+            # New branches and unreachable force-push bases use all tracked paths.
+            mapfile -d '' files < <(git ls-files -z)
+            python3 scripts/doc_context.py --files "${files[@]}"
+          fi
       - id: toolchain
         run: echo "version=$(python3 -c 'import json; print(json.load(open("targets.json"))["go_version"])')" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6

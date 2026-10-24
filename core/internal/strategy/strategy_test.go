@@ -271,9 +271,8 @@ func TestAnUnknownStrategyIsNotSilentlySubstituted(t *testing.T) {
 // The reserved list covers every verb this build dispatches. A verb quietly
 // dropped from it becomes claimable by a strategy.
 //
-// It is a superset of the sixteen CLAUDE.md fixes: "service" and "version" are
-// commands the CLI answers and were missing here while cli.CoreCommands kept a
-// second copy that included them.
+// "service" and "version" previously existed only in cli.CoreCommands's
+// duplicate list; ReservedCommands must also protect these dispatched verbs.
 func TestTheReservedListCoversEveryDispatchedVerb(t *testing.T) {
 	documented := []string{
 		"status", "login", "logout", "relogin", "daemon", "schools", "config",
