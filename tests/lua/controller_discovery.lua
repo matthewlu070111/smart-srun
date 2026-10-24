@@ -71,7 +71,7 @@ h.controller.action_setup_wifi()
 assert(#h.calls == 0, "wifi cancel ignored CSRF rejection")
 allowed = true
 h.reset()
-h.form = { action = "add_campus", setup_job = string.rep("a", 32), user_id = "student", password = "secret", access_mode = "wifi", ssid = "draft" }
+h.form = { action = "add_campus", expected_revision = "7", setup_job = string.rep("a", 32), user_id = "student", password = "secret", access_mode = "wifi", ssid = "draft" }
 h.responses["config.get"] = { revision = 7 }
 h.responses["setup_wifi.account"] = { config_revision = 8, id = "c1" }
 h.controller.action_enqueue()

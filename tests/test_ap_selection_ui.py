@@ -29,6 +29,7 @@ window.apTest = { normalize: normalizeApSelection, update: updateCampusAccessMod
   overview: initOverview, edit: function() { modalType = 'campus'; modalEditId = 'one'; } };
 ` + source.slice(end);
 const nodes = {}, sent = [], alerts = [];
+nodes['smart-srun-config-revision'] = {value: '17'};
 ['label', 'user_id', 'operator_suffix', 'access_mode', 'wired_iface', 'auth_enabled',
  'password', 'base_url', 'ac_id', 'login-n', 'login-type', 'login-enc', 'info-prefix',
  'double-stack', 'login-os', 'login-name', 'ssid', 'bssid', 'radio', 'ap_selection'].forEach(key => {
@@ -51,7 +52,7 @@ XHR.prototype.open = function(method, url) { this.url = url; this.method = metho
 XHR.prototype.send = function(body) {
   if (this.method === 'POST') { sent.push(body.fields); return; }
   this.readyState = 4; this.status = 200;
-  this.responseText = JSON.stringify(scenario.status || {});
+  this.responseText = JSON.stringify(Object.assign({status: '未知'}, scenario.status));
   this.onreadystatechange();
 };
 const context = { window: {setInterval() {}}, document: {

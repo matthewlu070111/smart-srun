@@ -58,6 +58,14 @@ nodes['smart-srun-config-export'].onclick();requests.at(-1).reply({format:'smart
 assert.deepEqual(downloads,['smart-srun-config.json']);
 assert.equal(requests.at(-1).body.get('token'),'csrf-token');
 file.files=[{size:524289}];file.onchange();assert.equal(button.disabled,true);assert(result.textContent.includes('512'));
+for (const invalid of [null, {}, {ok:1}, {ok:'true'}]) {
+  choose('backup').reply(invalid);
+  assert.equal(button.disabled,true,'preview requires explicit success');
+  choose('backup').reply({ok:true,expected_revision:'16',campus_accounts:1,hotspot_profiles:0});
+  button.onclick();const scheduled=timers.length;
+  requests.at(-1).reply(invalid);
+  assert.equal(timers.length,scheduled,'unconfirmed import must not refresh');
+}
 """
         result = subprocess.run([node, "-e", script, str(ROOT/"root/www/luci-static/resources/smart_srun.js")], capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)

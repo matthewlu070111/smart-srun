@@ -20,8 +20,9 @@ const source = fs.readFileSync(process.argv[1], 'utf8');
 let posts = 0, reloads = 0, renderCount = 0, response, callback;
 const context = {findSchoolPreset: () => ({name:'Example Campus',short_name:'example'}),
   location: {reload() {reloads++;}}, L: {hideModal() {}},
-  document: {getElementById() {return null;}}};
+  document: {getElementById(id) {return id === 'smart-srun-config-revision' ? {value:'0'} : null;}}};
 vm.createContext(context);
+vm.runInContext(source.slice(source.indexOf('  function configRevision()'), source.indexOf('  function startUpdate(')), context);
 vm.runInContext(source.slice(source.indexOf('  var WIZ_STEPS'), source.indexOf('  function initAll()')), context);
 context.wizRender = () => {renderCount++;};
 context.wizNormalizeAddress = () => true;

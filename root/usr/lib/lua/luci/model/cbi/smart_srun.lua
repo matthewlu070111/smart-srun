@@ -2,6 +2,8 @@ local fs = require "nixio.fs"
 local sys = require "luci.sys"
 local util = require "luci.util"
 local jsonc = require "luci.jsonc"
+local http = require "luci.http"
+local dispatcher = require "luci.dispatcher"
 local log_controller = require "luci.controller.smart_srun"
 local schema = require "luci.smart_srun.schema"
 
@@ -24,9 +26,10 @@ local changed = false
 local dirty_scalar_keys = {}
 local school_extra_dirty = false
 local SCALAR_DEFAULTS = schema.SCALAR_DEFAULTS
--- 配置版本号来自守护进程，保存时原样带回做 CAS；读失败时的说明留给页面显示。
-local config_revision = 0
+local config_revision
+local submitted_revision = bridge.config_revision(http.formvalue("expected_revision"))
 local config_error = nil
+local page_url = dispatcher.build_url("admin", "services", "smart_srun")
 
 local function render_js_asset_tag()
     local asset_url = JS_ASSET_PATH
@@ -43,9 +46,13 @@ local function load_cfg()
     local flat, err = bridge.config()
     if not flat then
         config_error = rpc.message(err, "无法读取配置")
-        flat = { campus_accounts = {}, hotspot_profiles = {}, school_extra = {}, revision = 0 }
+        return nil
     end
-    config_revision = tonumber(flat.revision) or 0
+    config_revision = bridge.config_revision(flat.revision)
+    if config_revision == nil then
+        config_error = "配置版本无效"
+        return nil
+    end
     -- 被决策删除的旧开关在 Go 配置里没有对应字段，退回内置默认值，
     -- 免得表单把空字符串当成用户的选择显示出来。
     for _, key in ipairs(GLOBAL_SCALAR_KEYS) do
@@ -63,11 +70,12 @@ local function load_cfg()
     return flat
 end
 
--- 保存带上读到的版本号：页面打开期间别处（CLI、向导、另一个标签页）改过配置，
--- 这次保存会被拒绝，而不是把对方的修改覆盖掉。
 local function save_cfg(cfg)
     if config_error then
         return false, "打开页面时没能读到当前配置（" .. config_error .. "），请刷新后再保存"
+    end
+    if submitted_revision == nil or submitted_revision ~= config_revision then
+        return false, "页面配置版本已失效，请重新读取配置后再保存"
     end
     local dirty = {}
     for key in pairs(dirty_scalar_keys) do
@@ -82,13 +90,12 @@ local function save_cfg(cfg)
         return true
     end
     local result, err = rpc.call_started("config.apply", {
-        expected_revision = config_revision,
+        expected_revision = submitted_revision,
         settings = patch,
     })
     if not result then
         return false, rpc.message(err, "保存失败")
     end
-    config_revision = tonumber(result.config_revision) or config_revision
     return true
 end
 
@@ -310,6 +317,27 @@ local function bind_school_extra_text(opt, descriptor, school_changed_ref, norma
 end
 
 cfg = load_cfg()
+if cfg and http.getenv("REQUEST_METHOD") == "POST" then
+    if submitted_revision == nil then
+        config_error = "页面缺少有效配置版本，请重新读取配置后再保存"
+    elseif submitted_revision ~= config_revision then
+        config_error = "配置已被其他地方修改，请重新读取配置后再保存"
+    end
+end
+if config_error then
+    local unavailable = SimpleForm("smart_srun", "智慧深澜")
+    unavailable.embedded = true
+    unavailable.submit = false
+    unavailable.reset = false
+    function unavailable.parse() end
+    local notice = unavailable:section(SimpleSection):option(DummyValue, "_config_error", "")
+    notice.rawhtml = true
+    function notice.cfgvalue()
+        return '<div role="alert"><p>无法加载可编辑配置：' .. util.pcdata(config_error)
+            .. '</p><a class="cbi-button" href="' .. util.pcdata(page_url) .. '">重新读取配置</a></div>'
+    end
+    return unavailable
+end
 changed = false
 
 -- 认证策略列表与所选策略的字段契约由 Go 的策略注册表提供（M06），
@@ -399,11 +427,6 @@ if not m.uci:get("smart_srun", "main") then
     m.uci:save("smart_srun")
     m.uci:commit("smart_srun")
 end
--- 读不到配置时先说清楚，页面上显示的就只是内置默认值，不是用户保存过的设置。
-if config_error then
-    m.message = "读取配置失败：" .. config_error .. "。页面显示的是默认值，请先确认认证服务状态。"
-end
-
 overview = m:section(SimpleSection)
 overview.anonymous = true
 overview_status = overview:option(DummyValue, "_overview_status", "")
@@ -434,7 +457,8 @@ function overview_status.cfgvalue()
     end
     local details_meta = group('网络连接', field('网络接口', state.current_iface, true)
         .. field('IP 地址', state.current_ip, true)) .. wireless_meta .. group('运行信息', runtime_meta)
-    return render_js_asset_tag() .. [[
+    return '<input type="hidden" id="smart-srun-config-revision" name="expected_revision" value="'
+        .. string.format("%.0f", config_revision) .. '">' .. render_js_asset_tag() .. [[
 <style>
 #smart-srun-overview{margin:4px 0 18px;border:1px solid rgba(128,128,128,.18);border-left:4px solid #88909c;background:rgba(128,128,128,.035);padding:20px 24px;border-radius:8px;box-shadow:none;overflow-wrap:anywhere;line-height:1.5;}
 #smart-srun-overview .smart-overview-header{display:flex;align-items:center;gap:24px 36px;flex-wrap:wrap;}
@@ -1036,9 +1060,9 @@ function m.parse(self, ...)
     changed = false
     dirty_scalar_keys = {}
     school_extra_dirty = false
-    Map.parse(self, ...)
-    if not changed then
-        return
+    local state = Map.parse(self, ...)
+    if not changed or self.save == false then
+        return state
     end
     -- 保存失败必须说出来。旧版无论如何都写“已保存”，于是一次被拒绝的提交
     -- 看起来和成功一模一样。
@@ -1046,8 +1070,10 @@ function m.parse(self, ...)
     local note = saved and "配置已保存" or ("配置未保存：" .. tostring(failure))
     if saved then
         m.uci:set("smart_srun", "main", "_stamp", tostring(os.time()))
+        http.redirect(page_url)
     end
     m.message = (m.message and (m.message .. "；") or "") .. note
+    return state
 end
 
 -- 没有 on_before_commit。配置提交后由守护进程自行重新读取和观测，

@@ -13,6 +13,16 @@ local rpc = require "luci.smart_srun.rpc"
 
 local M = {}
 
+function M.config_revision(value)
+    if type(value) == "string" then
+        if value ~= "0" and not value:match("^[1-9]%d*$") then return nil end
+        value = tonumber(value)
+    end
+    if type(value) ~= "number" or value < 0 or value > 9007199254740991
+        or value ~= math.floor(value) then return nil end
+    return value
+end
+
 -- Read the local catalogue completely. Rendering and task polling never fetch
 -- remote data; presets.refresh is the separate bounded network operation.
 function M.presets()
@@ -218,7 +228,7 @@ function M.flatten(config)
         flat.hotspot_profiles[#flat.hotspot_profiles + 1] = hotspot_view(hotspot)
     end
     flat.school_extra = type(config.school_extra) == "table" and config.school_extra or {}
-    flat.revision = tonumber(config.revision) or 0
+    flat.revision = M.config_revision(config.revision)
     return flat
 end
 
@@ -891,7 +901,8 @@ function M.status()
     if not snapshot then
         return nil, err
     end
-    local config = rpc.call("config.get", nil) or {}
+    local config, config_err = rpc.call("config.get", nil)
+    if not config then return nil, config_err end
     return M.status_view(snapshot, config, os.time())
 end
 

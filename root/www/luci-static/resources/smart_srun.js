@@ -101,6 +101,12 @@
     return (tokenNode ? tokenNode.value : ((window.L && L.env) ? L.env.token : '')) || '';
   }
 
+  function configRevision() {
+    var input = document.getElementById('smart-srun-config-revision');
+    var revision = input ? input.value : '';
+    return /^(0|[1-9][0-9]*)$/.test(revision) && Number(revision) <= 9007199254740991 ? revision : null;
+  }
+
   function startUpdate(planId, callback) {
     var xhr = new XMLHttpRequest();
     var finished = false;
@@ -178,7 +184,7 @@
         if (generation !== revision) return;
         post('config_import', {data:text, check:'1'}, function(data) {
           if (generation !== revision) return;
-          if (!data || !data.ok) { result.textContent = (data && data.message) || '备份校验失败'; return; }
+          if (!data || data.ok !== true) { result.textContent = (data && data.message) || '备份校验失败'; return; }
           pending = {data:text, expected_revision:data.expected_revision};
           importButton.disabled = false;
           result.textContent = '备份包含 ' + data.campus_accounts + ' 个校园账号、' + data.hotspot_profiles + ' 个热点。确认导入将替换现有配置并关闭自动守护。' + (data.warnings && data.warnings.length ? '\n' + data.warnings.join('\n') : '');
@@ -193,7 +199,7 @@
       post('config_import', pending, function(data) {
         pending = null; importing = false; file.disabled = false; file.value = '';
         result.textContent = (data && data.message) || '未能确认导入结果，请刷新页面检查配置；不要直接重复导入。';
-        if (data && data.ok) setTimeout(function() { window.location.reload(); }, 1500);
+        if (data && data.ok === true) setTimeout(function() { window.location.reload(); }, 1500);
       });
     };
   }
@@ -475,16 +481,21 @@
       return false;
     }
 
+    var pendingReads = 0;
     function poll() {
+      if (closed || pendingReads) return;
+      pendingReads = 2;
       fetchJson('/cgi-bin/luci/admin/services/smart_srun/log_tail?lines=200&format=friendly&since=' + encodeURIComponent(requestedAt) + '&_=' + Date.now(), function(err, logData) {
-        if (!err && logData && typeof logData.log === 'string' && !logData.empty) {
+        pendingReads--;
+        if (!closed && !err && logData && typeof logData.log === 'string' && !logData.empty) {
           logBox.innerHTML = renderFriendlyLogHtml(logData.log);
           logBox.scrollTop = logBox.scrollHeight;
         }
       });
 
       fetchJson('/cgi-bin/luci/admin/services/smart_srun/status?action_id=' + encodeURIComponent(actionId) + '&_=' + Date.now(), function(err, statusData) {
-        if (err) return;
+        pendingReads--;
+        if (closed || err) return;
         checkTerminal(statusData);
       });
     }
@@ -733,8 +744,11 @@
   }
 
   window.smartSetDefault = function(kind, id) {
+    var revision = configRevision();
+    if (revision === null) { alert('配置版本不可用，请刷新页面后重试。'); return; }
     var fd = new FormData();
     fd.append('token', requestToken());
+    fd.append('expected_revision', revision);
     fd.append('action', 'set_default_' + kind);
     fd.append('id', id);
     var xhr = new XMLHttpRequest();
@@ -742,7 +756,7 @@
     xhr.onload = function() {
       var data = {};
       try { data = JSON.parse(xhr.responseText || '{}'); } catch (e) {}
-      if (xhr.status === 200 && data.ok !== false) {
+      if (xhr.status === 200 && data && data.ok === true) {
         alert((typeof data.message === 'string' && data.message !== '') ? data.message : '已保存默认配置');
         location.reload();
       } else {
@@ -754,9 +768,12 @@
   };
 
   window.smartDelete = function(kind, id) {
+    var revision = configRevision();
+    if (revision === null) { alert('配置版本不可用，请刷新页面后重试。'); return; }
     if (!confirm('确定要删除此项吗？')) return;
     var fd = new FormData();
     fd.append('token', requestToken());
+    fd.append('expected_revision', revision);
     fd.append('action', 'delete_' + kind);
     fd.append('id', id);
     var xhr = new XMLHttpRequest();
@@ -764,7 +781,7 @@
     xhr.onload = function() {
       var data = {};
       try { data = JSON.parse(xhr.responseText || '{}'); } catch (e) {}
-      if (xhr.status === 200 && data.ok !== false) {
+      if (xhr.status === 200 && data && data.ok === true) {
         location.reload();
       } else {
         alert((data && data.message) ? data.message : ('删除失败（HTTP ' + xhr.status + '）'));
@@ -1277,6 +1294,8 @@
 
   window.smartModalSave = function() {
     if (window.__smartModalSaving) return;
+    var revision = configRevision();
+    if (revision === null) { alert('配置版本不可用，请刷新页面后重试。'); return; }
     if (modalType === 'campus' && getFieldValue('jm-access_mode') !== 'wired' &&
         getFieldValue('jm-ap_selection') === 'fixed' && !isValidBssid(getFieldValue('jm-bssid'))) {
       alert('固定 BSSID 需要有效的单播地址，例如 02:11:22:33:44:55');
@@ -1285,6 +1304,7 @@
     window.__smartModalSaving = true;
     var fd = new FormData();
     fd.append('token', requestToken());
+    fd.append('expected_revision', revision);
     fd.append('action', (modalEditId ? 'edit_' : 'add_') + modalType);
     if (modalEditId) fd.append('id', modalEditId);
 
@@ -1322,7 +1342,7 @@
     xhr.onload = function() {
       var data = {};
       try { data = JSON.parse(xhr.responseText || '{}'); } catch (e) {}
-      if (xhr.status === 200 && data.ok !== false) {
+      if (xhr.status === 200 && data && data.ok === true) {
         L.hideModal();
         location.reload();
       } else {
@@ -1402,9 +1422,13 @@
       root.style.borderLeftColor = title.style.color = dark ? tone.dark : tone.light;
     }
 
+    var refreshing = false;
     function refreshOverview() {
+      if (refreshing) return;
+      refreshing = true;
       fetchJson('/cgi-bin/luci/admin/services/smart_srun/status?_=' + Date.now(), function(err, data) {
-        if (err) {
+        refreshing = false;
+        if (err || !data || data.ok === false || typeof data.status !== 'string') {
           applyTone('offline');
           if (title.textContent !== '状态读取失败') title.textContent = '状态读取失败';
           meta.textContent = '无法获取连接信息，请稍后重试。';
@@ -2669,9 +2693,12 @@
 
   function wizSave() {
     if (wiz.busy || wiz.saved) return;
+    var revision = configRevision();
+    if (revision === null) { wizError('配置版本不可用，请刷新页面后重试。'); return; }
     if (!wiz.userId || !wiz.password || wiz.selectedSuffix === null || !wizNormalizeAddress()) { wizError('请检查账号、密码、认证后缀与认证地址。'); return; }
     if (!wiz.accessMode || (wiz.accessMode === 'wifi' && !wiz.ssid) || (wiz.accessMode === 'wired' && !wiz.wiredIface)) { wizError('请返回第一步补全接入信息。'); return; }
     var payload = {
+      expected_revision: revision,
       action: 'add_campus', label: wizLoginPreview(wiz.selectedSuffix), user_id: wiz.userId,
       operator_suffix: wiz.selectedSuffix, password: wiz.password, base_url: wiz.baseUrl,
       ac_id: wiz.acId || '1', access_mode: wiz.accessMode,

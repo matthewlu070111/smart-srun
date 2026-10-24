@@ -15,6 +15,7 @@ for (const tokenInForm of [true, false]) {
     };
   }
   const sent = [];
+  nodes['smart-srun-config-revision'] = {value: '0'};
   let init;
   function XHR() {}
   XHR.prototype.open = function(method, url) { this.method = method; this.url = url; };

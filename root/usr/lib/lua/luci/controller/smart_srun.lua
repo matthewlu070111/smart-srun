@@ -161,6 +161,8 @@ function action_status()
     local payload, err = bridge.status()
     if not payload then
         payload = bridge.offline_view(rpc.message(err, "无法读取认证服务状态"), os.time())
+        payload.ok = false
+        if not rpc.service_stopped(err) then payload.service = "unknown" end
     end
     write_json_response(payload)
 end
@@ -631,12 +633,11 @@ function action_enqueue()
         end
     end
 
-    local config, err = rpc.call_started("config.get", nil)
-    if not config then
-        write_json_response({ ok = false, message = rpc.message(err, "无法读取配置"), action = action })
+    local revision = bridge.config_revision(http.formvalue("expected_revision"))
+    if revision == nil then
+        write_json_response({ ok = false, message = "配置版本无效，请刷新页面后再保存", action = action })
         return
     end
-    local revision = tonumber(config.revision) or 0
 
     local ok, message = false, "不支持的动作"
     local id = fv("id")
