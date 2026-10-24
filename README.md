@@ -13,7 +13,7 @@
 </p>
 
 > [!IMPORTANT]
-> **当前默认下载版本是 [2.0.0rc1](https://github.com/matthewlu070111/smart-srun/releases/tag/2.0.0rc1)（Go 版，Latest）。** `main` 已采用 Go 实现，版本号仍保留 `rc1`，安装包与原候选版相同。
+> **当前代码使用 Go 2.x。** 可下载版本与对应验证范围以[下载页](https://srun-doc.guiguisocute.com/guide/download)和[发布说明](https://github.com/matthewlu070111/smart-srun/releases)为准。
 > **从 1.x 升级请先在 1.6.1 导出备份，再按设备架构手动安装；不要使用 1.x 内置一键更新跨版本升级。** 旧更新器会看到 Latest，但不支持 Go 安装包的架构选择。详见[备份与迁移指南](https://srun-doc.guiguisocute.com/guide/backup-migration)。
 > Python 1.6.1 的[安装包](https://github.com/matthewlu070111/smart-srun/releases/tag/v1.6.1)和 [`1.6.1` 源码分支](https://github.com/matthewlu070111/smart-srun/tree/1.6.1)继续保留。
 
@@ -24,12 +24,12 @@
 3. 打开 **服务 → SMART SRun → 开始一键配置**，选择接入方式，确认认证地址与后缀，填写账号并保存。
 4. 检查默认账号和 **启用** 状态，点击 **立即登录**。配置成功后，可通过向导提交学校预设。
 
-2.0 使用 `/etc/smart-srun/config.json`，不自动读取或迁移 1.x 配置。首次升级可在 1.6.1 的进阶设置导出备份，再在 2.0 中预览并导入；导入后核对账号和网口，再启用自动守护。APK 可手动跳过签名验证安装，公钥为可选项；使用原生验签或内置更新器前需安装项目公钥，详见[安装与校验](https://srun-doc.guiguisocute.com/guide/download#安装与校验)。
+2.0 使用 `/etc/smart-srun/config.json`，不自动读取或迁移 1.x 配置。首次升级可在 1.6.1 的进阶设置导出备份，再在 2.0 中预览并导入；导入后核对账号和网口，再启用自动守护。对已确认来源的 APK，可手动跳过签名验证安装，但这会跳过发布者验证；使用原生验签或内置更新器前需安装项目公钥，详见[安装与校验](https://srun-doc.guiguisocute.com/guide/download#安装与校验)。
 
 切网可能中断游戏、语音等已建立的连接。即使校园网和热点都能上网，更换公网出口后也不能保证 FF14 等游戏不断线。smart-srun 不提供跨出口的会话迁移；切换耗时和联网探测反映网络恢复情况，不代表原连接得到保留。
 
 详细说明请访问 [智慧深澜文档站](https://srun-doc.guiguisocute.com/)；
 
-参与项目见 [贡献说明与致谢](https://srun-doc.guiguisocute.com/contribute/)。
+参与开发见[贡献入口](CONTRIBUTING.md)；社区贡献见[说明与致谢](https://srun-doc.guiguisocute.com/contribute/)。
 
 ![智慧深澜 LuCI 界面，包含校园网账号与热点配置](doc/img/smart-srun-overview.png)

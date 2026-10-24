@@ -35,8 +35,7 @@ import (
 // shadowed a working verb. The list lives in this package because cli may
 // import strategy and strategy may not import cli.
 //
-// It is a superset of the sixteen verbs CLAUDE.md lists, which predates the
-// service and version commands.
+// Keep new dispatcher verbs in ReservedCommands; cli.CoreCommands reuses it.
 var ReservedCommands = []string{
 	"status", "login", "logout", "relogin", "daemon", "schools", "config",
 	"switch", "log", "enable", "disable", "help", "man", "update", "presets",

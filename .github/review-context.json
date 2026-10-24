@@ -1,0 +1,84 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "go-core",
+      "any": ["core/**"],
+      "docs": ["core/AGENTS.md", "tests/README.md"],
+      "checks": [{"command": "bash scripts/verify-go.sh", "targets": ["scripts/verify-go.sh"]}]
+    },
+    {
+      "id": "device-and-luci",
+      "any": ["root/**"],
+      "docs": ["root/AGENTS.md", "tests/AGENTS.md"],
+      "checks": [
+        {"command": "node --check root/www/luci-static/resources/smart_srun.js", "targets": ["root/www/luci-static/resources/smart_srun.js"]},
+        {"command": "python -m unittest discover -s tests -v", "targets": ["tests"]}
+      ]
+    },
+    {
+      "id": "tests",
+      "any": ["tests/**"],
+      "docs": ["tests/AGENTS.md", "tests/README.md"],
+      "checks": [{"command": "python -m unittest discover -s tests -v", "targets": ["tests"]}]
+    },
+    {
+      "id": "school-presets",
+      "any": ["doc/school-presets.json", "core/internal/presets/**"],
+      "docs": ["doc/AGENTS.md", "core/AGENTS.md", "root/AGENTS.md"],
+      "checks": [
+        {"command": "python -m unittest discover -s tests -p test_preset_catalogue.py -v", "targets": ["tests/test_preset_catalogue.py"]},
+        {"command": "cd core && go test ./internal/presets ./internal/config ./internal/daemon", "targets": ["core/internal/presets", "core/internal/config", "core/internal/daemon"]}
+      ]
+    },
+    {
+      "id": "configuration-contract",
+      "any": ["core/internal/config/**", "core/internal/domain/config.go", "root/usr/lib/lua/luci/smart_srun/schema.lua", "root/usr/lib/lua/luci/smart_srun/bridge.lua"],
+      "docs": ["core/AGENTS.md", "root/AGENTS.md", "tests/README.md"],
+      "checks": [
+        {"command": "cd core && go test ./internal/config ./internal/cli ./internal/daemon", "targets": ["core/internal/config", "core/internal/cli", "core/internal/daemon"]},
+        {"command": "python -m unittest discover -s tests -v", "targets": ["tests"]}
+      ]
+    },
+    {
+      "id": "cross-layer-flow",
+      "all": ["core/**", "root/**"],
+      "docs": ["core/AGENTS.md", "root/AGENTS.md", "tests/README.md"]
+    },
+    {
+      "id": "update-and-recovery",
+      "any": ["core/internal/update/**", "root/etc/init.d/smart_srun_update", "scripts/hot_update*.py", "scripts/make_go_manifest.py"],
+      "docs": ["core/AGENTS.md", "scripts/AGENTS.md", "doc/development/deployment.md"],
+      "skills": [".agents/skills/smart-srun-deploy/SKILL.md"],
+      "checks": [
+        {"command": "cd core && go test ./internal/update ./internal/cli", "targets": ["core/internal/update", "core/internal/cli"]},
+        {"command": "python -m unittest discover -s tests -p 'test_go_*.py' -v", "targets": ["tests/test_go_hot_update.py"]}
+      ]
+    },
+    {
+      "id": "host-tools",
+      "any": ["scripts/**"],
+      "docs": ["scripts/AGENTS.md", "tests/README.md"],
+      "checks": [{"command": "ruff check scripts tests", "targets": ["scripts", "tests", "ruff.toml"]}]
+    },
+    {
+      "id": "build-and-release",
+      "any": ["Makefile", "targets.json", "scripts/build_go_sdk.py", "scripts/verify_go_sdk.py", "scripts/make_go_manifest.py", "scripts/ci_go_release.py", "scripts/release_assets.py", ".github/workflows/**", ".github/release-template.md"],
+      "docs": ["scripts/AGENTS.md", ".github/AGENTS.md", "doc/development/build-release.md"],
+      "skills": [".agents/skills/smart-srun-release/SKILL.md"],
+      "checks": [
+        {"command": "python scripts/check_go_source.py", "targets": ["scripts/check_go_source.py"]},
+        {"command": "python -m unittest discover -s tests -p test_ci_go_release.py -v", "targets": ["tests/test_ci_go_release.py"]}
+      ]
+    },
+    {
+      "id": "documentation",
+      "any": ["*.md", "**/*.md", ".github/review-context.json", "scripts/doc_context.py", "scripts/check_docs.py", "tests/test_documentation_tools.py"],
+      "docs": ["AGENTS.md", "doc/AGENTS.md", "doc/development/context.md"],
+      "checks": [
+        {"command": "python scripts/check_docs.py", "targets": ["scripts/check_docs.py"]},
+        {"command": "python -m unittest discover -s tests -p test_documentation_tools.py -v", "targets": ["tests/test_documentation_tools.py"]}
+      ]
+    }
+  ]
+}
