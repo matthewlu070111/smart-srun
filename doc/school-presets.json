@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-10-14",
+  "updated_at": "2026-10-25",
   "source": "https://github.com/matthewlu070111/smart-srun/issues",
   "schools": [
     {
@@ -51,7 +51,7 @@
       "id": "swpu",
       "name": "西南石油大学",
       "status": "active",
-      "description": "适用于成都校区，有线和无线均有可用反馈。请按账号类型选择电信、学生、教师或移动线路，并让所选接口自动获取 IP 地址。",
+      "description": "适用于成都校区，有线和无线均有可用反馈。请按账号类型选择电信、联通、学生、教师或移动线路，并让所选接口自动获取 IP 地址。联通后缀 lt 来自认证页面选项（#79），尚未经插件登录验证。",
       "defaults": {
         "base_url": "http://172.16.245.50",
         "ac_id": "1",
@@ -72,6 +72,10 @@
           "label": "电信"
         },
         {
+          "suffix": "lt",
+          "label": "联通"
+        },
+        {
           "suffix": "stu",
           "label": "学生"
         },
@@ -89,7 +93,8 @@
         }
       ],
       "contributors": [
-        "@haohaoget"
+        "@haohaoget",
+        "@fuliye2005"
       ],
       "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/30"
     },
