@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-10-25",
+  "updated_at": "2026-11-26",
   "source": "https://github.com/matthewlu070111/smart-srun/issues",
   "schools": [
     {
@@ -442,6 +442,27 @@
         }
       ],
       "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/74"
+    },
+    {
+      "id": "zjjsxy",
+      "name": "湛江市技师学院",
+      "status": "draft",
+      "description": "适用于 School_wifi-5G 无线网络，账号无需后缀，参数来自插件一键配置（#81）；提交者已确认校园网可用，但尚未通过插件登录验证，暂作草稿。提交的 AC_ID 为空，未收录，请通过一键配置探测或从学校认证页面确认。",
+      "defaults": {
+        "base_url": "http://10.253.1.253:9090",
+        "ssid": "School_wifi-5G",
+        "access_mode": "wifi"
+      },
+      "operators": [
+        {
+          "suffix": "",
+          "label": "不加后缀"
+        }
+      ],
+      "contributors": [
+        "@Lin-afk308"
+      ],
+      "source_issue": "https://github.com/matthewlu070111/smart-srun/issues/81"
     }
   ]
 }
